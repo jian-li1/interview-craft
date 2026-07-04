@@ -1,0 +1,54 @@
+"""Factory for constructing the active LLMProvider.
+
+Resolution order for the provider name: per-user settings override (if set) then the
+server-wide `LLM_PROVIDER` env default. Provider instances are cached per (provider name)
+since they are stateless aside from their configured client.
+"""
+
+from __future__ import annotations
+
+from functools import lru_cache
+
+from app.core.config import Settings, get_settings
+from app.services.llm.base import LLMProvider
+
+
+@lru_cache
+def _build_provider(name: str) -> LLMProvider:
+    settings = get_settings()
+    if name == "openai":
+        from app.services.llm.openai_provider import OpenAIProvider
+
+        return OpenAIProvider(
+            api_key=settings.openai_api_key,
+            model=settings.openai_model,
+            small_model=settings.openai_small_model,
+            base_url=settings.openai_base_url,
+        )
+    if name == "llamacpp":
+        from app.services.llm.openai_provider import OpenAIProvider
+
+        if not settings.openai_base_url:
+            raise ValueError("OPENAI_BASE_URL must be set to use the llamacpp provider")
+        return OpenAIProvider(
+            api_key=settings.openai_api_key,
+            model=settings.openai_model,
+            small_model=settings.openai_small_model,
+            base_url=settings.openai_base_url,
+        )
+    if name == "gemini":
+        from app.services.llm.gemini_provider import GeminiProvider
+
+        return GeminiProvider(
+            api_key=settings.gemini_api_key or "",
+            model=settings.gemini_model,
+            small_model=settings.gemini_small_model,
+        )
+    raise ValueError(f"Unknown LLM provider: {name}")
+
+
+def get_llm_provider(user_override: str | None = None, settings: Settings | None = None) -> LLMProvider:
+    """Return the LLMProvider to use, honoring a per-user override if provided."""
+    settings = settings or get_settings()
+    name = user_override or settings.llm_provider
+    return _build_provider(name)

@@ -1,0 +1,20 @@
+fastapi==0.115.*
+uvicorn[standard]==0.34.*
+pydantic[email]==2.*
+pydantic-settings==2.*
+firebase-admin==7.*
+google-auth==2.*
+PyJWT==2.*
+httpx==0.28.*
+openai==1.*
+google-genai==1.*
+ddgs==9.*
+pypdf==5.*
+python-docx==1.*
+tiktoken==0.*
+python-multipart==0.0.*
+websockets==14.*
+
+# Testing
+pytest==8.*
+pytest-asyncio==0.*

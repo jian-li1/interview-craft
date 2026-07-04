@@ -1,0 +1,44 @@
+version: "3.9"
+
+# Local development stack.
+# Quick start:
+#   1. cp backend/.env.example backend/.env  (fill in keys)
+#   2. cp frontend/.env.example frontend/.env.local
+#   3. docker compose up --build
+# The firestore-emulator service lets you run without a real Firebase project:
+# set FIRESTORE_EMULATOR_HOST=firestore-emulator:8686 in backend/.env.
+
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./backend/.env
+    environment:
+      - PORT=8000
+    volumes:
+      - ./backend/serviceAccountKey.json:/app/serviceAccountKey.json:ro
+    depends_on:
+      - firestore-emulator
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_BASE_URL: http://localhost:8000
+        NEXT_PUBLIC_WS_BASE_URL: ws://localhost:8000
+        NEXT_PUBLIC_GOOGLE_CLIENT_ID: ${NEXT_PUBLIC_GOOGLE_CLIENT_ID:-}
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+
+  firestore-emulator:
+    image: google/cloud-sdk:slim
+    command: >
+      gcloud emulators firestore start
+      --host-port=0.0.0.0:8686
+      --project=interviewcraft-dev
+    ports:
+      - "8686:8686"

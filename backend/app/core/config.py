@@ -1,0 +1,70 @@
+"""Application configuration via pydantic-settings.
+
+All environment variables described in docs/specs/01-architecture-and-contracts.md §4
+are surfaced here. Settings is a singleton accessed through `get_settings()` so the
+rest of the app never re-parses the environment.
+"""
+
+from __future__ import annotations
+
+from functools import lru_cache
+from typing import Literal
+
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    """Strongly-typed application settings, sourced from environment / .env file."""
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+    )
+
+    # --- Core app ---
+    app_env: Literal["development", "production"] = "development"
+    port: int = 8000
+    frontend_origin: str = "http://localhost:3000"
+
+    # --- Auth / session ---
+    session_jwt_secret: str = Field(..., description="Random 64 hex secret for signing session JWTs")
+    session_jwt_expires_min: int = 10080  # 7 days
+    google_oauth_client_id: str = Field(..., description="Google OAuth client id for ID token verification")
+
+    # --- Firestore ---
+    firebase_project_id: str = "interviewcraft-dev"
+    google_application_credentials: str | None = None
+    firestore_emulator_host: str | None = None
+
+    # --- LLM ---
+    llm_provider: Literal["openai", "gemini", "llamacpp"] = "openai"
+    openai_api_key: str | None = None
+    openai_model: str = "gpt-4o"
+    openai_small_model: str = "gpt-4o-mini"
+    openai_base_url: str | None = None
+    gemini_api_key: str | None = None
+    gemini_model: str = "gemini-2.5-pro"
+    gemini_small_model: str = "gemini-2.5-flash"
+
+    # --- Search ---
+    search_provider: Literal["duckduckgo", "google", "tavily"] = "duckduckgo"
+    google_cse_api_key: str | None = None
+    google_cse_engine_id: str | None = None
+    tavily_api_key: str | None = None
+
+    # --- Agent behavior ---
+    agent_max_iterations: int = 60
+    context_token_limit: int = 100_000
+
+    @property
+    def is_production(self) -> bool:
+        return self.app_env == "production"
+
+
+@lru_cache
+def get_settings() -> Settings:
+    """Return the process-wide cached Settings instance."""
+    return Settings()  # type: ignore[call-arg]

@@ -1,0 +1,80 @@
+# Agent core — AI context
+
+See `/CLAUDE.md` and `backend/CLAUDE.md` first. Deep scoped context for
+`backend/app/agent/`. Full walkthrough: `docs/guides/agent-system.md`. Contract:
+`docs/specs/02-agent-system-spec.md`.
+
+## Orchestrator control flow (`orchestrator.py`)
+
+`Orchestrator.run_turn(...)` — one call per WS frame. Acquires a per-conversation
+`asyncio.Lock` (one active run per conversation; concurrent calls get a recoverable
+`error`). Loops up to `AGENT_MAX_ITERATIONS` times:
+`build_context → chat_stream → split thinking/text → execute tool calls → check HITL
+gate → loop or return`. Returns `DONE` (plain text), `PAUSED` (HITL gate fired),
+`CANCELLED` (`stop` frame), or `ERROR`. Re-reads `phase` fresh from Firestore every
+iteration — a `complete_phase` call takes effect next iteration, not next turn.
+
+## Adding a new tool
+
+1. Add a pydantic `Input` model + `Tool` subclass in the right
+   `app/agent/tools/{research,curriculum,planning,control,user_memory}.py`.
+2. Write a thorough LLM-facing `description` (this *is* the prompt for when to use
+   it). `execute()` should return `{"error": ...}` or raise `ToolExecutionError`, never
+   a bare exception (still caught, but logged as unexpected).
+3. Register the instance in `ToolRegistry.__init__`'s `tool_instances` list, and add
+   its name to every phase's list in `_PHASE_TOOLS` (or `_ALWAYS_AVAILABLE`).
+4. HITL gate tools: add to `HITL_GATE_TOOLS` **and** return `_hitl_gate: True`; instruct
+   the model to call it alone (no other tool calls batched the same step).
+5. To emit an extra WS event, return `_ws_event`/`_ws_events` in the output dict — the
+   orchestrator pops these before building the client-visible JSON preview.
+6. Extend `tests/test_tool_registry.py` (phase filtering) and/or a dedicated test file.
+
+## Adding or modifying a phase
+
+1. Update `docs/specs/02-agent-system-spec.md` §2 first, and add the phase to
+   `AgentPhase` in `app/models/curriculum.py`.
+2. Add allowed transitions to `_VALID_TRANSITIONS` in `app/agent/tools/control.py`
+   (`CompletePhaseTool`) — unlisted transitions are rejected with an error observation.
+3. Add `status_map`/`label_map` entries, a `_PHASE_TOOLS` entry (`registry.py`), and a
+   `_PHASE_PROMPT_FILES` entry (`memory/manager.py`); write a new prompt file only if
+   genuinely new instructions are needed.
+
+## Memory / compaction invariants — do not break
+
+- Layer order is fixed: static prompt → user memory → working memory → (optional)
+  summary → recent messages. `build_context` runs **every iteration** — keep it cheap.
+- Research notes are never injected wholesale — only via `search_research_notes`/
+  `list_research_notes`/`read_section`. This keeps `writing`-phase context lean.
+- Working memory is always rebuilt fresh from the state doc — never cache it.
+- Compaction triggers at `tokens_before > 0.8 * CONTEXT_TOKEN_LIMIT`
+  (`COMPACTION_TRIGGER_FRACTION`), summarizing the older ~60%
+  (`OLDER_FRACTION_TO_COMPACT`) via the small model. Changing these fractions requires
+  updating `tests/test_memory.py`/`test_memory_manager_context.py`.
+- Tool-output truncation (`RECENT_TOOL_EXCHANGES_KEPT_FULL = 6`) runs on every
+  `build_context` call independent of compaction — full data still lives in Firestore.
+- Token estimation (`memory/tokens.py`) uses `tiktoken` with a `chars/4` fallback —
+  don't assume `tiktoken` is always available.
+
+## Prompt-file editing rules — treat as code
+
+- `app/agent/prompts/*.md` are loaded/cached once per process (`PromptLibrary`) and
+  composed per phase (`_PHASE_PROMPT_FILES`, `build_static_system_prompt`).
+- `base_system.md`, `citation_guidelines.md`, `visual_guidelines.md` are appended for
+  **every** phase — changes here affect the whole agent.
+- Be concrete and behavior-shaping, not vague — the model only sees these files, not
+  the codebase. Code-level enforcement is minimal (mainly `write_section`'s
+  citations check and `CompletePhaseTool`'s transition validation).
+- `profile_synthesis.md`/`compaction.md` are one-shot small-model tasks loaded
+  directly by their call sites, not part of phase composition — their output is
+  stored verbatim with no post-processing, so keep "return ONLY the output" intact.
+- No automated eval exists — sanity-check prompt edits by running a real turn locally.
+
+## HITL gate mechanics
+
+`propose_task_plan`/`request_user_input` pause the loop via `_hitl_gate: True` (+
+`HITL_GATE_TOOLS` as a registry backstop) — the orchestrator pauses if any call this
+step was a successful gate call, even mid-`max_iterations`. Resumption is the next WS
+frame: `plan_decision` is handled specially by `_apply_plan_decision` (approve →
+materialize stubs, jump to `writing`; modify → record feedback, return to
+`outline_planning`); a clarifying question resumes via an ordinary `user_message`
+frame — no dedicated "answer" type.
