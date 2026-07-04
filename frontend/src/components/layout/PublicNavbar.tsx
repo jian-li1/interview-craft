@@ -6,6 +6,7 @@ import { Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { ThemeToggle } from "@/components/layout/ThemeToggle";
 
+/** Sticky top nav for public (unauthenticated) pages: logo, `ThemeToggle`, and log in/get started buttons routing to `/login`. */
 export function PublicNavbar() {
   const router = useRouter();
   return (

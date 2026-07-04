@@ -6,6 +6,13 @@ import { cn } from "@/lib/utils";
 
 const STEP_LABELS = ["Background", "Roles & timeline", "Skills & resume", "Review"];
 
+/**
+ * Step-progress indicator for the onboarding wizard: renders `STEP_LABELS`
+ * as a horizontal sequence of numbered circles connected by animated fill
+ * bars. `step` is 1-indexed; each item is classified as "done" (index <
+ * step, filled circle with a checkmark and a fully-animated connector),
+ * "current" (index === step, outlined/highlighted), or "upcoming" (muted).
+ */
 export function WizardProgress({ step }: { step: number }) {
   return (
     <ol className="flex items-center gap-2 sm:gap-4" aria-label="Onboarding progress">

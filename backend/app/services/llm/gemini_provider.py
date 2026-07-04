@@ -55,6 +55,16 @@ def _translate_schema(schema: dict[str, Any]) -> dict[str, Any]:
 
 
 def _to_gemini_tools(tools: list[ToolSpec] | None) -> list[genai_types.Tool] | None:
+    """Translate provider-neutral ToolSpec objects into Gemini's Tool/FunctionDeclaration shape.
+
+    Args:
+        tools (list[ToolSpec] | None): The provider-neutral tool definitions, or None.
+
+    Returns:
+        list[genai_types.Tool] | None: A single-element list containing one `Tool` whose
+            `function_declarations` mirror `tools`, translating each JSON-schema
+            parameters dict via `_translate_schema`; None if `tools` was empty/None.
+    """
     if not tools:
         return None
     declarations = [
@@ -71,7 +81,22 @@ def _to_gemini_tools(tools: list[ToolSpec] | None) -> list[genai_types.Tool] | N
 def _split_system_and_contents(
     messages: list[ChatMessage],
 ) -> tuple[str | None, list[genai_types.Content]]:
-    """Gemini takes system instructions separately from the conversation `contents`."""
+    """Gemini takes system instructions separately from the conversation `contents`.
+
+    Splits the provider-neutral message list into a single concatenated system
+    instruction string and a list of Gemini `Content` objects for the remaining
+    turns, remapping roles along the way: "assistant" -> "model", "tool" -> "function"
+    (wrapped as a function response part), and everything else -> "user".
+
+    Args:
+        messages (list[ChatMessage]): The provider-neutral conversation history,
+            potentially interleaving system, user, assistant, and tool messages.
+
+    Returns:
+        tuple[str | None, list[genai_types.Content]]: A tuple of
+            (concatenated system instruction, or None if there were no system messages;
+            the ordered list of Gemini `Content` turns for the rest of the conversation).
+    """
     system_parts: list[str] = []
     contents: list[genai_types.Content] = []
 
@@ -124,6 +149,22 @@ class GeminiProvider:
         max_output_tokens: int = 8192,
         request_timeout_seconds: float = 120.0,
     ) -> None:
+        """Initialize the provider's async google-genai SDK client.
+
+        Args:
+            api_key (str): The Gemini API key; required (empty string is treated as
+                "missing" and raises).
+            model (str): The main model name/id to use for regular completions.
+            small_model (str): The cheaper/faster model name/id to use when `small=True`
+                (e.g. for summarization).
+            max_output_tokens (int): The `max_output_tokens` cap applied to every
+                generation request, to bound cost/latency.
+            request_timeout_seconds (float): Request timeout in seconds, converted to
+                milliseconds for the underlying `HttpOptions`.
+
+        Raises:
+            ValueError: If `api_key` is falsy.
+        """
         if not api_key:
             raise ValueError("GEMINI_API_KEY is required to use the gemini provider")
         http_options = genai_types.HttpOptions(timeout=int(request_timeout_seconds * 1000))
@@ -133,6 +174,14 @@ class GeminiProvider:
         self._max_output_tokens = max_output_tokens
 
     def _model_for(self, small: bool) -> str:
+        """Select the main or small model name based on the `small` flag.
+
+        Args:
+            small (bool): Whether to use the small/cheap model instead of the main one.
+
+        Returns:
+            str: The resolved model name/id to pass to the google-genai SDK.
+        """
         return self._small_model if small else self._model
 
     async def chat_stream(
@@ -141,6 +190,20 @@ class GeminiProvider:
         tools: list[ToolSpec] | None = None,
         small: bool = False,
     ) -> AsyncIterator[LLMEvent]:
+        """Stream a chat completion from the Gemini API.
+
+        Args:
+            messages (list[ChatMessage]): The conversation history to send.
+            tools (list[ToolSpec] | None): Tool definitions the model may call, or None.
+            small (bool): If True, use the small/cheap model instead of the main one.
+
+        Yields:
+            LLMEvent: `TextDelta` for each streamed text part, `ToolCallDelta` for each
+                function call part (Gemini emits complete function calls per chunk, so
+                no fragment accumulation is needed, unlike the OpenAI provider; each is
+                assigned a synthetic sequential id since Gemini doesn't provide one),
+                and finally one `Done` carrying the stream's finish reason.
+        """
         model = self._model_for(small)
         system_instruction, contents = _split_system_and_contents(messages)
         gemini_tools = _to_gemini_tools(tools)
@@ -179,6 +242,16 @@ class GeminiProvider:
         yield Done(finish_reason=finish_reason)
 
     async def complete(self, messages: list[ChatMessage], small: bool = False) -> str:
+        """Perform a non-streaming chat completion.
+
+        Args:
+            messages (list[ChatMessage]): The conversation history to send.
+            small (bool): If True, use the small/cheap model instead of the main one.
+
+        Returns:
+            str: The complete text of the model's response (empty string if the model
+                returned no text).
+        """
         model = self._model_for(small)
         system_instruction, contents = _split_system_and_contents(messages)
         config = genai_types.GenerateContentConfig(

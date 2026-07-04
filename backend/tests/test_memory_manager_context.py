@@ -14,24 +14,56 @@ class FakeSmallLLM:
     """Minimal LLMProvider stand-in: complete() returns a canned compaction summary."""
 
     def __init__(self, summary: str = "## Summary\n\nStub compacted summary.") -> None:
+        """Initialize the fake with a canned summary to return from `complete`.
+
+        Args:
+            summary (str): The fixed text `complete()` will return on every call.
+        """
         self._summary = summary
         self.complete_calls: list[list[ChatMessage]] = []
 
     async def complete(self, messages, small: bool = False) -> str:
+        """Record the call and return the canned summary, standing in for a real LLM.
+
+        Args:
+            messages: The chat messages that would have been sent to the LLM.
+            small (bool): Unused; present to match the `LLMProvider` protocol signature.
+
+        Returns:
+            str: The fixed summary text configured at construction time.
+        """
         self.complete_calls.append(messages)
         return self._summary
 
     async def chat_stream(self, messages, tools=None, small: bool = False):
+        """Unimplemented streaming stand-in — this fake only supports `complete`.
+
+        Raises:
+            NotImplementedError: Always; compaction only calls `complete`, so streaming
+                is intentionally left unsupported here.
+        """
         raise NotImplementedError
 
 
 @pytest.fixture()
 def manager(settings) -> MemoryManager:
+    """Construct a `MemoryManager` wired to the real (test) app settings.
+
+    Args:
+        settings: The `settings` fixture from conftest.py.
+
+    Returns:
+        MemoryManager: A manager instance ready to call `build_context` against the
+            in-memory fake Firestore.
+    """
     return MemoryManager(settings)
 
 
 @pytest.mark.asyncio
 async def test_build_context_includes_static_and_working_memory_blocks(manager, fake_fs):
+    """Verify `build_context` assembles system messages covering the static prompt,
+    user memory, and working memory layers, and includes conversation history.
+    """
     conv = fake_fs.fs.create_conversation("uid1", "New chat", curriculum_id="cur1")
     fake_fs.fs.append_message(conv["id"], {"role": "user", "content": "help me prep for a PM interview"})
 
@@ -57,6 +89,9 @@ async def test_build_context_includes_static_and_working_memory_blocks(manager, 
 
 @pytest.mark.asyncio
 async def test_build_context_does_not_compact_below_threshold(manager, fake_fs):
+    """Verify `build_context` skips compaction when the conversation is well under the
+    0.8x context_token_limit trigger — no LLM call and no summary persisted.
+    """
     conv = fake_fs.fs.create_conversation("uid1", "New chat", curriculum_id="cur1")
     fake_fs.fs.append_message(conv["id"], {"role": "user", "content": "short message"})
     small_llm = FakeSmallLLM()
@@ -80,6 +115,10 @@ async def test_build_context_does_not_compact_below_threshold(manager, fake_fs):
 async def test_build_context_triggers_compaction_above_threshold(manager, fake_fs, monkeypatch):
     """Force a tiny context_token_limit so a handful of messages exceeds the 0.8x trigger,
     then verify compaction runs, persists a summary, and fires the on_compaction callback.
+
+    Fixtures:
+        monkeypatch: Used to shrink `manager._settings.context_token_limit` to 50 so
+            the compaction threshold is easily exceeded by a handful of test messages.
     """
     monkeypatch.setattr(manager._settings, "context_token_limit", 50)
 

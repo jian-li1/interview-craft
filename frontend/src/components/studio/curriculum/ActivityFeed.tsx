@@ -7,7 +7,9 @@ import { cn } from "@/lib/utils";
 import type { ActivityItem } from "@/stores/useChatStore";
 
 interface ActivityFeedProps {
+  /** Live tool-activity log sourced from useChatStore.activity — appended to as tool_call_start/tool_call_result WS events arrive; capped to the most recent 30 items in the store itself (only the first 12 are rendered here, see `.slice(0, 12)` below). */
   activity: ActivityItem[];
+  /** Current phase's human label (useChatStore.phaseLabel, set via the phase_change WS event); shown as the feed's headline while there's no phaseLabel-derived heading elsewhere. */
   phaseLabel: string | null;
 }
 
@@ -49,6 +51,9 @@ export function ActivityFeed({ activity, phaseLabel }: ActivityFeedProps) {
         ) : (
           <ul className="space-y-1.5">
             <AnimatePresence initial={false}>
+              {/* The store already caps `activity` at its most recent 30 items;
+                  this view only has room to show a handful at a time, so we
+                  additionally slice to the first (most recent) 12 for display. */}
               {activity.slice(0, 12).map((item) => (
                 <motion.li
                   key={item.id}
@@ -104,6 +109,7 @@ export function ActivityFeed({ activity, phaseLabel }: ActivityFeedProps) {
   );
 }
 
+/** Turns a raw activity label into a friendlier display string, special-casing search/read/fetch/scrape tool names before falling back to a generic snake_case -> Title Case conversion. */
 function humanizeLabel(label: string): string {
   const key = label.toLowerCase();
   if (key.includes("search")) return `Searching: ${label.replace(/^\w+_?/, "").trim() || "the web"}`;

@@ -29,6 +29,17 @@ interface CurriculumCardProps {
   onDeleted: (id: string) => void;
 }
 
+/**
+ * A single curriculum tile in the dashboard grid. Renders the title, the
+ * originating user prompt, a status badge (mapped from `CurriculumSummary["status"]`
+ * via `STATUS_META`), and — while the agent is still generating
+ * (researching/planning/writing) — an animated progress bar driven by
+ * `curriculum.progress`. Clicking the card navigates to the studio for its
+ * conversation; the trash icon opens a `ConfirmDialog` and, on confirm,
+ * calls `curriculaApi.remove` then notifies the parent via `onDeleted` so
+ * it can drop the item from its list (this component holds no list state
+ * itself).
+ */
 export function CurriculumCard({ curriculum, onDeleted }: CurriculumCardProps) {
   const router = useRouter();
   const [confirmOpen, setConfirmOpen] = useState(false);

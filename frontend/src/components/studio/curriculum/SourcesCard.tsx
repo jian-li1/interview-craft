@@ -1,6 +1,7 @@
 import { ExternalLink } from "lucide-react";
 import type { Citation } from "@/lib/types";
 
+/** Builds a Google favicon-service URL for a citation's domain; returns null if `url` isn't parseable (e.g. malformed/empty source URL), in which case the favicon image is simply omitted. */
 function faviconUrl(url: string): string | null {
   try {
     const { hostname } = new URL(url);
@@ -10,6 +11,15 @@ function faviconUrl(url: string): string | null {
   }
 }
 
+/**
+ * Renders the "Sources" list at the bottom of a section — one row per
+ * `Citation` (the same array referenced by the section's `[^n]` footnote
+ * markers, see root CLAUDE.md and SectionContent.tsx's footnote-chip
+ * handling). Each row's numbered badge uses id `fn-source-{c.id}` as the
+ * footnote landing target that the `[^n]` chips in the body link to.
+ * Renders nothing when there are no citations (a section citing no sources
+ * simply omits this card rather than showing an empty one).
+ */
 export function SourcesCard({ citations }: { citations: Citation[] }) {
   if (citations.length === 0) return null;
 

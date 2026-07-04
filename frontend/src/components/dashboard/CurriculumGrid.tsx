@@ -9,6 +9,16 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { curriculaApi, ApiError } from "@/lib/api";
 import type { CurriculumSummary } from "@/lib/types";
 
+/**
+ * Loads and renders the signed-in user's curricula as a responsive grid of
+ * `CurriculumCard`s. Handles three non-happy-path states: a skeleton grid
+ * while the initial `curriculaApi.list()` call is in flight, an
+ * `EmptyState` if the call fails (and no cached data exists yet) or if the
+ * list is empty. While loaded, it polls `curriculaApi.list()` every 8s so
+ * in-progress curricula (researching/planning/writing) pick up status and
+ * progress updates without a manual refresh; deletions are applied
+ * optimistically via the `onDeleted` callback passed to each card.
+ */
 export function CurriculumGrid() {
   const [curricula, setCurricula] = useState<CurriculumSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);

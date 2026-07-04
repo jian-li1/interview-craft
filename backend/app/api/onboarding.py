@@ -15,6 +15,15 @@ router = APIRouter(prefix="/api/onboarding", tags=["onboarding"])
 
 
 def _load_profile_synthesis_prompt() -> str:
+    """Load the profile-synthesis system prompt markdown file from disk.
+
+    Reads fresh from disk on every call (no caching) since this is only invoked on the
+    relatively rare `/synthesize` request, not a hot path.
+
+    Returns:
+        str: The full contents of `app/agent/prompts/profile_synthesis.md`, used as the
+            system prompt for the small-model profile synthesis call.
+    """
     from pathlib import Path
 
     path = Path(__file__).resolve().parent.parent / "agent" / "prompts" / "profile_synthesis.md"
@@ -22,6 +31,16 @@ def _load_profile_synthesis_prompt() -> str:
 
 
 def _to_profile_out(data: dict | None) -> ProfileOut:
+    """Convert a raw Firestore profile document into the API's `ProfileOut` response model.
+
+    Args:
+        data (dict | None): The raw profile document fields as stored in Firestore, or
+            None if the user has no profile document yet.
+
+    Returns:
+        ProfileOut: The public-facing profile representation, with every field defaulted
+            so a missing/partial document still produces a valid response.
+    """
     data = data or {}
     return ProfileOut(
         bio=data.get("bio", ""),
@@ -42,14 +61,36 @@ def _to_profile_out(data: dict | None) -> ProfileOut:
 
 @router.get("", response_model=ProfileOut)
 async def get_onboarding(user: CurrentUser = Depends(get_current_user)) -> ProfileOut:
-    """Return the current user's onboarding profile."""
+    """Return the current user's onboarding profile.
+
+    Args:
+        user (CurrentUser): The authenticated caller, resolved via
+            `Depends(get_current_user)`.
+
+    Returns:
+        ProfileOut: The user's onboarding profile, with defaults for any missing fields
+            (including a brand-new user with no profile document yet).
+    """
     data = fs.get_profile(user.uid)
     return _to_profile_out(data)
 
 
 @router.put("", response_model=ProfileOut, dependencies=[Depends(require_csrf_header)])
 async def put_onboarding(body: ProfileIn, user: CurrentUser = Depends(get_current_user)) -> ProfileOut:
-    """Create/update the current user's onboarding profile."""
+    """Create/update the current user's onboarding profile.
+
+    Requires the `X-Requested-With` CSRF header (enforced by the router-level
+    dependency). If `body.onboarding_completed` is set, also flips the separate
+    `onboarding_completed` flag on the user doc so dashboard routing can key off it.
+
+    Args:
+        body (ProfileIn): The full set of onboarding fields submitted by the client.
+        user (CurrentUser): The authenticated caller, resolved via
+            `Depends(get_current_user)`.
+
+    Returns:
+        ProfileOut: The updated profile as persisted.
+    """
     data = fs.upsert_profile(user.uid, body.model_dump())
     if body.onboarding_completed:
         fs.set_onboarding_completed(user.uid, True)
@@ -63,7 +104,20 @@ async def upload_resume(
     """Parse an uploaded resume (pdf/docx/txt, <=5MB) in-memory and store extracted text.
 
     Never writes the raw file to disk; only the extracted text and original filename are
-    persisted, per spec 01 §8.
+    persisted, per spec 01 §8. Requires the `X-Requested-With` CSRF header (enforced by
+    the router-level dependency).
+
+    Args:
+        file (UploadFile): The uploaded resume file (pdf, docx, or txt).
+        user (CurrentUser): The authenticated caller, resolved via
+            `Depends(get_current_user)`.
+
+    Returns:
+        ResumeUploadOut: The stored filename and the extracted plain-text content.
+
+    Raises:
+        HTTPException: 400 if the file fails to parse (wrong type, corrupt content, or
+            exceeds the size cap) — see `ResumeParsingError` from `resume_parser`.
     """
     try:
         raw_bytes = await file.read()
@@ -79,7 +133,25 @@ async def upload_resume(
 async def synthesize_profile(
     user: CurrentUser = Depends(get_current_user),
 ) -> SynthesizeProfileOut:
-    """Run small-model profile synthesis over the user's onboarding inputs and save it."""
+    """Run small-model profile synthesis over the user's onboarding inputs and save it.
+
+    Requires the `X-Requested-With` CSRF header (enforced by the router-level
+    dependency) and is subject to the shared agent rate limit since it triggers an LLM
+    call. Uses the user's configured LLM provider override if set, otherwise the env
+    default (see `get_llm_provider`).
+
+    Args:
+        user (CurrentUser): The authenticated caller, resolved via
+            `Depends(get_current_user)`.
+
+    Returns:
+        SynthesizeProfileOut: The synthesized profile summary text, already persisted to
+            the user's profile document.
+
+    Raises:
+        HTTPException: 429 if the caller has exceeded the agent rate limit (raised by
+            `enforce_rate_limit`).
+    """
     enforce_rate_limit(user)
 
     profile = fs.get_profile(user.uid) or {}
@@ -112,6 +184,17 @@ async def synthesize_profile(
 
 
 def _render_input_block(data: dict) -> str:
+    """Render a flat dict of profile fields as a simple `key: value` text block.
+
+    Used to build the user-turn content sent to the LLM for profile synthesis — a plain
+    text block keeps the prompt simple rather than requiring the model to parse JSON.
+
+    Args:
+        data (dict): Flat mapping of onboarding field names to their values.
+
+    Returns:
+        str: A newline-separated string of `"{key}: {value}"` lines.
+    """
     lines = []
     for key, value in data.items():
         lines.append(f"{key}: {value}")

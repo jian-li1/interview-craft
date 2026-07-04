@@ -25,6 +25,7 @@ const steps = [
   },
 ];
 
+/** Landing page section: the four-step "How it works" walkthrough (prompt -> research -> approve plan -> curriculum). */
 export function HowItWorks() {
   return (
     <section className="border-y border-border/60 bg-muted/30 px-4 py-20 sm:px-6">

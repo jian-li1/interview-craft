@@ -23,18 +23,30 @@ interface ReaderViewProps {
   onExplain: (prompt: string) => void;
 }
 
+// Shared status -> icon mapping for both modules and sections in the TOC
+// (module/section status is written server-side as the agent writes each
+// piece of content, and flows down through CurriculumFull -> ModuleOut/
+// SectionOut; the panel refetches this via `curriculum_updated` WS events,
+// see useChatSocket.ts).
 const STATUS_ICON: Record<ModuleStatus | SectionStatus, typeof Circle> = {
   planned: Circle,
   writing: Loader2,
   complete: CheckCircle2,
 };
 
+/** Text color for a module/section's status icon and label in the TOC. */
 function statusClasses(status: ModuleStatus | SectionStatus): string {
   if (status === "complete") return "text-success";
   if (status === "writing") return "text-accent";
   return "text-muted-foreground";
 }
 
+/**
+ * One row in the flattened module/section traversal order (see `flat`
+ * below). `section` is null for a module that has no sections yet (still
+ * being planned) — that case is represented as its own single flat entry so
+ * it's still selectable/navigable in the TOC and via Prev/Next.
+ */
 interface FlatEntry {
   module: ModuleOut;
   section: SectionOut | null;
@@ -44,6 +56,20 @@ interface FlatEntry {
  * Reader view: a left mini-TOC (modules -> sections, with status icons) and a
  * single-section content pane. Selecting a TOC entry (or a Prev/Next button)
  * changes which section is shown — no scrolling within a long document.
+ *
+ * This is the "single-section reader paging" model (see recent commit
+ * history): rather than rendering the whole curriculum as one long
+ * scrollable document, exactly one (module, section) pair is "active" at a
+ * time, driven by `activeSelection` (owned by the parent, CurriculumPanel,
+ * as `ActiveSelection`) and changed only via `onSelectSection` — clicking a
+ * TOC entry or a Prev/Next button. This keeps each page focused and lets the
+ * content pane's scroll position reset per-section (see the effect below)
+ * instead of accumulating one giant scroll position across the whole
+ * curriculum.
+ *
+ * Rendered client-only via CurriculumPanel's `next/dynamic(..., { ssr: false
+ * })` boundary, because this component's content tree (SectionContent ->
+ * MermaidDiagram) renders Mermaid diagrams that require a browser DOM.
  */
 export function ReaderView({
   curriculum,
@@ -71,10 +97,15 @@ export function ReaderView({
     return entries;
   }, [modules]);
 
+  // `tocOpen` only matters for the compact (below-lg) dropdown TOC toggle;
+  // the lg+ mini TOC in the sidebar is always visible and ignores this state.
   const [tocOpen, setTocOpen] = useState(false);
   const tocRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
 
+  // Close the compact TOC dropdown on any click outside of it. Only attaches
+  // the listener while the dropdown is actually open, to avoid a global
+  // mousedown listener sitting around for the entire lifetime of the reader.
   useEffect(() => {
     if (!tocOpen) return;
     function onClick(e: MouseEvent) {
@@ -106,10 +137,17 @@ export function ReaderView({
   const current = flat[activeIndex] ?? null;
 
   // Reset content scroll position to top whenever the active section changes.
+  // This is the paging behavior's scroll reset: since each (module, section)
+  // is presented as its own "page" rather than an anchor within one long
+  // document, switching pages should always start the reader at the top of
+  // the new page rather than preserving the previous page's scroll offset.
   useEffect(() => {
     contentRef.current?.scrollTo({ top: 0 });
   }, [current?.module.id, current?.section?.id]);
 
+  // Central navigation function used by every TOC entry, and by Prev/Next —
+  // notifies the parent (which owns `activeSelection` and re-renders us with
+  // the new value) and closes the compact dropdown TOC if it was open.
   function select(moduleId: string, sectionId: string | null) {
     onSelectSection(moduleId, sectionId);
     setTocOpen(false);
@@ -123,9 +161,16 @@ export function ReaderView({
     );
   }
 
+  // Prev/Next entries in the flattened traversal order, used both to render
+  // the bottom navigation buttons (disabled at the very start/end) and to
+  // drive `select()` when they're clicked.
   const prevEntry = activeIndex > 0 ? flat[activeIndex - 1] : null;
   const nextEntry = activeIndex < flat.length - 1 ? flat[activeIndex + 1] : null;
 
+  // Shared TOC markup, rendered twice below: once inside the collapsible
+  // dropdown for narrow (<lg) viewports, once inline in the always-visible
+  // sidebar for lg+ viewports. Kept as a single JSX value so both renders
+  // stay in sync.
   const tocList = (
     <ul className="space-y-3">
       {modules.map((mod) => {

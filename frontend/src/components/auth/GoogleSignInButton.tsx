@@ -33,14 +33,30 @@ interface GoogleSignInButtonProps {
 }
 
 /**
- * Renders the official Google Identity Services button. Loads the GIS
+ * Renders the official Google Identity Services (GIS) button. Loads the GIS
  * script on mount and calls `onCredential` with the raw ID token JWT.
+ *
+ * Integration flow (per the auth architecture in the root CLAUDE.md):
+ * 1. This component loads `accounts.google.com/gsi/client` and renders the
+ *    library's own button into `containerRef` (GIS controls the markup —
+ *    we never build a custom sign-in button UI).
+ * 2. On user interaction, GIS invokes the `callback` registered in
+ *    `initialize()`, handing back a `credential` (the Google ID token JWT).
+ * 3. This component forwards that raw ID token to the caller via
+ *    `onCredential(idToken)` — it does NOT call the backend itself. The
+ *    parent (e.g. the login page) is expected to pass the token to
+ *    `authApi.loginWithGoogle`, which sends it to the backend for
+ *    server-side verification (google-auth) and exchange for this app's own
+ *    JWT, set as the httpOnly `ic_session` cookie.
  */
 export function GoogleSignInButton({ onCredential, disabled }: GoogleSignInButtonProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [scriptLoaded, setScriptLoaded] = useState(false);
   const [scriptError, setScriptError] = useState(false);
 
+  // Loads the GIS script exactly once (checks for an already-present <script>
+  // tag first, e.g. from a prior mount), then flips scriptLoaded/scriptError
+  // so the render effect below and the loading/error UI can react.
   useEffect(() => {
     if (window.google?.accounts?.id) {
       setScriptLoaded(true);
@@ -61,12 +77,19 @@ export function GoogleSignInButton({ onCredential, disabled }: GoogleSignInButto
     document.head.appendChild(script);
   }, []);
 
+  // Once the script is loaded (and we're not disabled), initialize the GIS
+  // client with our OAuth client ID and register the credential callback,
+  // then ask GIS to render its button into our container. Re-runs if
+  // `disabled` or `onCredential` change so the registered callback always
+  // closes over the latest prop.
   useEffect(() => {
     if (!scriptLoaded || !containerRef.current || !window.google || disabled) return;
     if (!env.googleClientId) return;
 
     window.google.accounts.id.initialize({
       client_id: env.googleClientId,
+      // Step 2 of the flow described above: GIS calls this with the ID
+      // token once the user completes sign-in via the rendered button.
       callback: (response) => onCredential(response.credential),
       ux_mode: "popup",
     });

@@ -4,24 +4,46 @@ import { CheckCircle2, Circle, Clock, FileText, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { ModuleStatus } from "@/lib/types";
 
+// This module is only ever imported by WorkflowView.tsx, which itself
+// assumes @xyflow/react is only ever loaded client-side via
+// CurriculumPanel's dynamic-import boundary (see WorkflowView.tsx's
+// top-of-file comment) — no additional ssr:false handling needed here.
+
 export type ModuleNodeData = {
   id: string;
   order: number;
   title: string;
+  /** Module's current status as tracked server-side (planned/writing/complete); drives this card's border/badge/progress-bar and the connecting StatusEdge's animation. */
   status: ModuleStatus;
   sectionCount: number;
   estimatedMinutes: number;
+  /** Called with this module's id on click — wired by WorkflowView to CurriculumPanel.handleSelectModule, which switches the panel to ReaderView focused on this module's first section. */
   onSelect: (moduleId: string) => void;
 };
 
 export type ModuleNodeType = Node<ModuleNodeData, "module">;
 
+/** Per-status label + icon used for the card's status badge. */
 const STATUS_META: Record<ModuleStatus, { label: string; icon: typeof Circle }> = {
   planned: { label: "Planned", icon: Circle },
   writing: { label: "Writing", icon: Loader2 },
   complete: { label: "Complete", icon: CheckCircle2 },
 };
 
+/**
+ * Custom React Flow node registered under the "module" node type (see
+ * `nodeTypes` in WorkflowView.tsx). Renders one module as a clickable card
+ * showing its order, title, status badge, section count, and estimated
+ * reading time. Visual state is entirely status-driven:
+ *  - `planned` — dashed border, muted badge, static icon.
+ *  - `writing` — accent border, accent badge, spinning icon, plus an
+ *    animated indeterminate progress bar along the bottom of the card.
+ *  - `complete` — success-tinted border and badge, static check icon.
+ * Clicking the card calls `data.onSelect(data.id)` (see ModuleNodeData);
+ * the node itself has no selection/drag behavior since WorkflowView disables
+ * React Flow's built-in interactivity (`nodesDraggable`/`elementsSelectable`
+ * are both false).
+ */
 export function ModuleNode({ data }: NodeProps<ModuleNodeType>) {
   const meta = STATUS_META[data.status];
   const Icon = meta.icon;

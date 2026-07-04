@@ -7,6 +7,14 @@ import { Sidebar, MobileSidebarClose } from "@/components/layout/Sidebar";
 import { UserMenu } from "@/components/layout/UserMenu";
 import { ThemeToggle } from "@/components/layout/ThemeToggle";
 
+/**
+ * The authenticated app shell: composes a persistent `Sidebar` (as a static
+ * column on desktop, a slide-in drawer on mobile) with a header (mobile menu
+ * button, `ThemeToggle`, `UserMenu`) and a scrollable main content area for
+ * `children`. Rendered by the `(app)` route group's `layout.tsx` after
+ * `useAuthGuard({requireAuth:true, requireOnboarding:true})` passes, so
+ * every page nested here can assume an authenticated, onboarded user.
+ */
 export function AppShell({ children }: { children: React.ReactNode }) {
   const [mobileOpen, setMobileOpen] = useState(false);
 

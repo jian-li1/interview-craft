@@ -26,6 +26,8 @@ _VALID_TRANSITIONS: dict[str, set[str]] = {
 
 
 class RequestUserInputInput(BaseModel):
+    """Input schema for `RequestUserInputTool`."""
+
     question: str = Field(..., description="The clarifying question to ask the user.")
     options: list[str] | None = Field(
         None, description="Optional 2-4 concrete quick-pick options; free text is always still allowed."
@@ -43,6 +45,24 @@ class RequestUserInputTool(Tool):
     input_model = RequestUserInputInput
 
     async def execute(self, input: RequestUserInputInput, ctx: AgentContext) -> dict[str, Any]:
+        """Signal a HITL pause requesting a clarifying answer from the user.
+
+        This is the second of the two HITL gate tools (alongside `propose_task_plan`).
+        Unlike a plan decision, resumption here is via an ordinary `user_message` WS
+        frame — there is no dedicated "answer" frame type; the orchestrator just treats
+        the next user message as the reply and continues the loop.
+
+        Args:
+            input (RequestUserInputInput): The validated question and optional quick-pick
+                options.
+            ctx (AgentContext): The current agent run's context (unused directly here;
+                required by the `Tool.execute` signature).
+
+        Returns:
+            dict[str, Any]: `{"status": "awaiting_user_input", "question", "options",
+                "_hitl_gate": True}` — the `_hitl_gate` flag causes the orchestrator to
+                pause the loop after this call.
+        """
         # No WS event is emitted directly by this tool; the orchestrator streams the
         # question as ordinary assistant text (rendered as a question card by the
         # frontend based on message shape) and pauses the loop via the `_hitl_gate` flag.
@@ -55,6 +75,8 @@ class RequestUserInputTool(Tool):
 
 
 class UpdateScratchpadInput(BaseModel):
+    """Input schema for `UpdateScratchpadTool`."""
+
     content: str = Field(
         ..., description="The full new scratchpad content, overwriting the previous value."
     )
@@ -70,11 +92,24 @@ class UpdateScratchpadTool(Tool):
     input_model = UpdateScratchpadInput
 
     async def execute(self, input: UpdateScratchpadInput, ctx: AgentContext) -> dict[str, Any]:
+        """Overwrite the agent state doc's scratchpad field.
+
+        Args:
+            input (UpdateScratchpadInput): The validated full replacement scratchpad
+                content (this always overwrites, never appends).
+            ctx (AgentContext): The current agent run's context; `ctx.curriculum_id`
+                identifies the state doc to update.
+
+        Returns:
+            dict[str, Any]: `{"status": "updated"}`.
+        """
         fs.set_agent_state(ctx.curriculum_id, {"scratchpad": input.content})
         return {"status": "updated"}
 
 
 class CompletePhaseInput(BaseModel):
+    """Input schema for `CompletePhaseTool`."""
+
     next_phase: str = Field(..., description="The phase to transition into.")
     reason: str = Field(..., description="Brief reason for this transition (for logging/debugging).")
 
@@ -91,6 +126,28 @@ class CompletePhaseTool(Tool):
     input_model = CompletePhaseInput
 
     async def execute(self, input: CompletePhaseInput, ctx: AgentContext) -> dict[str, Any]:
+        """Validate and apply a phase transition, updating state/curriculum status.
+
+        Note that `ctx.phase` reflects the phase as of the start of this orchestrator
+        iteration (per `app/agent/CLAUDE.md`, the orchestrator re-reads phase fresh from
+        Firestore every iteration, so a transition here takes effect starting next
+        iteration, not immediately within this one).
+
+        Args:
+            input (CompletePhaseInput): The validated target phase and a reason string
+                (used for logging/debugging, not shown in the response beyond echoing
+                it back).
+            ctx (AgentContext): The current agent run's context; `ctx.phase` is the
+                current phase used to validate the transition, and `ctx.curriculum_id`
+                scopes the state/curriculum updates.
+
+        Returns:
+            dict[str, Any]: On success, `{"status": "transitioned", "phase", "reason",
+                "_ws_event": {...}}` with a `phase_change` event for the orchestrator to
+                forward. On failure, `{"error": "..."}` if `next_phase` is not a known
+                `AgentPhase` value, or not an allowed transition from the current phase
+                per `_VALID_TRANSITIONS`.
+        """
         if input.next_phase not in _VALID_PHASES:
             return {"error": f"unknown phase: {input.next_phase!r}"}
 
@@ -106,6 +163,9 @@ class CompletePhaseTool(Tool):
 
         fs.set_agent_state(ctx.curriculum_id, {"phase": input.next_phase})
 
+        # Curriculum-facing status differs from the internal phase name in a few cases
+        # (e.g. both "writing" and "review" phases map to the "writing" status shown to
+        # the user; "ready" and "refinement" both map to "ready").
         status_map = {
             "deep_research": "researching",
             "outline_planning": "planning",

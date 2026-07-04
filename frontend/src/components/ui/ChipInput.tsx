@@ -14,7 +14,11 @@ interface ChipInputProps {
   className?: string;
 }
 
-/** Simple tag/chip input: type + Enter or comma to add, backspace on empty to remove last. */
+/**
+ * Simple tag/chip input: type + Enter or comma to add, backspace on empty
+ * to remove last. `values`/`onChange` make this a fully controlled list —
+ * the component only tracks the in-progress `draft` text itself.
+ */
 export function ChipInput({
   values,
   onChange,
@@ -24,6 +28,10 @@ export function ChipInput({
 }: ChipInputProps) {
   const [draft, setDraft] = useState("");
 
+  // Adds `raw` (trimmed) as a new chip unless it's empty or a case-insensitive
+  // duplicate of an existing chip (in which case the draft is just cleared,
+  // silently, rather than adding a repeat). Used by both the Enter/comma key
+  // handler and onBlur below.
   function commit(raw: string) {
     const value = raw.trim();
     if (!value) return;
@@ -35,6 +43,11 @@ export function ChipInput({
     setDraft("");
   }
 
+  // Enter or comma commits the current draft as a new chip. Backspace only
+  // removes the last chip when the draft is empty — i.e. the first
+  // Backspace press with text still in the input just edits the text
+  // normally instead of deleting a chip, which is what previously caused
+  // the "deleting the chip instead of the last character" onboarding bug.
   function handleKeyDown(e: KeyboardEvent<HTMLInputElement>) {
     if (e.key === "Enter" || e.key === ",") {
       e.preventDefault();
@@ -53,6 +66,13 @@ export function ChipInput({
       )}
     >
       {values.map((value, index) => (
+        // Each chip and its remove button call preventDefault() on
+        // mousedown so clicking "X" never steals focus away from the text
+        // input first (focus loss there could otherwise interact badly
+        // with the draft/commit state above). Removal itself only happens
+        // in onClick, filtering this chip out of `values` by index and
+        // reporting the new array via onChange — the input's own draft
+        // text is untouched by removing a chip.
         <span
           key={`${value}-${index}`}
           onMouseDown={(e) => e.preventDefault()}

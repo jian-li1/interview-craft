@@ -12,12 +12,29 @@ from fastapi.testclient import TestClient
 
 @pytest.fixture()
 def client(fake_fs):
+    """Build a `TestClient` against the real app with Firestore calls faked out.
+
+    Args:
+        fake_fs: The `fake_fs` fixture from conftest.py, depended on here purely for
+            its monkeypatching side effect.
+
+    Returns:
+        TestClient: A FastAPI test client wrapping `app.main.app`.
+    """
     from app.main import app
 
     return TestClient(app)
 
 
 def _authed_client(client) -> TestClient:
+    """Mint a session JWT for uid "uid1" and attach it to the client as a cookie.
+
+    Args:
+        client (TestClient): The test client to authenticate in place.
+
+    Returns:
+        TestClient: The same client instance, now carrying a valid `ic_session` cookie.
+    """
     from app.core.config import get_settings
     from app.core.security import create_session_jwt
 
@@ -28,6 +45,9 @@ def _authed_client(client) -> TestClient:
 
 
 def test_delete_curriculum_cascades_to_conversation_and_messages(client, fake_fs):
+    """Verify DELETE /api/curricula/{id} removes the curriculum, its linked conversation
+    doc, and all of that conversation's messages in one call.
+    """
     conv = fake_fs.fs.create_conversation("uid1", "Test chat", curriculum_id=None)
     curriculum = fake_fs.fs.create_curriculum(
         "uid1", "Test curriculum", "prep me for a SWE interview", conversation_id=conv["id"]
@@ -51,6 +71,9 @@ def test_delete_curriculum_cascades_to_conversation_and_messages(client, fake_fs
 
 
 def test_delete_curriculum_without_conversation_id_does_not_error(client, fake_fs):
+    """Verify deleting a curriculum with an empty `conversation_id` succeeds without
+    raising, since there's no linked conversation to cascade-delete.
+    """
     curriculum = fake_fs.fs.create_curriculum(
         "uid1", "Test curriculum", "prep me for a SWE interview", conversation_id=""
     )
@@ -67,6 +90,9 @@ def test_delete_curriculum_without_conversation_id_does_not_error(client, fake_f
 
 
 def test_delete_curriculum_rejects_non_owner(client, fake_fs):
+    """Verify deleting a curriculum owned by a different uid returns 404 and leaves
+    both the curriculum and conversation docs untouched (ownership check enforced).
+    """
     conv = fake_fs.fs.create_conversation("owner-uid", "Test chat", curriculum_id=None)
     curriculum = fake_fs.fs.create_curriculum(
         "owner-uid", "Test curriculum", "prep me for a SWE interview", conversation_id=conv["id"]

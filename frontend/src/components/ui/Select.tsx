@@ -3,6 +3,13 @@ import type { SelectHTMLAttributes } from "react";
 import { ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 
+/**
+ * Base `<select>` primitive: a native select styled to match `Input`, with
+ * a decorative chevron overlay (the select itself is `appearance-none`, so
+ * the browser's default arrow is hidden and this icon stands in for it).
+ * Options are passed as `children` (plain `<option>` elements) by callers.
+ * Forwards `ref` and all native select props.
+ */
 export const Select = forwardRef<HTMLSelectElement, SelectHTMLAttributes<HTMLSelectElement>>(
   ({ className, children, ...props }, ref) => (
     <div className="relative">

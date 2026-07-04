@@ -9,6 +9,13 @@ import { useAuthStore } from "@/stores/useAuthStore";
 import { initials } from "@/lib/utils";
 import { toast } from "sonner";
 
+/**
+ * Account dropdown menu shown in `AppShell`'s header: avatar (Google
+ * profile picture, falling back to initials) plus name, expanding into a
+ * popover with a settings link (`/settings`) and a log out action. Renders
+ * nothing if `useAuthStore` has no `user` yet (e.g. before `AuthProvider`'s
+ * initial fetch resolves).
+ */
 export function UserMenu() {
   const user = useAuthStore((s) => s.user);
   const logout = useAuthStore((s) => s.logout);
@@ -16,6 +23,7 @@ export function UserMenu() {
   const ref = useRef<HTMLDivElement>(null);
   const router = useRouter();
 
+  // Closes the dropdown when the user clicks anywhere outside its container.
   useEffect(() => {
     function onClick(e: MouseEvent) {
       if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
@@ -26,6 +34,8 @@ export function UserMenu() {
 
   if (!user) return null;
 
+  // Calls the auth store's logout (which clears the ic_session cookie
+  // server-side via authApi.logout) then redirects to /login.
   async function handleLogout() {
     try {
       await logout();

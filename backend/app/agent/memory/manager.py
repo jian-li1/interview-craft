@@ -35,12 +35,27 @@ COMPACTION_TRIGGER_FRACTION = 0.8
 
 
 class PromptLibrary:
-    """Loads and caches the markdown prompt files from disk."""
+    """Loads and caches the markdown prompt files from disk.
+
+    Each file is read from disk at most once per process (per `_prompt_library`
+    singleton below) — subsequent `get` calls for the same filename hit the in-memory
+    cache. This means prompt file edits require a process restart to take effect.
+    """
 
     def __init__(self) -> None:
+        """Initialize an empty file-contents cache."""
         self._cache: dict[str, str] = {}
 
     def get(self, filename: str) -> str:
+        """Return the contents of `filename` from `_PROMPTS_DIR`, loading and caching it first if needed.
+
+        Args:
+            filename (str): The prompt file's name, relative to `_PROMPTS_DIR` (e.g.
+                `"base_system.md"`).
+
+        Returns:
+            str: The full UTF-8 text contents of the file.
+        """
         if filename not in self._cache:
             path = _PROMPTS_DIR / filename
             self._cache[filename] = path.read_text(encoding="utf-8")
@@ -63,7 +78,22 @@ _PHASE_PROMPT_FILES: dict[str, str] = {
 
 
 def build_static_system_prompt(phase: str) -> str:
-    """Compose base_system.md + phase file + citation + visual guidelines."""
+    """Compose base_system.md + phase file + citation + visual guidelines.
+
+    This is layer 1 of the context (see module docstring): the fixed instructional
+    prompt for the given phase, unaffected by conversation history or user data. The
+    phase file is looked up via `_PHASE_PROMPT_FILES`, falling back to
+    `refinement_phase.md` for any phase not explicitly mapped. `base_system.md`,
+    `citation_guidelines.md`, and `visual_guidelines.md` are appended for every phase.
+
+    Args:
+        phase (str): The current agent phase (e.g. "intake", "deep_research",
+            "writing"), used to select the phase-specific instruction file.
+
+    Returns:
+        str: The concatenated prompt text, with each section separated by a
+            `"\\n\\n---\\n\\n"` divider.
+    """
     parts = [_prompt_library.get("base_system.md")]
     phase_file = _PHASE_PROMPT_FILES.get(phase, "refinement_phase.md")
     parts.append(f"# Current phase instructions ({phase})\n\n" + _prompt_library.get(phase_file))
@@ -73,6 +103,18 @@ def build_static_system_prompt(phase: str) -> str:
 
 
 def build_user_memory_block(synthesized_profile: str | None, profile: dict[str, Any] | None) -> str:
+    """Render layer 2 of the context: the user's synthesized profile and key structured fields.
+
+    Args:
+        synthesized_profile (str | None): The free-text profile summary produced by the
+            profile-synthesis one-shot task, or None if not yet generated.
+        profile (dict[str, Any] | None): The raw onboarding profile document, or None if
+            the user has no profile yet.
+
+    Returns:
+        str: A human-readable block describing the user, or a placeholder string noting
+            no profile information is available yet if both inputs are falsy.
+    """
     if not synthesized_profile and not profile:
         return "About the user: no profile information available yet."
     lines = ["About the user:"]
@@ -90,7 +132,21 @@ def build_user_memory_block(synthesized_profile: str | None, profile: dict[str, 
 
 
 def build_working_memory_block(state: dict[str, Any]) -> str:
-    """Compact, always-fresh rendering of the agent state doc."""
+    """Compact, always-fresh rendering of the agent state doc.
+
+    This is layer 3 of the context: the working-memory block is rebuilt fresh from the
+    Firestore state doc on every call — it is never cached — so the model always sees
+    the authoritative current phase/queue/scratchpad, even if a tool call earlier in the
+    same iteration mutated the state doc.
+
+    Args:
+        state (dict[str, Any]): The agent state document (phase, task_queue,
+            current_task_id, iteration_count, scratchpad).
+
+    Returns:
+        str: A compact multi-line summary of the state doc, with sensible defaults for
+            any missing fields (phase defaults to "intake", scratchpad shows "(empty)").
+    """
     return (
         "Agent working memory (authoritative, always current):\n"
         f"- phase: {state.get('phase', 'intake')}\n"
@@ -105,6 +161,14 @@ class MemoryManager:
     """Builds LLM context for a conversation/curriculum, with auto-compaction."""
 
     def __init__(self, settings: Settings, llm_provider_factory=None) -> None:
+        """Store settings needed to build context (notably `context_token_limit`).
+
+        Args:
+            settings (Settings): Application settings, used here for
+                `context_token_limit` (the compaction trigger threshold).
+            llm_provider_factory: Currently unused placeholder for a future
+                provider-factory injection point; defaults to None.
+        """
         self._settings = settings
         self._llm_provider_factory = llm_provider_factory
 
@@ -120,8 +184,39 @@ class MemoryManager:
     ) -> list[ChatMessage]:
         """Assemble the full message list to send to the LLM this iteration.
 
+        Called on every ReAct iteration (must stay cheap — see module docstring). Builds
+        the layered context in fixed order: static system prompt, user memory, working
+        memory, optional rolling summary, then recent conversation messages (with old
+        tool outputs truncated via `truncate_old_tool_outputs`). If the assembled context
+        exceeds `COMPACTION_TRIGGER_FRACTION` (0.8) of `context_token_limit`, the older
+        ~60% of candidate messages (`select_messages_to_compact`) are summarized via the
+        small model and folded into a new rolling summary, replacing the raw messages in
+        the returned list; the conversation doc's `summary`/`compacted_through`/
+        `token_estimate` fields are updated to persist the new checkpoint. If compaction
+        does not trigger, only `token_estimate` is updated.
+
         `on_compaction` is an optional async callback `(summary_preview, tokens_before,
         tokens_after) -> None` used to emit the WS `compaction` event.
+
+        Args:
+            conversation_id (str): The conversation whose messages/summary to load.
+            phase (str): The current agent phase, used to select the phase prompt file.
+            synthesized_profile (str | None): The user's synthesized profile text, or
+                None if not yet generated.
+            profile (dict[str, Any] | None): The raw onboarding profile document, or
+                None.
+            agent_state (dict[str, Any]): The current agent state doc (phase, task
+                queue, scratchpad, etc.) used to render the working-memory block.
+            small_llm (LLMProvider | None): The provider to use for compaction
+                summarization (routed via `small=True`); if None, compaction is skipped
+                even if the token threshold is exceeded.
+            on_compaction: Optional async callback invoked with `(summary_preview,
+                tokens_before, tokens_after)` when compaction actually runs this call.
+
+        Returns:
+            list[ChatMessage]: The full ordered message list to send to the LLM this
+                iteration, starting with the system-role context blocks followed by the
+                (possibly compacted) conversation history.
         """
         conversation = fs.get_conversation(conversation_id) or {}
         existing_summary = conversation.get("summary")
@@ -129,7 +224,8 @@ class MemoryManager:
         all_messages = fs.list_messages(conversation_id)
         compacted_through = conversation.get("compacted_through")
         if compacted_through:
-            # Only include messages after the last compacted one.
+            # Only include messages after the last compacted one — earlier messages are
+            # already folded into `existing_summary` and must not be re-sent verbatim.
             idx = next(
                 (i for i, m in enumerate(all_messages) if m["id"] == compacted_through), None
             )
@@ -141,13 +237,26 @@ class MemoryManager:
         user_memory = build_user_memory_block(synthesized_profile, profile)
         working_memory = build_working_memory_block(agent_state)
 
+        # Fixed layer order per the module docstring / CLAUDE.md invariant: static
+        # prompt -> user memory -> working memory -> (optional) summary -> messages.
         system_blocks = [static_prompt, user_memory, working_memory]
         if existing_summary:
             system_blocks.append(f"Summary of earlier conversation:\n\n{existing_summary}")
 
+        # Independent of compaction: always trims old tool-call outputs to previews.
         candidate_messages = truncate_old_tool_outputs(recent_messages)
 
         def _assemble(msgs: list[dict]) -> list[ChatMessage]:
+            """Combine the current `system_blocks` with converted conversation messages.
+
+            Args:
+                msgs (list[dict]): Raw Firestore message dicts to append after the
+                    system blocks.
+
+            Returns:
+                list[ChatMessage]: System-role blocks followed by the converted
+                    conversation messages, in order.
+            """
             chat_messages = [ChatMessage(role="system", content=b) for b in system_blocks]
             for m in msgs:
                 chat_messages.extend(_message_to_chat_messages(m))
@@ -158,6 +267,10 @@ class MemoryManager:
         tokens_before = estimate_tokens(total_text)
         limit = self._settings.context_token_limit
 
+        # Compaction trigger: only fires when (a) we're over 0.8x the context limit,
+        # (b) a small model is available to do the summarization, and (c) there are
+        # enough candidate messages that compacting is meaningful (>2, so we never try
+        # to compact e.g. a single lingering message down to nothing).
         if tokens_before > COMPACTION_TRIGGER_FRACTION * limit and small_llm is not None and len(candidate_messages) > 2:
             older, remaining = select_messages_to_compact(candidate_messages)
             if older:
@@ -167,6 +280,9 @@ class MemoryManager:
                 )
                 new_summary = await run_compaction(small_llm, existing_summary, older)
                 last_compacted_msg = older[-1]
+                # Persist the new checkpoint: future build_context calls will only load
+                # messages after `last_compacted_msg["id"]` (see `compacted_through` read
+                # above) and will use the merged `new_summary` in place of the old one.
                 fs.update_conversation(
                     conversation_id,
                     {
@@ -175,6 +291,9 @@ class MemoryManager:
                         "token_estimate": tokens_before,
                     },
                 )
+                # Swap the summary block in system_blocks for the freshly merged one,
+                # then rebuild the message list using only the still-recent `remaining`
+                # messages (the `older` ones are now represented solely by the summary).
                 system_blocks = system_blocks[:-1] if existing_summary else system_blocks
                 system_blocks.append(f"Summary of earlier conversation:\n\n{new_summary}")
                 assembled = _assemble(remaining)
@@ -194,6 +313,15 @@ def _message_to_chat_messages(msg: dict[str, Any]) -> list[ChatMessage]:
     Assistant messages with tool_calls become an assistant message (with tool_calls) plus
     one tool-role message per call result, matching the OpenAI-style conversation shape
     that both provider adapters expect.
+
+    Args:
+        msg (dict[str, Any]): A raw message document (role, content, optional
+            tool_calls list with id/name/input/output_preview per call).
+
+    Returns:
+        list[ChatMessage]: A single ChatMessage for plain messages, or an
+            assistant-message-plus-per-call tool-messages sequence when `tool_calls`
+            is present on an assistant message.
     """
     role = msg.get("role", "user")
     content = msg.get("content", "") or ""
@@ -226,6 +354,14 @@ def _message_to_chat_messages(msg: dict[str, Any]) -> list[ChatMessage]:
 
 
 def _safe_json(obj: Any) -> str:
+    """Best-effort JSON-serialize `obj`, never raising.
+
+    Args:
+        obj (Any): The object to serialize (typically a tool call's input dict).
+
+    Returns:
+        str: The JSON string, or `"{}"` if `obj` is not JSON-serializable.
+    """
     import json
 
     try:

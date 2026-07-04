@@ -6,12 +6,14 @@ from fastapi.testclient import TestClient
 
 
 def test_app_imports():
+    """Verify `app.main.app` can be imported and constructed without raising."""
     from app.main import app
 
     assert app is not None
 
 
 def test_healthz_no_auth():
+    """Verify the health check endpoint is reachable without auth and returns ok."""
     from app.main import app
 
     client = TestClient(app)
@@ -21,7 +23,11 @@ def test_healthz_no_auth():
 
 
 def test_openapi_schema_generates():
-    """Sanity check that all routers wire up without raising during schema generation."""
+    """Sanity check that all routers wire up without raising during schema generation.
+
+    Fetches `/openapi.json` and asserts that the expected route prefixes from each
+    router (health, auth, onboarding, curricula, conversations, settings) are present.
+    """
     from app.main import app
 
     client = TestClient(app)

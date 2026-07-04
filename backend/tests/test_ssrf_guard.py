@@ -24,46 +24,58 @@ from app.agent.tools.research import FetchUrlInput, FetchUrlTool, _guard_url, _i
     ],
 )
 def test_is_blocked_ip_true_for_private_ranges(ip):
+    """Verify loopback, private, link-local, and unspecified IPs are all blocked."""
     assert _is_blocked_ip(ip) is True
 
 
 @pytest.mark.parametrize("ip", ["8.8.8.8", "1.1.1.1", "93.184.216.34"])
 def test_is_blocked_ip_false_for_public_ips(ip):
+    """Verify ordinary public IP addresses are not blocked."""
     assert _is_blocked_ip(ip) is False
 
 
 def test_is_blocked_ip_unparsable_defaults_to_blocked():
+    """Verify a string that isn't a valid IP address fails closed (treated as blocked)."""
     assert _is_blocked_ip("not-an-ip") is True
 
 
 def test_guard_url_rejects_non_http_scheme():
+    """Verify non-http(s) schemes like ftp:// are rejected with a "scheme" error."""
     with pytest.raises(ValueError, match="scheme"):
         _guard_url("ftp://example.com/file")
 
 
 def test_guard_url_rejects_file_scheme():
+    """Verify the file:// scheme is rejected with a "scheme" error."""
     with pytest.raises(ValueError, match="scheme"):
         _guard_url("file:///etc/passwd")
 
 
 def test_guard_url_rejects_loopback_hostname():
+    """Verify the hostname "localhost" is rejected as private/internal."""
     with pytest.raises(ValueError, match="private/internal"):
         _guard_url("http://localhost/admin")
 
 
 def test_guard_url_rejects_loopback_ip_literal():
+    """Verify a loopback IP literal (127.0.0.1) is rejected as private/internal."""
     with pytest.raises(ValueError, match="private/internal"):
         _guard_url("http://127.0.0.1:8080/")
 
 
 def test_guard_url_rejects_no_hostname():
+    """Verify a URL with no hostname component is rejected with a "hostname" error."""
     with pytest.raises(ValueError, match="hostname"):
         _guard_url("http:///path-only")
 
 
 @pytest.mark.asyncio
 async def test_fetch_url_tool_returns_error_observation_for_blocked_target():
-    """The tool must return a structured error dict, never raise, per spec 02 §3."""
+    """The tool must return a structured error dict, never raise, per spec 02 §3.
+
+    Verifies fetching a loopback-IP URL surfaces a `{"error": ...}` dict mentioning
+    "private/internal" rather than propagating an exception.
+    """
     tool = FetchUrlTool()
     ctx = object()  # execute() doesn't touch ctx for the guard-rejection path
     result = await tool.execute(FetchUrlInput(url="http://127.0.0.1/secret"), ctx)
@@ -73,6 +85,7 @@ async def test_fetch_url_tool_returns_error_observation_for_blocked_target():
 
 @pytest.mark.asyncio
 async def test_fetch_url_tool_rejects_bad_scheme_without_raising():
+    """Verify a non-http scheme (e.g. javascript:) is surfaced as an error dict, not raised."""
     tool = FetchUrlTool()
     result = await tool.execute(FetchUrlInput(url="javascript:alert(1)"), object())
     assert "error" in result

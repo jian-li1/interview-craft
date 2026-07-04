@@ -52,3 +52,14 @@ specs silently.
   Mermaid diagrams, n8n-style React Flow canvas. Don't strip visual richness to simplify.
 - Prompt files in `backend/app/agent/prompts/` are a primary deliverable — thorough,
   multi-file, carefully engineered. Edit them with the same care as code.
+
+## Code Documentation
+
+**Always add thorough inline comments to every piece of code you add or edit.** This is
+a strict requirement — not optional.
+
+### Editing existing code
+
+When you edit existing code that lacks comments, **add comments to every part you touch**
+and to any closely related code in the same scope. Do not leave uncommented code
+adjacent to newly commented code.

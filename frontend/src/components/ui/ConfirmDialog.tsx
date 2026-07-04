@@ -16,6 +16,17 @@ interface ConfirmDialogProps {
   onCancel: () => void;
 }
 
+/**
+ * Modal confirmation dialog (`role="alertdialog"`), shown/hidden entirely
+ * via the `open` prop (animated in/out with Framer Motion) — it holds no
+ * open/close state itself. Closes on Escape or backdrop click (both call
+ * `onCancel`). `onConfirm` is fired by the confirm button; the async
+ * confirm pattern is caller-driven: pass `loading` while your `onConfirm`
+ * handler's request is in flight to disable cancel and show a spinner on
+ * the confirm button (via `Button`'s `loading` prop) — this component does
+ * not await `onConfirm` itself. `destructive` swaps the confirm button to
+ * the "destructive" `Button` variant for delete-style actions.
+ */
 export function ConfirmDialog({
   open,
   title,

@@ -13,19 +13,47 @@ import { ThemeToggle } from "@/components/layout/ThemeToggle";
 import { useRouter } from "next/navigation";
 import { Loader2 } from "lucide-react";
 
+/**
+ * `/login` — public sign-in page (Google Identity Services).
+ *
+ * Auth-guard interaction: calls `useAuthGuard({ redirectIfAuthed: true })`,
+ * which immediately redirects an already-authenticated visitor away from
+ * this page (to dashboard/onboarding per their state) instead of showing the
+ * sign-in form again. `ready` stays false until that check resolves, so we
+ * render a centered spinner in the meantime to avoid a flash of the login UI
+ * for users who are about to be redirected.
+ *
+ * Sign-in flow: `GoogleSignInButton` renders Google's identity widget and
+ * hands us a raw Google ID token via `onCredential`. `handleCredential`
+ * exchanges that token for our own session by calling
+ * `authApi.loginWithGoogle`, which sets the backend's httpOnly `ic_session`
+ * JWT cookie and returns the user record. On success we hydrate
+ * `useAuthStore` with that user, toast a welcome message, and redirect:
+ * to `/dashboard` if `user.onboarding_completed`, otherwise to `/onboarding`
+ * (new users must finish the profile wizard first). Failures surface as an
+ * error toast and re-enable the button.
+ */
 export default function LoginPage() {
   const { ready } = useAuthGuard({ redirectIfAuthed: true });
   const setUser = useAuthStore((s) => s.setUser);
   const router = useRouter();
   const [signingIn, setSigningIn] = useState(false);
 
+  // Callback passed to GoogleSignInButton; fires once Google returns a
+  // signed ID token for the chosen account. Wrapped in useCallback so the
+  // button (and any effect that reads this) doesn't see a new function
+  // identity on every render.
   const handleCredential = useCallback(
     async (idToken: string) => {
       setSigningIn(true);
       try {
+        // Exchange the Google ID token for our own backend session (sets
+        // the httpOnly ic_session cookie server-side) and get the user back.
         const user = await authApi.loginWithGoogle(idToken);
         setUser(user);
         toast.success(`Welcome, ${user.name.split(" ")[0]}!`);
+        // Route new users into the onboarding wizard; returning users go
+        // straight to their dashboard.
         router.push(user.onboarding_completed ? "/dashboard" : "/onboarding");
       } catch (err) {
         const message =
@@ -38,6 +66,8 @@ export default function LoginPage() {
     [setUser, router]
   );
 
+  // Auth-guard check hasn't resolved yet (or is redirecting an already
+  // signed-in user away) — show a spinner instead of the sign-in form.
   if (!ready) {
     return (
       <div className="flex min-h-screen items-center justify-center">

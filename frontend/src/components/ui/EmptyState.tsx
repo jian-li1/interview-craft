@@ -9,6 +9,12 @@ interface EmptyStateProps {
   className?: string;
 }
 
+/**
+ * Generic empty/error placeholder: an optional icon in a soft circle, a
+ * title, an optional description, and an optional trailing `action` node
+ * (e.g. a retry or create button). Used for both "no data yet" and
+ * "failed to load" states (see `CurriculumGrid`).
+ */
 export function EmptyState({ icon: Icon, title, description, action, className }: EmptyStateProps) {
   return (
     <div

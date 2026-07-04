@@ -10,9 +10,23 @@ import { ActivityFeed } from "@/components/studio/curriculum/ActivityFeed";
 import { useChatStore } from "@/stores/useChatStore";
 import { useCurriculumStore } from "@/stores/useCurriculumStore";
 
-// Workflow view uses @xyflow/react + ReaderView renders Mermaid — both need to
-// stay client-only, so keep the whole panel body dynamic (ssr: false) per
-// spec 03 §5 to avoid hydration warnings.
+// *** THIS is the ssr:false dynamic-import boundary referenced by root/frontend
+// CLAUDE.md's "ssr:false rule" for BOTH libraries that must never touch the
+// server-rendered tree:
+//   - WorkflowView imports `@xyflow/react` (React Flow) at its top level —
+//     that library reads/writes DOM layout (measuring nodes, computing the
+//     canvas viewport, etc.) and has no meaningful server-side render.
+//   - ReaderView transitively renders Mermaid diagrams (ReaderView ->
+//     SectionContent -> MermaidDiagram), and Mermaid itself is only ever
+//     `import()`-ed at runtime inside a useEffect (see MermaidDiagram.tsx) —
+//     but ReaderView still needs to be excluded from SSR here too, since its
+//     child tree assumes a browser environment throughout.
+// Wrapping both in `next/dynamic(..., { ssr: false })` at THIS single
+// boundary means neither module is ever pulled into the server bundle or
+// hydrated against server-rendered markup — a plain top-level `import`
+// of either component elsewhere would break the Next.js build (per spec 03
+// §5) or produce hydration mismatches, since their real DOM (React Flow's
+// canvas nodes, Mermaid's rendered SVG) only exists client-side.
 const WorkflowView = dynamic(
   () => import("@/components/studio/curriculum/WorkflowView").then((m) => m.WorkflowView),
   { ssr: false }

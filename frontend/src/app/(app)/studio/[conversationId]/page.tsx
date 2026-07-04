@@ -13,9 +13,51 @@ import { useCurriculumStore } from "@/stores/useCurriculumStore";
 import { conversationsApi, ApiError } from "@/lib/api";
 
 interface StudioPageProps {
+  // Next.js 15 App Router passes dynamic route params as a Promise (to
+  // support async param resolution); unwrapped below via React's `use()`.
   params: Promise<{ conversationId: string }>;
 }
 
+/**
+ * `/studio/[conversationId]` — the core studio page: a split-panel layout
+ * pairing the live agent chat (`ChatPanel`) with the curriculum being built
+ * (`CurriculumPanel`), for one conversation at a time.
+ *
+ * `conversationId` flow: the dynamic route param arrives as a Promise (App
+ * Router convention) and is unwrapped with `use(params)`. It's then threaded
+ * into `useChatSocket(conversationId)` to open/own the WebSocket connection
+ * for this conversation, into `useChatStore.setConversationId` so the chat
+ * store scopes its state to this conversation, and into
+ * `conversationsApi.messages(conversationId)` to fetch prior history.
+ *
+ * Layout split: on desktop, a fixed-width chat column (40%, clamped
+ * 380–560px) on the left and a flexible curriculum column filling the rest;
+ * on mobile (`useIsMobile`), the two panels become tabs ("Chat" /
+ * "Curriculum") in a single-column layout instead of a side-by-side split.
+ * Only one layout is mounted at a time (not both, toggled via CSS) so that
+ * expensive client-only views inside `CurriculumPanel` (React Flow canvas,
+ * Mermaid diagrams) never mount twice simultaneously.
+ *
+ * Resume/reconnect logic on mount:
+ * - The history-hydration effect resets both the chat and curriculum stores
+ *   and re-fetches message history via `conversationsApi.messages` whenever
+ *   `conversationId` changes (including first mount), so navigating between
+ *   studio conversations doesn't leak state from the previous one.
+ * - The "pending prompt" effect handles the case where this conversation was
+ *   just created from the dashboard's prompt box: the conversation's opening
+ *   message is stashed in `sessionStorage` (key `ic:pending-prompt:{id}`)
+ *   before navigation, because creating the conversation only provisions
+ *   Firestore docs — the agent turn doesn't start until the first
+ *   `user_message` WS frame is actually sent. Once history has loaded (so we
+ *   know there's no existing history already covering it), the socket is
+ *   open, and no messages exist yet, that pending prompt is sent exactly
+ *   once (guarded by the `initialPromptSent` ref) and removed from
+ *   `sessionStorage`.
+ * - `useChatSocket` itself (see `hooks/useChatSocket.ts`) owns automatic
+ *   reconnect/backoff for the underlying WebSocket; this page only reacts to
+ *   the resulting connection state to decide when it's safe to send the
+ *   pending prompt.
+ */
 export default function StudioPage({ params }: StudioPageProps) {
   const { conversationId } = use(params);
 

@@ -37,6 +37,44 @@ const emptyProfile: ProfileIn = {
 
 const TOTAL_STEPS = 4;
 
+/**
+ * `/onboarding` — post-signup profile wizard, shown once to new users after
+ * their first Google sign-in (before they reach `/dashboard`).
+ *
+ * Guarded with `useAuthGuard({ requireAuth: true })` only (not
+ * `requireOnboarding`, since the whole point of this page is to let
+ * not-yet-onboarded users in) and lives outside the `(app)` route group —
+ * see `frontend/CLAUDE.md`'s structure map: `/`, `/login`, and `/onboarding`
+ * are public/semi-public pages that sit alongside, not inside, the
+ * authenticated shell.
+ *
+ * State machine: a 4-step linear wizard driven by `step` (1-indexed) plus
+ * `direction` (±1, purely for the slide-in/out animation direction in
+ * `AnimatePresence`). `goTo(next)` is the only step transition entry point;
+ * it derives `direction` from whether `next` is ahead of or behind the
+ * current step. Steps:
+ *   1. `StepBackground` — bio + education/work background (free text).
+ *   2. `StepRoles` — target roles (chip input), experience level, timeline.
+ *   3. `StepSkills` — skills (chip input), goals, learning style, resume
+ *      upload (`ResumeDropzone`, which extracts resume text server-side).
+ *   4. `StepReview` — read-only summary of steps 1-3, plus an explicit
+ *      "Generate my profile" action that calls the backend to synthesize a
+ *      free-text profile summary (`synthesizedProfile`) the agent will use
+ *      as long-term memory; editable before finishing.
+ * `validateStep()` gates forward navigation per step (steps 1-3 only; step 4
+ * has no free-text validation, it's gated by `!synthesizedProfile` instead
+ * disabling the Finish button until a profile has been generated).
+ * `handleNext` persists the in-progress profile via `onboardingApi.update`
+ * before advancing, so a page refresh mid-wizard doesn't lose progress (the
+ * mount effect below re-fetches any existing partial profile).
+ * `handleFinish` marks `onboarding_completed: true`, refreshes the cached
+ * auth user (so `useAuthGuard`'s `requireOnboarding` checks elsewhere in the
+ * app see the update immediately), and redirects to `/dashboard`.
+ *
+ * Note: this page does not contain a "New curriculum" button — that action
+ * lives in `components/layout/Sidebar.tsx` within the authenticated shell,
+ * not here.
+ */
 export default function OnboardingPage() {
   const { ready } = useAuthGuard({ requireAuth: true });
   const { refresh } = useAuth();
@@ -52,6 +90,13 @@ export default function OnboardingPage() {
   const [synthesizedProfile, setSynthesizedProfile] = useState<string | null>(null);
   const [direction, setDirection] = useState(1);
 
+  // On mount (once the auth guard confirms the user is signed in), fetch
+  // any partial profile already saved by a previous visit to this wizard —
+  // handleNext persists progress after every step, so a refresh mid-wizard
+  // resumes where the user left off rather than starting over. A 404/empty
+  // response (brand-new user) is treated as "start fresh" via the empty
+  // catch block below. `cancelled` guards against setting state after
+  // unmount if `ready` flips or the component unmounts mid-fetch.
   useEffect(() => {
     if (!ready) return;
     let cancelled = false;
@@ -83,15 +128,27 @@ export default function OnboardingPage() {
     };
   }, [ready]);
 
+  // Generic field setter shared by every step component — merges a single
+  // key/value pair into the `profile` object without each step needing its
+  // own setState wiring.
   function update<K extends keyof ProfileIn>(key: K, value: ProfileIn[K]) {
     setProfile((p) => ({ ...p, [key]: value }));
   }
 
+  // Central step-transition function. Derives the slide animation
+  // `direction` (+1 = forward/slide-from-right, -1 = backward/slide-from-
+  // left) by comparing the target step to the current one, then commits the
+  // new step. Both Back and Continue funnel through this so direction stays
+  // consistent.
   function goTo(next: number) {
     setDirection(next > step ? 1 : -1);
     setStep(next);
   }
 
+  // Per-step required-field validation, run before advancing past steps 1-3
+  // (step 4/review has no free-text validation — see handleFinish, which is
+  // gated on `synthesizedProfile` existing instead). Returns the first
+  // validation error message found, or null if the current step is valid.
   function validateStep(): string | null {
     if (step === 1) {
       if (!profile.bio.trim()) return "Tell us a bit about yourself.";
@@ -107,6 +164,9 @@ export default function OnboardingPage() {
     return null;
   }
 
+  // Continue-button handler: validates the current step, persists the
+  // in-progress profile to the backend (so it survives a refresh — see the
+  // mount effect above), then advances to the next step via goTo.
   async function handleNext() {
     const error = validateStep();
     if (error) {
@@ -126,6 +186,10 @@ export default function OnboardingPage() {
     }
   }
 
+  // Step-4 "Generate my profile" / "Regenerate" handler: saves the latest
+  // profile fields, then asks the backend to synthesize a free-text summary
+  // (`synthesized_profile`) that becomes the agent's long-term memory of
+  // this user. Can be called repeatedly to regenerate after edits.
   async function handleSynthesize() {
     setSynthesizing(true);
     try {
@@ -140,6 +204,10 @@ export default function OnboardingPage() {
     }
   }
 
+  // Final "Finish" handler: marks onboarding complete on the backend,
+  // refreshes the cached auth user via AuthProvider's `refresh` (so
+  // `requireOnboarding` guards elsewhere immediately see the updated flag
+  // instead of racing a stale cached value), then navigates to /dashboard.
   async function handleFinish() {
     setSaving(true);
     try {
@@ -244,6 +312,15 @@ export default function OnboardingPage() {
   );
 }
 
+/**
+ * Shared label+hint+content wrapper used by every wizard step below.
+ * `children` may be a plain node, or a render-prop `(id) => node` for inputs
+ * that need to receive the generated id to wire up `htmlFor`/`id`
+ * association explicitly (see the comment inside the function body — this
+ * is the fix for the onboarding label/chip-deletion bug referenced in the
+ * project's recent commit history: a ChipInput field previously broke when
+ * wrapped in a real `<label>`).
+ */
 function Field({
   label,
   hint,
@@ -273,6 +350,7 @@ function Field({
   );
 }
 
+/** Wizard step 1/4: free-text bio and education/work background. */
 function StepBackground({
   profile,
   update,
@@ -309,6 +387,11 @@ function StepBackground({
   );
 }
 
+/**
+ * Wizard step 2/4: target roles (chip input — see `Field`'s docblock for
+ * why chip fields use the render-prop id pattern), experience level, and
+ * interview timeline.
+ */
 function StepRoles({
   profile,
   update,
@@ -355,6 +438,14 @@ function StepRoles({
   );
 }
 
+/**
+ * Wizard step 3/4: skills (chip input), goals, optional learning style, and
+ * an optional resume upload via `ResumeDropzone`. Resume state
+ * (`resumeFilename`/`resumeText`) is lifted to the page component rather
+ * than owned locally, since it's independent of the rest of `ProfileIn` and
+ * is surfaced back up through the `onResumeUploaded`/`onResumeClear`
+ * callbacks.
+ */
 function StepSkills({
   profile,
   update,
@@ -413,6 +504,14 @@ function StepSkills({
   );
 }
 
+/**
+ * Wizard step 4/4: read-only summary of steps 1-3, plus the
+ * generate/regenerate action for the AI-synthesized profile summary. Before
+ * synthesis, shows a call-to-action card; after synthesis, shows the
+ * generated text in an editable `Textarea` (edits flow back up via
+ * `onEditProfile` and are what actually gets saved on Finish) alongside a
+ * "Regenerate" button that re-runs synthesis from the current field values.
+ */
 function StepReview({
   profile,
   synthesizedProfile,
@@ -470,6 +569,7 @@ function StepReview({
   );
 }
 
+/** Small label/value pair used in StepReview's read-only summary grid. */
 function SummaryItem({ label, value }: { label: string; value: string }) {
   return (
     <div>

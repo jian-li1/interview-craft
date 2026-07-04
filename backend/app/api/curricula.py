@@ -12,6 +12,15 @@ router = APIRouter(prefix="/api/curricula", tags=["curricula"])
 
 
 def _to_summary(data: dict) -> CurriculumSummary:
+    """Convert a raw Firestore curriculum document into a `CurriculumSummary` response model.
+
+    Args:
+        data (dict): The raw curriculum document fields as stored in Firestore.
+
+    Returns:
+        CurriculumSummary: The lightweight, list-view representation of the curriculum
+            (no nested modules/sections), with defaults for optional fields.
+    """
     return CurriculumSummary(
         id=data["id"],
         owner_uid=data["owner_uid"],
@@ -32,7 +41,16 @@ def _to_summary(data: dict) -> CurriculumSummary:
 
 @router.get("", response_model=list[CurriculumSummary])
 async def list_curricula(user: CurrentUser = Depends(get_current_user)) -> list[CurriculumSummary]:
-    """List all curricula owned by the current user."""
+    """List all curricula owned by the current user.
+
+    Args:
+        user (CurrentUser): The authenticated caller, resolved via
+            `Depends(get_current_user)`.
+
+    Returns:
+        list[CurriculumSummary]: Summary (non-nested) representations of every
+            curriculum owned by the user.
+    """
     items = fs.list_curricula(user.uid)
     return [_to_summary(i) for i in items]
 
@@ -41,7 +59,21 @@ async def list_curricula(user: CurrentUser = Depends(get_current_user)) -> list[
 async def get_curriculum_full(
     curriculum_id: str, user: CurrentUser = Depends(get_current_user)
 ) -> CurriculumFull:
-    """Fetch a curriculum with its modules and sections fully nested."""
+    """Fetch a curriculum with its modules and sections fully nested.
+
+    Args:
+        curriculum_id (str): The Firestore document id of the curriculum to fetch.
+        user (CurrentUser): The authenticated caller, resolved via
+            `Depends(get_current_user)`.
+
+    Returns:
+        CurriculumFull: The curriculum with its modules, and each module's sections,
+            fully populated.
+
+    Raises:
+        HTTPException: 404 if the curriculum does not exist or is not owned by `user`
+            (raised by `get_owned_curriculum`).
+    """
     curriculum = get_owned_curriculum(curriculum_id, user)
 
     modules_data = fs.list_modules(curriculum_id)
@@ -76,6 +108,20 @@ async def delete_curriculum(curriculum_id: str, user: CurrentUser = Depends(get_
 
     Also deletes the linked conversation (and its messages) if one is set — a curriculum
     and its conversation are 1:1, so an orphaned conversation would otherwise linger.
+    Requires the `X-Requested-With` CSRF header (enforced by the router-level
+    dependency).
+
+    Args:
+        curriculum_id (str): The Firestore document id of the curriculum to delete.
+        user (CurrentUser): The authenticated caller, resolved via
+            `Depends(get_current_user)`.
+
+    Returns:
+        dict: `{"ok": True}` on success.
+
+    Raises:
+        HTTPException: 404 if the curriculum does not exist or is not owned by `user`
+            (raised by `get_owned_curriculum`).
     """
     curriculum = get_owned_curriculum(curriculum_id, user)
     fs.delete_curriculum(curriculum_id)
@@ -87,7 +133,22 @@ async def delete_curriculum(curriculum_id: str, user: CurrentUser = Depends(get_
 
 @router.get("/{curriculum_id}/plan", response_model=Plan)
 async def get_plan(curriculum_id: str, user: CurrentUser = Depends(get_current_user)) -> Plan:
-    """Fetch the curriculum's current task plan."""
+    """Fetch the curriculum's current task plan.
+
+    Args:
+        curriculum_id (str): The Firestore document id of the curriculum whose plan is
+            being fetched.
+        user (CurrentUser): The authenticated caller, resolved via
+            `Depends(get_current_user)`.
+
+    Returns:
+        Plan: The curriculum's current task plan (proposed via `propose_task_plan` and
+            possibly revised through the HITL approval flow).
+
+    Raises:
+        HTTPException: 404 if the curriculum does not exist / is not owned by `user`
+            (raised by `get_owned_curriculum`), or if no plan has been proposed yet.
+    """
     get_owned_curriculum(curriculum_id, user)
     plan = fs.get_plan(curriculum_id)
     if plan is None:

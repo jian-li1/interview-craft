@@ -5,6 +5,8 @@ import { PromptBox } from "@/components/dashboard/PromptBox";
 import { CurriculumGrid } from "@/components/dashboard/CurriculumGrid";
 import { useAuth } from "@/components/auth/AuthProvider";
 
+// Time-of-day greeting shown in the page header; purely presentational and
+// re-evaluated on every render (no memoization needed for a per-hour value).
 function greeting(): string {
   const hour = new Date().getHours();
   if (hour < 12) return "Good morning";
@@ -12,6 +14,22 @@ function greeting(): string {
   return "Good evening";
 }
 
+/**
+ * `/dashboard` — landing page for signed-in, onboarded users (rendered
+ * inside the `(app)` route group's authenticated shell, so auth/onboarding
+ * are already guaranteed by the parent layout).
+ *
+ * Renders three sections in order: a personalized greeting (reads the
+ * current user from `useAuth`, the `AuthProvider` context — no fetch here),
+ * `PromptBox` (the entry point for starting a new curriculum from a free-text
+ * prompt), and `CurriculumGrid` (the list of the user's existing curricula).
+ *
+ * Data-fetching pattern: this page itself fetches nothing — it delegates to
+ * `PromptBox` and `CurriculumGrid`, which each own their own REST calls via
+ * `lib/api.ts` (e.g. `curriculaApi.list()`) inside their own `useEffect`.
+ * Framer Motion is used purely for a staggered fade/slide-in entrance on
+ * each section (`delay` increasing per block), no data implications.
+ */
 export default function DashboardPage() {
   const { user } = useAuth();
   const firstName = user?.name?.split(" ")[0] ?? "there";

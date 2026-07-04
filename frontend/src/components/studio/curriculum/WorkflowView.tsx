@@ -1,5 +1,15 @@
 "use client";
 
+// *** This file statically imports `@xyflow/react` (React Flow) at the top
+// level, which per root/frontend CLAUDE.md's "ssr:false rule" must NEVER be
+// pulled into a server-rendered tree — React Flow measures DOM layout,
+// computes viewport/pan/zoom state, and has no meaningful SSR output. This
+// component does NOT itself apply next/dynamic/{ ssr:false } — it relies
+// entirely on being imported ONLY through CurriculumPanel.tsx's
+// `next/dynamic(() => import(".../WorkflowView"), { ssr: false })` boundary.
+// Do not add a plain top-level `import { WorkflowView } from ...` anywhere
+// else (e.g. a server component, a page, another panel) — that would defeat
+// the dynamic-import boundary and break the build/hydration.
 import { useMemo } from "react";
 import {
   ReactFlow,
@@ -31,6 +41,10 @@ const NODE_HEIGHT = 132;
 const START_NODE_HEIGHT = 64;
 const H_GAP = 80;
 
+// React Flow node/edge type registries: map the `type` string on each node/
+// edge object (set in buildLayout below) to the component that renders it.
+// Must be module-scope constants (not recreated per-render) — React Flow
+// warns/re-mounts nodes if these object identities change on every render.
 const nodeTypes: NodeTypes = {
   start: StartNode,
   module: ModuleNode,
@@ -45,6 +59,17 @@ interface WorkflowViewProps {
   onSelectModule: (moduleId: string) => void;
 }
 
+/**
+ * Builds the "linear LTR workflow" layout: a single horizontal row starting
+ * with the fixed-width start node, followed by one ModuleNode per module
+ * (in `order`), each connected to the previous one by a StatusEdge. This is
+ * intentionally a simple left-to-right chain (n8n-style canvases can be much
+ * more free-form, but curricula are inherently sequential, so a straight
+ * line reads more clearly than a force-directed/grid layout here).
+ * `onSelectModule` is threaded into every ModuleNode's data so clicking a
+ * node can drive the parent's view switch to the reader (see
+ * CurriculumPanel.handleSelectModule).
+ */
 function buildLayout(curriculum: CurriculumFull, onSelectModule: (moduleId: string) => void) {
   const nodes: (StartNodeType | ModuleNodeType)[] = [
     {
@@ -84,6 +109,13 @@ function buildLayout(curriculum: CurriculumFull, onSelectModule: (moduleId: stri
       },
     });
 
+    // Connect each module to the one before it (or "start" for the first
+    // module) so the canvas reads as a single chain, left to right. The
+    // edge's `animated` flag (rendered as a dashed marching-ants line by
+    // StatusEdge) reflects whether the module currently being written is the
+    // one this edge leads INTO — i.e. it's the module's own status, not the
+    // edge's, that drives the animation; this is how "status flows to nodes"
+    // extends visually along the connecting edges too.
     const prevId = i === 0 ? "start" : modules[i - 1].id;
     edges.push({
       id: `e-${prevId}-${mod.id}`,
@@ -97,18 +129,28 @@ function buildLayout(curriculum: CurriculumFull, onSelectModule: (moduleId: stri
   return { nodes, edges };
 }
 
+// Status -> minimap swatch color, mirroring the same status palette used on
+// ModuleNode's card border/badge (planned=muted, writing=accent, complete=success).
 const MINIMAP_STATUS_COLOR: Record<ModuleStatus, string> = {
   planned: "var(--muted-foreground)",
   writing: "var(--accent)",
   complete: "var(--success)",
 };
 
+/** Color callback passed to React Flow's <MiniMap nodeColor>: the start node is always accent-colored; module nodes are colored by their `status` (module/section status flowing all the way down to the minimap's rendering, not just the main canvas nodes). */
 function minimapNodeColor(node: { type?: string; data?: unknown }): string {
   if (node.type === "start") return "var(--accent)";
   const status = (node.data as { status?: ModuleStatus } | undefined)?.status;
   return status ? MINIMAP_STATUS_COLOR[status] : "var(--muted-foreground)";
 }
 
+/**
+ * Inner canvas — must be rendered inside a `ReactFlowProvider` (see
+ * `WorkflowView` below) because it calls `useReactFlow()` to imperatively
+ * fit the view. Rebuilds the node/edge layout via `buildLayout` whenever the
+ * curriculum or the select-module callback changes, and re-fits the camera
+ * whenever the module count changes (e.g. the agent adds a new module).
+ */
 function WorkflowInner({ curriculum, onSelectModule }: WorkflowViewProps) {
   const { resolvedTheme } = useTheme();
   const { fitView } = useReactFlow();
@@ -118,6 +160,11 @@ function WorkflowInner({ curriculum, onSelectModule }: WorkflowViewProps) {
     [curriculum, onSelectModule]
   );
 
+  // Re-fit the camera (with a short animated transition) whenever the module
+  // count changes, e.g. a new module is added while the agent is planning.
+  // Deferred to requestAnimationFrame so it runs after React Flow has laid
+  // out the newly-added node(s), rather than fitting to the stale bounds
+  // from the previous render.
   useEffect(() => {
     const id = requestAnimationFrame(() => fitView({ padding: 0.25, duration: 300 }));
     return () => cancelAnimationFrame(id);
@@ -131,6 +178,10 @@ function WorkflowInner({ curriculum, onSelectModule }: WorkflowViewProps) {
       edgeTypes={edgeTypes}
       colorMode={resolvedTheme === "dark" ? "dark" : "light"}
       fitView
+      // The canvas is read-only / navigation-only: users can't rearrange,
+      // rewire, or select nodes — clicking a ModuleNode navigates to the
+      // reader view (via its own onClick, not React Flow selection) rather
+      // than participating in a generic node-selection model.
       nodesDraggable={false}
       nodesConnectable={false}
       elementsSelectable={false}
@@ -138,6 +189,10 @@ function WorkflowInner({ curriculum, onSelectModule }: WorkflowViewProps) {
     >
       <Background gap={20} />
       <Controls showInteractive={false} position="bottom-right" />
+      {/* Working minimap: colors each node by module status (see
+          minimapNodeColor) so the overall curriculum progress is visible even
+          when zoomed into one part of a long chain; pannable/zoomable so it
+          doubles as a navigation aid on wide curricula. */}
       <MiniMap
         pannable
         zoomable
@@ -152,6 +207,17 @@ function WorkflowInner({ curriculum, onSelectModule }: WorkflowViewProps) {
   );
 }
 
+/**
+ * Public entry point: the n8n-style React Flow canvas showing the
+ * curriculum as a linear left-to-right chain of module nodes. Wraps
+ * `WorkflowInner` in a `ReactFlowProvider`, which is required for
+ * `useReactFlow()` (used inside WorkflowInner to imperatively call
+ * `fitView`) to work.
+ *
+ * This component (and everything it imports, transitively pulling in
+ * `@xyflow/react`) must only ever be reached through CurriculumPanel's
+ * `next/dynamic(..., { ssr: false })` import — see the top-of-file comment.
+ */
 export function WorkflowView(props: WorkflowViewProps) {
   return (
     <div className="h-full w-full">

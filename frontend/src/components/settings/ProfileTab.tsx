@@ -9,6 +9,14 @@ import { Badge } from "@/components/ui/Badge";
 import { onboardingApi, ApiError } from "@/lib/api";
 import type { ProfileOut } from "@/lib/types";
 
+/**
+ * Settings tab: read-only view of the onboarding profile, fetched via
+ * `onboardingApi.get()`. Shows the user-provided background (bio, target
+ * roles, skills, experience level, timeline — with an "Edit background"
+ * link back to `/onboarding` for changes) and the agent-generated
+ * `synthesized_profile` text (the layered-memory "synthesized user
+ * profile" referenced in the root CLAUDE.md) used to personalize curricula.
+ */
 export function ProfileTab() {
   const [profile, setProfile] = useState<ProfileOut | null>(null);
   const [error, setError] = useState<string | null>(null);

@@ -11,6 +11,24 @@ import { ToolCallGroup } from "@/components/studio/chat/ToolCallCard";
 import { cn } from "@/lib/utils";
 import type { ChatMessage } from "@/stores/useChatStore";
 
+/**
+ * Renders a single chat message (user or assistant) with role-based styling:
+ * user messages are right-aligned with a filled primary-color bubble and a
+ * "flipped" tail (`rounded-tr-sm`); assistant messages are left-aligned with
+ * a card-colored bubble (`rounded-tl-sm`) and render Markdown (GFM + syntax
+ * highlighting) instead of plain text.
+ *
+ * Assistant-only sub-blocks, in display order:
+ *  - `ReasoningBlock` — the `<thinking>...</thinking>` stream for this
+ *    message, populated by `reasoning_delta` WS events.
+ *  - `ToolCallGroup` — any tool calls the assistant made while composing
+ *    this message.
+ *  - the text bubble itself, populated by `text_delta` WS events.
+ *
+ * `message.contentStreaming` (true while `text_delta`s are still arriving
+ * for this message, before `message_end`) drives the blinking caret shown
+ * after the rendered Markdown so the user gets a visual "still typing" cue.
+ */
 function MessageBubbleImpl({ message }: { message: ChatMessage }) {
   const isUser = message.role === "user";
 
@@ -68,4 +86,7 @@ function MessageBubbleImpl({ message }: { message: ChatMessage }) {
   );
 }
 
+// Memoized so a store update affecting one message (e.g. a text_delta
+// appending to the last message) doesn't force every prior MessageBubble in
+// a long transcript to re-render.
 export const MessageBubble = memo(MessageBubbleImpl);

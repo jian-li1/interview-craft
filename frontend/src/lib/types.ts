@@ -87,6 +87,7 @@ export interface SynthesizeResponse {
 // Curricula
 // ---------------------------------------------------------------------------
 
+/** Snapshot of agent progress for a curriculum; mirrors the last `progress` WS event received. */
 export interface CurriculumProgress {
   phase: string;
   completed_tasks: number;
@@ -150,6 +151,12 @@ export interface PlanTask {
   status: TaskStatus;
 }
 
+/**
+ * The HITL task plan. Lifecycle of `status`: `proposed` (agent paused,
+ * awaiting user decision) -> `approved` (user accepted; agent resumes
+ * writing) or `revising` (user requested changes; `user_feedback` grows and
+ * a new `proposed` version is generated).
+ */
 export interface PlanOut {
   version: number;
   outline_markdown: string;
@@ -220,6 +227,7 @@ export interface SettingsUpdateRequest {
 // WebSocket protocol — Client -> Server
 // ---------------------------------------------------------------------------
 
+/** Discriminated union (on `type`) of every frame the client may send over the chat WebSocket. */
 export type ClientEvent =
   | { type: "user_message"; content: string }
   | { type: "plan_decision"; decision: "approve" | "modify"; feedback: string | null }
@@ -299,6 +307,12 @@ export interface PlanProposedEvent {
   };
 }
 
+/**
+ * Signals that `curriculaApi.get` should be refetched. `scope` narrows what
+ * changed (whole-curriculum overview vs. a single module vs. a single
+ * section); `module_id`/`section_id` are set accordingly so a scoped refetch
+ * can target just the changed node if the store supports it.
+ */
 export interface CurriculumUpdatedEvent {
   type: "curriculum_updated";
   curriculum_id: string;
@@ -329,6 +343,11 @@ export interface PongEvent {
   type: "pong";
 }
 
+/**
+ * Discriminated union (on `type`) of every frame the server may send over
+ * the chat WebSocket. See `frontend/CLAUDE.md` "How WS events map to store
+ * actions" for the dispatch table in `useChatSocket.ts`.
+ */
 export type ServerEvent =
   | SessionReadyEvent
   | MessageStartEvent

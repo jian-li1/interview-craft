@@ -21,6 +21,26 @@ interface ChatPanelProps {
   onPrefillConsumed?: () => void;
 }
 
+/**
+ * The main chat surface for one conversation/studio session. Reads all
+ * message/phase/plan/progress state from `useChatStore` (populated via WS
+ * events dispatched in `useChatSocket.ts` — see that hook's doc comment for
+ * the full event -> store-action mapping) and composes the pieces that make
+ * up the transcript:
+ *  - `PhaseBanner` — sticky header showing the current agent phase/label/progress.
+ *  - `MessageBubble` (one per message) — which itself nests `ReasoningBlock`
+ *    (the `<thinking>` stream) and `ToolCallGroup`/`ToolCallCard`.
+ *  - `PlanApprovalCard` — rendered inline in the transcript when a HITL plan
+ *    is awaiting approve/modify.
+ *  - `ScrollToBottomPill` — floating affordance shown once the user has
+ *    scrolled away from the bottom while new messages keep arriving.
+ *  - `Composer` — the input box pinned to the bottom.
+ *
+ * `conversationId` is accepted for future use (keying/analytics) even though
+ * this component currently reads its data purely from the store rather than
+ * fetching by id itself; the socket lifecycle for a given conversation is
+ * owned by the caller via `socketRef`.
+ */
 export function ChatPanel({
   conversationId,
   socketRef,
@@ -45,8 +65,16 @@ export function ChatPanel({
   const [showScrollPill, setShowScrollPill] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  // Tracks whether the user has manually scrolled away from the bottom of
+  // the transcript. Stored in a ref (not state) because it's read/written
+  // from the scroll handler on every scroll event and must not trigger
+  // re-renders itself — only `showScrollPill` (derived from it) does.
   const userScrolledUp = useRef(false);
 
+  // Explain-a-section prefill: when the reader view's "explain this" button
+  // fires (via CurriculumPanel -> onExplain), the parent passes the prompt
+  // text down as `prefillText`; drop it into the draft and notify the parent
+  // so it can clear the prop and avoid re-appending on every render.
   useEffect(() => {
     if (prefillText) {
       setDraft((prev) => (prev ? `${prev}\n${prefillText}` : prefillText));
@@ -54,6 +82,11 @@ export function ChatPanel({
     }
   }, [prefillText, onPrefillConsumed]);
 
+  // Scroll-pinning: auto-scroll to the newest message whenever `messages`
+  // changes (new message added, or streaming deltas append to the last one),
+  // UNLESS the user has deliberately scrolled up to read earlier context. In
+  // that case, don't yank them back down — instead surface the
+  // ScrollToBottomPill so they can opt back in.
   useEffect(() => {
     if (!userScrolledUp.current) {
       bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -63,6 +96,9 @@ export function ChatPanel({
     }
   }, [messages]);
 
+  // Recompute the "am I scrolled up" flag on every scroll. A small threshold
+  // (80px) counts as "at bottom" so minor rendering jitter / scrollbar
+  // rounding doesn't spuriously flip the pill on and off.
   function handleScroll() {
     const el = scrollRef.current;
     if (!el) return;
@@ -71,6 +107,8 @@ export function ChatPanel({
     if (atBottom) setShowScrollPill(false);
   }
 
+  // Explicit "jump to bottom" action from the pill: re-arms auto-scroll and
+  // animates down immediately.
   function scrollToBottom() {
     userScrolledUp.current = false;
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -89,11 +127,18 @@ export function ChatPanel({
     socketRef.current?.sendStop();
   }
 
+  // Forwards the user's approve/modify decision on the WS socket (see
+  // ChatSocket.sendPlanDecision) and immediately clears the awaiting-decision
+  // flag locally so the PlanApprovalCard disappears without waiting on a
+  // round-trip from the server.
   function handlePlanDecision(decision: "approve" | "modify", feedback: string | null) {
     socketRef.current?.sendPlanDecision(decision, feedback);
     resolvePlan();
   }
 
+  // The composer is disabled while a plan decision is pending (the user must
+  // resolve the plan card first) or while the socket isn't open (nothing to
+  // send to).
   const composerDisabled = planAwaitingDecision || connectionState !== "open";
 
   return (

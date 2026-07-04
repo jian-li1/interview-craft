@@ -15,27 +15,81 @@ class ScriptedLLM:
     """Fake LLMProvider: chat_stream yields a pre-scripted sequence of events, once."""
 
     def __init__(self, events: list) -> None:
+        """Store the fixed sequence of streaming events to replay.
+
+        Args:
+            events (list): Sequence of `TextDelta`/`ToolCallDelta`/`Done` events that
+                `chat_stream` will yield, in order, on its single supported call.
+        """
         self._events = events
 
     async def chat_stream(self, messages, tools=None, small: bool = False):
+        """Yield the pre-scripted events in order, ignoring the actual arguments.
+
+        Args:
+            messages: Chat messages that would have been sent to a real provider.
+            tools: Tool specs that would have been sent to a real provider.
+            small (bool): Unused; present to match the `LLMProvider` protocol signature.
+
+        Yields:
+            The scripted event objects, in the order supplied at construction time.
+        """
         for event in self._events:
             yield event
 
     async def complete(self, messages, small: bool = False) -> str:
+        """Return a fixed stub string instead of calling a real completion endpoint.
+
+        Args:
+            messages: Chat messages that would have been sent to a real provider.
+            small (bool): Unused; present to match the `LLMProvider` protocol signature.
+
+        Returns:
+            str: The literal string "stub completion".
+        """
         return "stub completion"
 
 
 class StubSearch:
+    """Fake search provider that always returns no results, avoiding network calls."""
+
     async def search(self, query: str, max_results: int = 8):
+        """Return an empty result list regardless of the query.
+
+        Args:
+            query (str): Search query (ignored).
+            max_results (int): Maximum results requested (ignored).
+
+        Returns:
+            list: Always an empty list.
+        """
         return []
 
 
 @pytest.fixture()
 def orchestrator(settings) -> Orchestrator:
+    """Construct an `Orchestrator` wired to the real (test) app settings.
+
+    Args:
+        settings: The `settings` fixture from conftest.py.
+
+    Returns:
+        Orchestrator: An orchestrator instance ready to run turns against the
+            in-memory fake Firestore and a scripted fake LLM.
+    """
     return Orchestrator(settings)
 
 
 def _setup_conversation(fake_fs, phase: str = "outline_planning"):
+    """Seed a conversation, curriculum, and agent state at a given phase.
+
+    Args:
+        fake_fs: The `fake_fs` fixture, used to seed the in-memory store directly.
+        phase (str): Agent phase to initialize the persisted state with.
+
+    Returns:
+        tuple: A `(conversation_dict, curriculum_dict)` pair for the newly created docs.
+    """
     conv = fake_fs.fs.create_conversation("uid1", "Test chat", curriculum_id=None)
     curriculum = fake_fs.fs.create_curriculum(
         "uid1", "Test curriculum", "prep me for a SWE interview", conversation_id=conv["id"]
@@ -50,6 +104,10 @@ def _setup_conversation(fake_fs, phase: str = "outline_planning"):
 
 @pytest.mark.asyncio
 async def test_run_turn_pauses_on_hitl_gate_tool_call(monkeypatch, fake_fs, orchestrator):
+    """Verify calling `propose_task_plan` pauses the turn (HITL gate), streams the
+    expected event sequence ending in `agent_done`/paused, and persists the plan with
+    the curriculum status flipped to "awaiting_approval".
+    """
     conv, curriculum = _setup_conversation(fake_fs, phase="outline_planning")
 
     scripted = ScriptedLLM(
@@ -104,6 +162,9 @@ async def test_run_turn_pauses_on_hitl_gate_tool_call(monkeypatch, fake_fs, orch
 
 @pytest.mark.asyncio
 async def test_run_turn_plain_text_answer_completes_done(monkeypatch, fake_fs, orchestrator):
+    """Verify a plain-text LLM response (no tool calls) completes the turn as DONE,
+    splitting `<thinking>` reasoning from user-facing content in the saved message.
+    """
     conv, curriculum = _setup_conversation(fake_fs, phase="refinement")
 
     scripted = ScriptedLLM(
@@ -142,6 +203,9 @@ async def test_run_turn_plain_text_answer_completes_done(monkeypatch, fake_fs, o
 
 @pytest.mark.asyncio
 async def test_run_turn_applies_plan_decision_approve_and_materializes(monkeypatch, fake_fs, orchestrator):
+    """Verify approving a proposed plan transitions the curriculum/state to "writing",
+    materializes modules from the plan's tasks, and emits a `curriculum_updated` event.
+    """
     conv, curriculum = _setup_conversation(fake_fs, phase="awaiting_approval")
     fake_fs.fs.set_plan(
         curriculum["id"],
@@ -197,6 +261,9 @@ async def test_run_turn_applies_plan_decision_approve_and_materializes(monkeypat
 
 @pytest.mark.asyncio
 async def test_plan_decision_approve_appends_system_message_with_approved(monkeypatch, fake_fs, orchestrator):
+    """Verify approving a plan appends exactly one system message recording the
+    approval, mentioning "APPROVED" and the approved plan's version number.
+    """
     conv, curriculum = _setup_conversation(fake_fs, phase="awaiting_approval")
     fake_fs.fs.set_plan(
         curriculum["id"],
@@ -234,6 +301,9 @@ async def test_plan_decision_approve_appends_system_message_with_approved(monkey
 
 @pytest.mark.asyncio
 async def test_plan_decision_modify_appends_system_message_with_feedback(monkeypatch, fake_fs, orchestrator):
+    """Verify requesting plan modifications appends a system message containing the
+    user's feedback text, and still fires `curriculum_updated` to keep the client in sync.
+    """
     conv, curriculum = _setup_conversation(fake_fs, phase="awaiting_approval")
     fake_fs.fs.set_plan(
         curriculum["id"],
@@ -279,6 +349,9 @@ async def test_plan_decision_modify_appends_system_message_with_feedback(monkeyp
 async def test_run_turn_rejects_concurrent_run_on_same_conversation(monkeypatch, fake_fs, orchestrator):
     """Simulate a run already holding the conversation lock: a second run_turn call must
     be rejected with an error rather than interleaving with the first.
+
+    Confirms the one-active-run-per-conversation invariant enforced via the
+    per-conversation asyncio lock returned by `get_conversation_lock`.
     """
     conv, curriculum = _setup_conversation(fake_fs, phase="refinement")
 

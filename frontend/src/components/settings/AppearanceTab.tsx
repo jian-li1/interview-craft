@@ -12,6 +12,14 @@ const OPTIONS = [
   { value: "system", label: "System", icon: Monitor },
 ] as const;
 
+/**
+ * Settings tab: theme selection (Light/Dark/System) as a radiogroup of
+ * buttons, backed directly by `next-themes`' `useTheme()` — no separate
+ * settings API call, since theme is a client-only preference persisted by
+ * `next-themes` (e.g. localStorage), not a server-side user setting. Waits
+ * for `mounted` before marking any option active, for the same
+ * hydration-safety reason as `ThemeToggle`.
+ */
 export function AppearanceTab() {
   const { theme, setTheme } = useTheme();
   const [mounted, setMounted] = useState(false);

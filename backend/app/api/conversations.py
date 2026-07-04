@@ -24,7 +24,16 @@ router = APIRouter(prefix="/api/conversations", tags=["conversations"])
 
 @router.get("", response_model=list[ConversationSummary])
 async def list_conversations(user: CurrentUser = Depends(get_current_user)) -> list[ConversationSummary]:
-    """List all conversations owned by the current user."""
+    """List all conversations owned by the current user.
+
+    Args:
+        user (CurrentUser): The authenticated caller, resolved via
+            `Depends(get_current_user)`.
+
+    Returns:
+        list[ConversationSummary]: Summary representations of every conversation owned
+            by the user.
+    """
     items = fs.list_conversations(user.uid)
     return [
         ConversationSummary(
@@ -45,6 +54,25 @@ async def create_conversation(
     """Start a new conversation. If a curriculum_prompt is given, also creates a new
     curriculum doc (status=researching) linked to this conversation, ready for the agent
     to pick up on the first user_message WS frame.
+
+    Requires the `X-Requested-With` CSRF header (enforced by the router-level
+    dependency) and is subject to the shared agent rate limit since it can kick off an
+    agent run. When a curriculum is created, its initial agent state is seeded here
+    (phase="intake", empty task queue) so the orchestrator has a well-formed starting
+    point on the first WS turn.
+
+    Args:
+        body (NewConversationRequest): Optionally includes `curriculum_prompt`, the
+            user's initial prompt describing what curriculum to build.
+        user (CurrentUser): The authenticated caller, resolved via
+            `Depends(get_current_user)`.
+
+    Returns:
+        NewConversationResponse: The id of the newly created conversation.
+
+    Raises:
+        HTTPException: 429 if the caller has exceeded the agent rate limit (raised by
+            `enforce_rate_limit`).
     """
     enforce_rate_limit(user)
 
@@ -71,7 +99,21 @@ async def create_conversation(
 async def get_messages(
     conversation_id: str, user: CurrentUser = Depends(get_current_user)
 ) -> list[MessageOut]:
-    """Fetch the full message history for a conversation, for rendering on load."""
+    """Fetch the full message history for a conversation, for rendering on load.
+
+    Args:
+        conversation_id (str): The Firestore document id of the conversation whose
+            messages are being fetched.
+        user (CurrentUser): The authenticated caller, resolved via
+            `Depends(get_current_user)`.
+
+    Returns:
+        list[MessageOut]: The full ordered message history for the conversation.
+
+    Raises:
+        HTTPException: 404 if the conversation does not exist or is not owned by `user`
+            (raised by `get_owned_conversation`).
+    """
     get_owned_conversation(conversation_id, user)
     messages = fs.list_messages(conversation_id)
     return [MessageOut(**m) for m in messages]

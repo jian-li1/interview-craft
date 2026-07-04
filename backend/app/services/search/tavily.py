@@ -16,11 +16,30 @@ class TavilySearchProvider:
     """Web search via the Tavily REST API."""
 
     def __init__(self, api_key: str) -> None:
+        """Initialize the provider with a Tavily API key.
+
+        Args:
+            api_key (str): The Tavily API key.
+
+        Raises:
+            ValueError: If `api_key` is falsy.
+        """
         if not api_key:
             raise ValueError("TAVILY_API_KEY is required to use the tavily provider")
         self._api_key = api_key
 
     async def search(self, query: str, max_results: int = 8) -> list[SearchResult]:
+        """Run a Tavily search query and normalize the results.
+
+        Args:
+            query (str): The search query string.
+            max_results (int): The maximum number of results to request from Tavily.
+
+        Returns:
+            list[SearchResult]: The search results, or an empty list if the request
+                fails (errors are logged as warnings, not raised, so callers can
+                degrade gracefully) or Tavily returns no results.
+        """
         payload = {
             "api_key": self._api_key,
             "query": query,

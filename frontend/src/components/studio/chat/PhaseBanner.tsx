@@ -4,6 +4,9 @@ import { motion } from "framer-motion";
 import { CheckCircle2, Compass, Loader2, ListChecks, PenLine, Search, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
 
+// Maps the backend's `phase` string (see phase_change WS event) to a
+// representative icon. Falls back to Sparkles for any phase not listed here
+// (e.g. future phases added server-side before the frontend catches up).
 const PHASE_ICONS: Record<string, typeof Search> = {
   deep_research: Search,
   research: Search,
@@ -14,11 +17,24 @@ const PHASE_ICONS: Record<string, typeof Search> = {
 };
 
 interface PhaseBannerProps {
+  /** Machine-readable phase id, e.g. "research" | "planning" | "writing" | "ready" — used only to pick an icon here. */
   phase: string;
+  /** Human-readable label for the current phase, shown as the banner's main text. */
   label: string;
+  /** Optional task-count progress (e.g. "3/7 tasks") shown as a sub-label and progress bar. */
   progress: { completed: number; total: number; detail: string } | null;
 }
 
+/**
+ * Sticky banner pinned to the top of the chat transcript showing what the
+ * agent is currently doing. `phase`, `label`, and `progress` all come from
+ * `useChatStore` and are populated by the `phase_change` (-> setPhase) and
+ * `progress` (-> setProgress) WS events dispatched in `useChatSocket.ts` —
+ * this component itself has no knowledge of the socket, it just renders
+ * whatever the store currently holds. Rendered only when both `phase` and
+ * `phaseLabel` are set (see ChatPanel), so there's no "no phase yet" state
+ * to handle here.
+ */
 export function PhaseBanner({ phase, label, progress }: PhaseBannerProps) {
   const Icon = PHASE_ICONS[phase] ?? Sparkles;
   const isReady = phase === "ready";

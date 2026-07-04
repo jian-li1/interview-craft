@@ -10,13 +10,30 @@ interface ComposerProps {
   onChange: (value: string) => void;
   onSend: () => void;
   onStop: () => void;
+  /** True while a plan decision is pending or the socket isn't connected — see ChatPanel's composerDisabled. */
   disabled: boolean;
+  /** True while the agent is actively running; swaps the send button for a stop button. */
   running: boolean;
 }
 
+/**
+ * Bottom-pinned message input for the chat panel. A controlled, auto-growing
+ * textarea (grows up to 200px, then scrolls) plus a single action button that
+ * toggles between "send" and "stop":
+ *  - `running` (agent is mid-turn) shows a Stop button that calls `onStop`,
+ *    which forwards to `ChatSocket.sendStop()` via the parent.
+ *  - otherwise shows a Send button, disabled when `disabled` is true or the
+ *    draft is empty/whitespace-only.
+ * `disabled` also greys out and locks the textarea itself (e.g. while a HITL
+ * plan decision is awaiting the user, per ChatPanel's composerDisabled) and
+ * swaps the placeholder to explain why input is blocked.
+ */
 export function Composer({ value, onChange, onSend, onStop, disabled, running }: ComposerProps) {
   const ref = useRef<HTMLTextAreaElement>(null);
 
+  // Auto-grow the textarea to fit its content on every value change, capped
+  // at 200px (matches max-h-[200px] below) — past that it scrolls internally
+  // instead of pushing the rest of the layout around.
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
@@ -24,6 +41,9 @@ export function Composer({ value, onChange, onSend, onStop, disabled, running }:
     el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
   }, [value]);
 
+  // Keyboard shortcut: Enter submits, Shift+Enter inserts a newline (see the
+  // hint text rendered below the input). Submission is a no-op if the draft
+  // is empty/whitespace or the composer is disabled.
   function handleKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();

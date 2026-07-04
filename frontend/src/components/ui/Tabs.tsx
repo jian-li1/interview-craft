@@ -12,6 +12,17 @@ interface TabsContextValue {
 
 const TabsContext = createContext<TabsContextValue | null>(null);
 
+/**
+ * Hand-rolled Tabs primitive family (no Radix): `Tabs` (context provider,
+ * supports both uncontrolled via `defaultValue` and controlled via
+ * `value`/`onValueChange`), `TabsList` (the `role="tablist"` pill
+ * container), `TabsTrigger` (a `role="tab"` button that also renders the
+ * shared animated active-tab background using a Framer Motion `layoutId`
+ * scoped by `useId()` so multiple `Tabs` instances on one page don't
+ * collide), and `TabsContent` (renders its children only when its `value`
+ * matches the active tab). `TabsTrigger`/`TabsContent` must be rendered
+ * inside a `Tabs` provider or they throw.
+ */
 export function Tabs({
   defaultValue,
   value: controlledValue,

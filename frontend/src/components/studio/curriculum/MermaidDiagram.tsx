@@ -5,12 +5,25 @@ import { useTheme } from "next-themes";
 import { AlertTriangle, Loader2 } from "lucide-react";
 
 interface MermaidDiagramProps {
+  /** Raw Mermaid diagram source (the fenced ```mermaid code block's contents), as extracted by SectionContent's custom `code` renderer. */
   chart: string;
 }
 
 /**
  * Renders a single Mermaid diagram client-side only. Re-renders whenever the
  * resolved color theme changes so diagrams stay legible in dark mode.
+ *
+ * *** THIS is the runtime `import()`-inside-`useEffect` pattern referenced by
+ * root/frontend CLAUDE.md's "ssr:false rule" — the OTHER accepted way (besides
+ * `next/dynamic(..., { ssr: false })` at a component boundary, see
+ * CurriculumPanel.tsx) to keep a browser-only library out of the server
+ * render. Mermaid's `render()` call touches `document`/canvas/SVG-measurement
+ * APIs that don't exist during SSR, so the import itself is deferred to a
+ * `useEffect` (which only ever runs client-side, after mount) rather than
+ * being a top-level `import mermaid from "mermaid"` — a static import would
+ * pull mermaid into the server bundle and either crash the server render or
+ * bloat it for no benefit, since this component always needs a live browser
+ * DOM to actually draw anything.
  */
 export function MermaidDiagram({ chart }: MermaidDiagramProps) {
   const { resolvedTheme } = useTheme();
@@ -20,11 +33,19 @@ export function MermaidDiagram({ chart }: MermaidDiagramProps) {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    // `cancelled` guards against a race where the chart/theme changes (and
+    // this effect re-runs) before the previous render's async work finishes —
+    // without it, a stale render could overwrite the SVG for the *new* props
+    // after the fact.
     let cancelled = false;
 
     async function render() {
       setError(null);
       try {
+        // Runtime `import()` (not a top-level `import mermaid from "mermaid"`)
+        // — see this file's top-level doc comment for why: mermaid needs a
+        // real DOM to render into and must never be pulled into the
+        // server-side bundle/render.
         const mermaid = (await import("mermaid")).default;
         mermaid.initialize({
           startOnLoad: false,

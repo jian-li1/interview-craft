@@ -21,6 +21,19 @@ interface ResumeDropzoneProps {
   onClear: () => void;
 }
 
+/**
+ * Drag-and-drop (or click-to-browse) resume upload for the onboarding
+ * wizard, backed by `react-dropzone`. Accepts PDF, DOCX, or TXT (see
+ * `ACCEPTED`) up to `MAX_SIZE` (5MB) — anything else is rejected client-side
+ * by `useDropzone` and surfaced as a toast. On a valid drop it calls
+ * `onboardingApi.uploadResume(file)`, which parses the resume server-side,
+ * then reports the parsed `resume_filename`/`resume_text` back to the
+ * parent via `onUploaded`. Once a resume is present (`resumeFilename` is
+ * set), renders a summary card with a text preview and a clear button
+ * (`onClear`) instead of the dropzone itself — this component holds no
+ * upload state beyond the in-flight `uploading` flag; the parsed resume
+ * itself is owned by the parent (props, not local state).
+ */
 export function ResumeDropzone({
   resumeFilename,
   resumeText,

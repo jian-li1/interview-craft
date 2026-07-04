@@ -3,7 +3,15 @@
 import { motion } from "framer-motion";
 import { CheckCircle2, Search, Sparkles, GitBranch } from "lucide-react";
 
-/** Stylized chat + workflow illustration built entirely with divs (no images). */
+/**
+ * Stylized chat + workflow illustration built entirely with divs (no images).
+ * Purely decorative marketing content for the landing hero — it simulates,
+ * with staggered Framer Motion entrance animations, what a live studio
+ * session looks like: a chat pane showing the agent researching (tool-call
+ * rows + a typing indicator) alongside a mini workflow graph of curriculum
+ * nodes, plus a "plan proposed" banner echoing the HITL approval step. None
+ * of it is wired to real data/state.
+ */
 export function ProductMock() {
   return (
     <div className="relative mx-auto max-w-md rounded-2xl border border-border bg-card p-4 shadow-xl sm:max-w-lg">
@@ -56,6 +64,7 @@ export function ProductMock() {
   );
 }
 
+/** Mock chat message bubble used inside `ProductMock`'s illustration. */
 function ChatBubble({ children, delay }: { children: React.ReactNode; delay: number }) {
   return (
     <motion.div
@@ -69,6 +78,7 @@ function ChatBubble({ children, delay }: { children: React.ReactNode; delay: num
   );
 }
 
+/** Mock "tool call" row (e.g. a search/read step) used inside `ProductMock`'s illustration. */
 function ToolRow({
   icon: Icon,
   label,
@@ -91,6 +101,7 @@ function ToolRow({
   );
 }
 
+/** Mock animated typing-indicator bubble used inside `ProductMock`'s illustration. */
 function AssistantTyping({ delay }: { delay: number }) {
   return (
     <motion.div
@@ -111,6 +122,12 @@ function AssistantTyping({ delay }: { delay: number }) {
   );
 }
 
+/**
+ * Mock curriculum workflow node used inside `ProductMock`'s illustration
+ * (a stand-in for the real React Flow nodes in `components/studio`).
+ * `filled` = completed (shows a check), `pulsing` = in progress, `dashed`
+ * (implicit "not started" style) = neither.
+ */
 function WorkflowNode({
   title,
   emoji,
@@ -152,6 +169,7 @@ function WorkflowNode({
   );
 }
 
+/** Mock vertical line connecting two `WorkflowNode`s in `ProductMock`'s illustration. */
 function Connector() {
   return <div className="ml-3 h-3 w-px bg-border" aria-hidden="true" />;
 }

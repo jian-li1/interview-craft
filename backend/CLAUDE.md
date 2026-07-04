@@ -42,6 +42,27 @@ See root `/CLAUDE.md` first. Scoped conventions for `backend/` only. Agent core:
   `factory.py`, with a per-user override (`users/{uid}.settings.*`) beating the env
   default.
 
+## Documentation & comments
+
+- **Google-style docstrings are mandatory** on every function, method, and class —
+  one-line imperative summary, then `Args:` (`name (type): description.`), `Returns:`,
+  `Raises:`, and `Yields:` (async generators) sections where applicable. Every module
+  gets a module-level docstring; empty `__init__.py` files get a one-liner naming the
+  package.
+- **When editing existing code, document everything you touch**: expand short/one-line
+  docstrings into full Google style (preserving the original wording's facts) and add
+  inline comments to adjacent uncommented code in the same scope.
+- **Inline comments explain the non-obvious** — security ordering, locking, state-machine
+  transitions, provider quirks, invariants — never restate what an obvious line does.
+  Preserve existing comments; don't reword them without reason.
+- **LLM-facing strings are prompts, not docs**: tool `description` fields, prompt
+  fragments, and observation/error text sent to the model must not be reworded as part
+  of a documentation pass — comment *around* them.
+- Pydantic models in `app/models/` should note the Firestore collection/doc they mirror
+  (spec 01 §5) in the class docstring; test functions get a one-line docstring stating
+  the behavior under test and expected outcome.
+- Style: ~100-char lines, double-quoted triple docstrings, present-tense summaries.
+
 ## Run / test
 
 ```bash

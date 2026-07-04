@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Sparkles } from "lucide-react";
 
+/** Landing page section: site footer with the logo/home link and copyright line. */
 export function Footer() {
   return (
     <footer className="px-4 py-10 sm:px-6">

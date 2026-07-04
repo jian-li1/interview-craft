@@ -46,6 +46,20 @@ class ToolExecutionError(Exception):
 
 
 class ToolProtocol(Protocol):
+    """Structural type describing the shape every concrete `Tool` subclass must satisfy.
+
+    Not used for runtime isinstance checks (Tool subclasses satisfy it structurally) —
+    documents the contract for static typing and for anyone implementing a new tool
+    without subclassing `Tool` directly.
+
+    Attributes:
+        name (str): The tool's unique registration name (also the LLM-facing function
+            name).
+        description (str): The LLM-facing description of what the tool does and when to
+            use it — part of the prompt, not documentation.
+        input_model (type[BaseModel]): The pydantic model validating this tool's input.
+    """
+
     name: str
     description: str
     input_model: type[BaseModel]
@@ -61,9 +75,35 @@ class Tool:
     input_model: type[BaseModel] = BaseModel
 
     async def execute(self, input: BaseModel, ctx: AgentContext) -> dict[str, Any]:
+        """Execute the tool's action given validated input and the current agent context.
+
+        Subclasses must override this. The base implementation always raises, so a
+        `Tool` subclass that forgets to implement `execute` fails loudly rather than
+        silently doing nothing.
+
+        Args:
+            input (BaseModel): The validated input, an instance of `self.input_model`.
+            ctx (AgentContext): The current agent run's context (ids, providers, phase).
+
+        Returns:
+            dict[str, Any]: A JSON-serializable observation dict. Should contain
+                `{"error": ...}` on failure rather than raising, per the tool-error
+                contract (raising `ToolExecutionError` is also acceptable and is caught
+                by the registry).
+
+        Raises:
+            NotImplementedError: Always, unless overridden by a subclass.
+        """
         raise NotImplementedError
 
     def json_schema(self) -> dict[str, Any]:
+        """Return the JSON schema for this tool's input, suitable for LLM function-calling specs.
+
+        Returns:
+            dict[str, Any]: The pydantic-generated JSON schema for `input_model`, with
+                the `title` key stripped (providers don't need it and it adds noise to
+                the function-calling spec).
+        """
         schema = self.input_model.model_json_schema()
         # Providers expect a flat JSON schema without pydantic's $defs indirection ideally,
         # but both our OpenAI and Gemini adapters handle nested schemas fine, so we pass

@@ -8,6 +8,11 @@ import { Button } from "@/components/ui/Button";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { useAuthStore } from "@/stores/useAuthStore";
 
+/**
+ * Settings tab: session-level account info. Reads the current user from
+ * `useAuth()` (email display only) and exposes a log out action via
+ * `useAuthStore().logout()`, redirecting to `/login` on success.
+ */
 export function AccountTab() {
   const { user } = useAuth();
   const logout = useAuthStore((s) => s.logout);

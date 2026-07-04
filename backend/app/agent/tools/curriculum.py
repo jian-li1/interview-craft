@@ -12,6 +12,8 @@ from app.services import firestore as fs
 
 
 class ListCurriculumStructureInput(BaseModel):
+    """Input schema for `ListCurriculumStructureTool` (no fields — takes no arguments)."""
+
     pass
 
 
@@ -25,6 +27,18 @@ class ListCurriculumStructureTool(Tool):
     input_model = ListCurriculumStructureInput
 
     async def execute(self, input: ListCurriculumStructureInput, ctx: AgentContext) -> dict[str, Any]:
+        """Build a compact modules/sections tree with statuses, without any content.
+
+        Args:
+            input (ListCurriculumStructureInput): Empty input (no fields).
+            ctx (AgentContext): The current agent run's context; `ctx.curriculum_id`
+                scopes which curriculum's structure is listed.
+
+        Returns:
+            dict[str, Any]: `{"modules": [...]}`, where each module dict has `id`,
+                `order`, `title`, `status`, and a nested `sections` list (each with `id`,
+                `order`, `title`, `status`) — `content_markdown`/`citations` are omitted.
+        """
         modules = fs.list_modules(ctx.curriculum_id)
         tree = []
         for m in modules:
@@ -50,12 +64,16 @@ class ListCurriculumStructureTool(Tool):
 
 
 class CitationInput(BaseModel):
+    """A single citation entry mirroring one `[^n]` footnote marker in section content."""
+
     id: int = Field(..., description="Sequential citation number matching the [^n] marker.")
     url: str
     title: str
 
 
 class WriteSectionInput(BaseModel):
+    """Input schema for `WriteSectionTool`."""
+
     module_id: str = Field(..., description="The module id this section belongs to.")
     section_id: str = Field(..., description="The section id (slug) to write/create.")
     title: str = Field(..., description="Section title.")
@@ -80,6 +98,26 @@ class WriteSectionTool(Tool):
     input_model = WriteSectionInput
 
     async def execute(self, input: WriteSectionInput, ctx: AgentContext) -> dict[str, Any]:
+        """Create or overwrite a section's content, enforcing the citation requirement.
+
+        This is the main code-level enforcement point for citations (per
+        `app/agent/CLAUDE.md`): content over 400 stripped characters with no citations
+        is rejected with an error observation rather than being written, forcing the
+        model to either add citations or trim the content.
+
+        Args:
+            input (WriteSectionInput): The validated section fields (module_id,
+                section_id, title, content_markdown, citations).
+            ctx (AgentContext): The current agent run's context; `ctx.curriculum_id`
+                scopes the write.
+
+        Returns:
+            dict[str, Any]: On success, `{"status": "written", "module_id",
+                "section_id", "_ws_events": [...]}` — the `_ws_events` list carries a
+                `curriculum_updated` (scope "section") and a `progress` event that the
+                orchestrator pops and forwards to the client. On the citation-guard
+                failure, `{"error": "..."}` instead (no write performed).
+        """
         if len(input.content_markdown.strip()) > 400 and not input.citations:
             return {
                 "error": (
@@ -95,6 +133,8 @@ class WriteSectionTool(Tool):
             {"id": c.id, "url": c.url, "title": c.title, "accessed_at": now} for c in input.citations
         ]
 
+        # Preserve the existing order on overwrite; only assign a fresh order (append
+        # to the end of the module) when this section id doesn't exist yet.
         existing = fs.get_section(ctx.curriculum_id, input.module_id, input.section_id)
         order = existing.get("order", 0) if existing else _next_section_order(ctx.curriculum_id, input.module_id)
 
@@ -137,6 +177,8 @@ class WriteSectionTool(Tool):
 
 
 class ReadSectionInput(BaseModel):
+    """Input schema for `ReadSectionTool`."""
+
     module_id: str = Field(..., description="The module id.")
     section_id: str = Field(..., description="The section id.")
 
@@ -150,6 +192,17 @@ class ReadSectionTool(Tool):
     input_model = ReadSectionInput
 
     async def execute(self, input: ReadSectionInput, ctx: AgentContext) -> dict[str, Any]:
+        """Fetch a section's full stored document.
+
+        Args:
+            input (ReadSectionInput): The validated module_id/section_id to look up.
+            ctx (AgentContext): The current agent run's context; `ctx.curriculum_id`
+                scopes the lookup.
+
+        Returns:
+            dict[str, Any]: The full section document (order, title, content_markdown,
+                citations, status) on success, or `{"error": "..."}` if not found.
+        """
         section = fs.get_section(ctx.curriculum_id, input.module_id, input.section_id)
         if not section:
             return {"error": f"section {input.section_id} not found in module {input.module_id}"}
@@ -157,6 +210,8 @@ class ReadSectionTool(Tool):
 
 
 class UpdateSectionInput(BaseModel):
+    """Input schema for `UpdateSectionTool`."""
+
     module_id: str = Field(..., description="The module id.")
     section_id: str = Field(..., description="The section id.")
     content_markdown: str = Field(..., description="The full revised markdown content.")
@@ -174,6 +229,23 @@ class UpdateSectionTool(Tool):
     input_model = UpdateSectionInput
 
     async def execute(self, input: UpdateSectionInput, ctx: AgentContext) -> dict[str, Any]:
+        """Overwrite an existing section's content during refinement (requires prior existence).
+
+        Unlike `WriteSectionTool`, this tool refuses to create a new section — it is
+        strictly for revising a section already produced during writing/review.
+
+        Args:
+            input (UpdateSectionInput): The validated revised content, citations, and a
+                required plain-language change_note.
+            ctx (AgentContext): The current agent run's context; `ctx.curriculum_id`
+                scopes the update.
+
+        Returns:
+            dict[str, Any]: On success, `{"status": "updated", "change_note",
+                "_ws_events": [...]}` with a `curriculum_updated` (scope "section")
+                event for the orchestrator to forward. `{"error": "..."}` if the section
+                doesn't exist yet.
+        """
         existing = fs.get_section(ctx.curriculum_id, input.module_id, input.section_id)
         if not existing:
             return {"error": f"section {input.section_id} not found in module {input.module_id}"}
@@ -208,6 +280,8 @@ class UpdateSectionTool(Tool):
 
 
 class WriteCurriculumOverviewInput(BaseModel):
+    """Input schema for `WriteCurriculumOverviewTool`."""
+
     overview_markdown: str = Field(..., description="Markdown overview of the whole curriculum.")
     emoji: str | None = Field(None, description="A single representative emoji for the curriculum.")
     tags: list[str] = Field(default_factory=list, description="Short topical tags for the curriculum.")
@@ -222,6 +296,19 @@ class WriteCurriculumOverviewTool(Tool):
     input_model = WriteCurriculumOverviewInput
 
     async def execute(self, input: WriteCurriculumOverviewInput, ctx: AgentContext) -> dict[str, Any]:
+        """Set the curriculum's overview markdown, emoji, and tags.
+
+        Args:
+            input (WriteCurriculumOverviewInput): The validated overview markdown,
+                optional emoji, and tags list.
+            ctx (AgentContext): The current agent run's context; `ctx.curriculum_id`
+                identifies which curriculum document to update.
+
+        Returns:
+            dict[str, Any]: `{"status": "updated", "_ws_events": [...]}` with a
+                `curriculum_updated` (scope "overview") event for the orchestrator to
+                forward to the client.
+        """
         fs.update_curriculum(
             ctx.curriculum_id,
             {"overview": input.overview_markdown, "emoji": input.emoji, "tags": input.tags},
@@ -239,6 +326,8 @@ class WriteCurriculumOverviewTool(Tool):
 
 
 class SetCurriculumTitleInput(BaseModel):
+    """Input schema for `SetCurriculumTitleTool`."""
+
     title: str = Field(
         ...,
         max_length=80,
@@ -267,6 +356,20 @@ class SetCurriculumTitleTool(Tool):
     input_model = SetCurriculumTitleInput
 
     async def execute(self, input: SetCurriculumTitleInput, ctx: AgentContext) -> dict[str, Any]:
+        """Rename the curriculum, updating both the curriculum doc and conversation title.
+
+        Args:
+            input (SetCurriculumTitleInput): The validated new title (<=80 chars) and
+                optional emoji.
+            ctx (AgentContext): The current agent run's context; both `ctx.curriculum_id`
+                and `ctx.conversation_id` are updated so the dashboard/sidebar stay
+                in sync with the curriculum document.
+
+        Returns:
+            dict[str, Any]: `{"status": "updated", "title", "_ws_event": {...}}` with a
+                `curriculum_updated` (scope "curriculum") event for the orchestrator to
+                forward.
+        """
         curriculum_fields: dict[str, Any] = {"title": input.title}
         if input.emoji:
             curriculum_fields["emoji"] = input.emoji
@@ -284,6 +387,8 @@ class SetCurriculumTitleTool(Tool):
 
 
 class SetModuleStatusInput(BaseModel):
+    """Input schema for `SetModuleStatusTool`."""
+
     module_id: str = Field(..., description="The module id.")
     status: Literal["planned", "writing", "complete"] = Field(..., description="New status for the module.")
 
@@ -297,6 +402,17 @@ class SetModuleStatusTool(Tool):
     input_model = SetModuleStatusInput
 
     async def execute(self, input: SetModuleStatusInput, ctx: AgentContext) -> dict[str, Any]:
+        """Update a module's status field.
+
+        Args:
+            input (SetModuleStatusInput): The validated module_id and new status.
+            ctx (AgentContext): The current agent run's context; `ctx.curriculum_id`
+                scopes the lookup/update.
+
+        Returns:
+            dict[str, Any]: `{"status": "updated", "module_id", "new_status"}` on
+                success, or `{"error": "..."}` if the module doesn't exist.
+        """
         module = fs.get_module(ctx.curriculum_id, input.module_id)
         if not module:
             return {"error": f"module {input.module_id} not found"}
@@ -310,11 +426,31 @@ class SetModuleStatusTool(Tool):
 
 
 def _next_section_order(curriculum_id: str, module_id: str) -> int:
+    """Compute the next append-order index for a new section within a module.
+
+    Args:
+        curriculum_id (str): The curriculum containing the module.
+        module_id (str): The module to count existing sections for.
+
+    Returns:
+        int: The count of existing sections in the module, used as the new section's
+            `order` value (i.e. sections are ordered by creation/append order).
+    """
     sections = fs.list_sections(curriculum_id, module_id)
     return len(sections)
 
 
 def _mark_task_done(curriculum_id: str, task_id: str) -> None:
+    """Mark the plan task matching `task_id` as done and remove it from the working task_queue.
+
+    No-ops silently if there is no plan yet, or if no task in the plan matches
+    `task_id` (e.g. a section written outside the normal plan-driven flow).
+
+    Args:
+        curriculum_id (str): The curriculum whose plan/state to update.
+        task_id (str): The task id to mark done — by convention this equals the
+            section_id, since each planned task maps 1:1 to a section stub.
+    """
     plan = fs.get_plan(curriculum_id)
     if not plan:
         return
@@ -327,12 +463,23 @@ def _mark_task_done(curriculum_id: str, task_id: str) -> None:
     if changed:
         fs.set_plan(curriculum_id, {"tasks": tasks})
 
+    # Advance the working-memory task queue: drop the now-done task and point
+    # current_task_id at whatever is next (or None if the queue is now empty).
     state = fs.get_agent_state(curriculum_id) or {}
     queue = [t for t in state.get("task_queue", []) if t != task_id]
     fs.set_agent_state(curriculum_id, {"task_queue": queue, "current_task_id": queue[0] if queue else None})
 
 
 def _task_progress(curriculum_id: str) -> tuple[int, int]:
+    """Compute (completed, total) task counts from the curriculum's plan.
+
+    Args:
+        curriculum_id (str): The curriculum whose plan to inspect.
+
+    Returns:
+        tuple[int, int]: `(completed_count, total_count)`, or `(0, 0)` if no plan
+            exists yet.
+    """
     plan = fs.get_plan(curriculum_id)
     if not plan:
         return 0, 0
@@ -342,6 +489,11 @@ def _task_progress(curriculum_id: str) -> tuple[int, int]:
 
 
 def _refresh_curriculum_counts(curriculum_id: str) -> None:
+    """Recompute and persist the curriculum's cached module_count/section_count fields.
+
+    Args:
+        curriculum_id (str): The curriculum to recount and update.
+    """
     modules = fs.list_modules(curriculum_id)
     section_count = sum(len(fs.list_sections(curriculum_id, m["id"])) for m in modules)
     fs.update_curriculum(curriculum_id, {"module_count": len(modules), "section_count": section_count})

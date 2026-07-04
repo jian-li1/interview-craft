@@ -30,6 +30,7 @@ const features = [
   },
 ];
 
+/** Landing page section: the "everything you need" feature grid (research, HITL planning, visual curricula, citations). */
 export function Features() {
   return (
     <section id="features" className="mx-auto max-w-6xl px-4 py-20 sm:px-6">

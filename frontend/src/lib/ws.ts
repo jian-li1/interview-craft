@@ -35,20 +35,30 @@ export class ChatSocket {
     this.conversationId = conversationId;
   }
 
+  /** Subscribe to parsed server events. Returns an unsubscribe function. */
   onEvent(handler: EventHandler): () => void {
     this.eventHandlers.add(handler);
     return () => this.eventHandlers.delete(handler);
   }
 
+  /** Subscribe to connection-state transitions. Returns an unsubscribe function. */
   onStateChange(handler: StateHandler): () => void {
     this.stateHandlers.add(handler);
     return () => this.stateHandlers.delete(handler);
   }
 
+  /** Current connection state (see `ConnectionState`). */
   getState(): ConnectionState {
     return this.state;
   }
 
+  /**
+   * Opens the socket. Clears `manuallyClosed` first so a fresh `connect()`
+   * call after a prior `close()` is allowed to reconnect (without this reset,
+   * a stale `manuallyClosed = true` from an earlier close would make
+   * `scheduleReconnect`/`onclose` treat the new connection as intentionally
+   * closed too).
+   */
   connect(): void {
     this.manuallyClosed = false;
     this.open();
@@ -90,6 +100,10 @@ export class ChatSocket {
 
     socket.onclose = () => {
       this.stopPing();
+      // `manuallyClosed` distinguishes an intentional close() (e.g. the
+      // owning component unmounted, or the conversation changed) from a
+      // dropped connection (server restart, network blip, proxy timeout).
+      // Only the latter should trigger a reconnect attempt.
       if (!this.manuallyClosed) {
         this.scheduleReconnect();
       } else {
@@ -98,10 +112,21 @@ export class ChatSocket {
     };
 
     socket.onerror = () => {
-      // onclose will fire right after; let that path own reconnect scheduling.
+      // Intentionally a no-op: the WebSocket spec guarantees `onclose` fires
+      // immediately after `onerror` for any connection failure, so all
+      // reconnect/state-transition logic lives in `onclose` to avoid running
+      // it twice (once from onerror, once from onclose) for the same event.
     };
   }
 
+  /**
+   * Schedules the next reconnect attempt using exponential backoff with
+   * jitter: delay doubles each attempt (capped at MAX_BACKOFF_MS) and gets
+   * up to 30% random jitter added on top. The exponential growth avoids
+   * hammering a struggling backend; the jitter avoids a "thundering herd"
+   * where every client that dropped at the same moment (e.g. a server
+   * restart) reconnects in perfect lockstep and re-overwhelms it.
+   */
   private scheduleReconnect() {
     this.setState("reconnecting");
     const attempt = this.reconnectAttempt;
@@ -113,6 +138,10 @@ export class ChatSocket {
     }, backoff + jitter);
   }
 
+  // Keepalive: many intermediaries (load balancers, proxies, browsers)
+  // silently drop idle WebSocket connections after ~30-60s of inactivity.
+  // Sending a lightweight ping on an interval keeps the connection alive
+  // and lets the server's own liveness checks see recent client activity.
   private startPing() {
     this.stopPing();
     this.pingTimer = setInterval(() => {
@@ -127,24 +156,34 @@ export class ChatSocket {
     }
   }
 
+  /** Sends a typed client event if the socket is currently open; silently drops otherwise. */
   send(event: ClientEvent): void {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(event));
     }
   }
 
+  /** Sends a user chat message to the agent. */
   sendUserMessage(content: string): void {
     this.send({ type: "user_message", content });
   }
 
+  /** Approves or requests changes to a proposed task plan (HITL plan-approval flow). */
   sendPlanDecision(decision: "approve" | "modify", feedback: string | null): void {
     this.send({ type: "plan_decision", decision, feedback });
   }
 
+  /** Requests the agent run be cancelled. */
   sendStop(): void {
     this.send({ type: "stop" });
   }
 
+  /**
+   * Closes the socket intentionally. Sets `manuallyClosed` first so the
+   * `onclose` handler above knows not to schedule a reconnect, then tears
+   * down any pending reconnect timer and the ping interval before closing
+   * the underlying WebSocket.
+   */
   close(): void {
     this.manuallyClosed = true;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);

@@ -13,7 +13,16 @@ router = APIRouter(prefix="/api/settings", tags=["settings"])
 
 @router.get("", response_model=UserSettings)
 async def get_settings_route(user: CurrentUser = Depends(get_current_user)) -> UserSettings:
-    """Return the current user's settings."""
+    """Return the current user's settings.
+
+    Args:
+        user (CurrentUser): The authenticated caller, resolved via
+            `Depends(get_current_user)`.
+
+    Returns:
+        UserSettings: The user's settings (e.g. provider overrides), defaulted if the
+            user has never customized them.
+    """
     data = fs.get_user(user.uid) or {}
     return UserSettings(**(data.get("settings") or {}))
 
@@ -22,6 +31,20 @@ async def get_settings_route(user: CurrentUser = Depends(get_current_user)) -> U
 async def put_settings(
     body: UserSettingsUpdate, user: CurrentUser = Depends(get_current_user)
 ) -> UserSettings:
-    """Partially update the current user's settings."""
+    """Partially update the current user's settings.
+
+    Requires the `X-Requested-With` CSRF header (enforced by the router-level
+    dependency). Only fields explicitly set on `body` are merged into the stored
+    settings (`exclude_unset=True`), so omitted fields are left untouched rather than
+    reset to their model defaults.
+
+    Args:
+        body (UserSettingsUpdate): Partial settings update; unset fields are ignored.
+        user (CurrentUser): The authenticated caller, resolved via
+            `Depends(get_current_user)`.
+
+    Returns:
+        UserSettings: The full settings object after merging the update.
+    """
     merged = fs.update_user_settings(user.uid, body.model_dump(exclude_unset=True))
     return UserSettings(**merged)

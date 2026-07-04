@@ -73,6 +73,14 @@ LLMEvent = TextDelta | ToolCallDelta | Done
 
 @dataclass(slots=True)
 class CompletionResult:
+    """The fully-assembled result of a non-streaming completion (text plus any tool calls).
+
+    Attributes:
+        text (str): The complete text of the model's response.
+        tool_calls (list[ToolCallDelta]): Any tool calls the model requested, fully
+            assembled (empty if the model returned plain text only).
+    """
+
     text: str
     tool_calls: list[ToolCallDelta] = field(default_factory=list)
 
@@ -87,9 +95,34 @@ class LLMProvider(Protocol):
         tools: list[ToolSpec] | None = None,
         small: bool = False,
     ) -> AsyncIterator[LLMEvent]:
-        """Stream a chat completion. Yields TextDelta/ToolCallDelta events, ends with Done."""
+        """Stream a chat completion. Yields TextDelta/ToolCallDelta events, ends with Done.
+
+        Args:
+            messages (list[ChatMessage]): The conversation history to send to the model,
+                in provider-neutral form.
+            tools (list[ToolSpec] | None): Tool definitions the model may call, or None
+                to disable tool use for this request.
+            small (bool): If True, route the request to the provider's cheaper/faster
+                "small" model (used for summarization and other lightweight generations)
+                instead of the main model.
+
+        Yields:
+            LLMEvent: A sequence of `TextDelta` (streamed text chunks) and/or
+                `ToolCallDelta` (fully-assembled tool calls) events, terminated by
+                exactly one `Done` event carrying usage/finish-reason info.
+        """
         ...
 
     async def complete(self, messages: list[ChatMessage], small: bool = False) -> str:
-        """Non-streaming helper used for small, one-shot generations (e.g. summarization)."""
+        """Non-streaming helper used for small, one-shot generations (e.g. summarization).
+
+        Args:
+            messages (list[ChatMessage]): The conversation history to send to the model,
+                in provider-neutral form.
+            small (bool): If True, route the request to the provider's cheaper/faster
+                "small" model instead of the main model.
+
+        Returns:
+            str: The complete text of the model's response.
+        """
         ...

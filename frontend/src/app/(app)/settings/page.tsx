@@ -6,6 +6,21 @@ import { PreferencesTab } from "@/components/settings/PreferencesTab";
 import { AppearanceTab } from "@/components/settings/AppearanceTab";
 import { AccountTab } from "@/components/settings/AccountTab";
 
+/**
+ * `/settings` — authenticated settings page, rendered inside the `(app)`
+ * shell. Purely a tab-switcher shell: it owns no state of its own beyond
+ * which tab is active (delegated entirely to the hand-rolled `Tabs`
+ * primitive from `components/ui/Tabs`, defaulting to "profile"). Each of the
+ * four tabs is a self-contained component under `components/settings/` that
+ * fetches/mutates its own slice of settings:
+ * - `ProfileTab` — the onboarding profile fields (bio, roles, skills, etc.).
+ * - `PreferencesTab` — agent/LLM behavior preferences.
+ * - `AppearanceTab` — theme/display preferences.
+ * - `AccountTab` — account-level info/actions (e.g. sign out, danger zone).
+ * `TabsContent` mounts/unmounts (or hides, per the `Tabs` primitive's
+ * implementation) each panel based on the active `value`, matching the
+ * `TabsTrigger` values above.
+ */
 export default function SettingsPage() {
   return (
     <div className="mx-auto max-w-3xl px-4 py-10 sm:px-6 lg:py-14">

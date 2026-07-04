@@ -16,6 +16,15 @@ const EXAMPLE_PROMPTS = [
   "Behavioral interview using the STAR method",
 ];
 
+/**
+ * The dashboard's "start a new curriculum" input: a textarea plus a row of
+ * clickable example prompts. On submit (Enter without Shift, the send
+ * button, or clicking an example) it calls `conversationsApi.create` with
+ * the trimmed prompt, best-effort stashes the prompt in `sessionStorage`
+ * (keyed by the new conversation id) so the studio can auto-send it as the
+ * first message once mounted, then navigates to `/studio/{conversation_id}`.
+ * Failure surfaces as a toast and re-enables the input.
+ */
 export function PromptBox() {
   const [value, setValue] = useState("");
   const [submitting, setSubmitting] = useState(false);

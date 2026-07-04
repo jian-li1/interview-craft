@@ -6,6 +6,9 @@ import { CheckCircle2, ChevronDown, Loader2, Search, Wrench, XCircle } from "luc
 import { cn, formatElapsed } from "@/lib/utils";
 import type { ToolCallRecord } from "@/lib/types";
 
+// Substring match against the tool's raw name (e.g. "web_search",
+// "deep_search") -> icon. Falls back to a generic wrench for any tool name
+// that doesn't match a known keyword.
 const ICONS: Record<string, typeof Wrench> = {
   search: Search,
   web_search: Search,
@@ -19,12 +22,32 @@ function iconFor(name: string) {
   return Wrench;
 }
 
+/** Turns a snake_case tool name (e.g. "web_search") into a title-cased display label ("Web Search"). */
 function humanizeName(name: string): string {
   return name
     .replace(/_/g, " ")
     .replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+/**
+ * One collapsible tool-call row. Populated from a `ToolCallRecord` that's
+ * created by `tool_call_start` (-> useChatStore.startToolCall) and updated in
+ * place by `tool_call_result` (-> resolveToolCall) — see useChatSocket.ts.
+ *
+ * Status indicator (right-aligned, before the chevron):
+ *  - `"running"` — spinning loader; no elapsed time shown yet (the result
+ *    hasn't arrived, so `elapsed_ms` is still undefined).
+ *  - `"ok"` — green check, plus the elapsed time once available.
+ *  - `"error"` — red X, plus the elapsed time once available.
+ *
+ * The disclosure (closed by default) reveals the raw JSON `input` the tool
+ * was called with, and — if present — `output_preview`: a server-truncated
+ * preview string of the tool's output (the backend caps this before sending
+ * it over the wire so a huge tool result doesn't bloat every WS frame or get
+ * held in memory client-side in full; the full output lives only in the
+ * agent's research notes on the backend, per the memory-layers design in
+ * root CLAUDE.md).
+ */
 function ToolCallItem({ call }: { call: ToolCallRecord }) {
   const [open, setOpen] = useState(false);
   const Icon = iconFor(call.name);

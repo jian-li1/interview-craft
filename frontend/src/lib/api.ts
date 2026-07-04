@@ -42,6 +42,13 @@ interface ApiFetchOptions extends Omit<RequestInit, "body"> {
   isFormData?: boolean;
 }
 
+/**
+ * Pulls a human-readable message out of a backend error body. FastAPI's
+ * validation errors arrive as `detail: {msg, loc}[]` (422s), plain-string
+ * `detail` covers most hand-raised HTTPExceptions, and `message` is a
+ * fallback for any non-FastAPI error shape. Falls back to `fallback` (e.g.
+ * `res.statusText`) if none of those are present.
+ */
 function extractMessage(body: ApiErrorBody | null, fallback: string): string {
   if (!body) return fallback;
   if (typeof body.detail === "string") return body.detail;
@@ -52,6 +59,7 @@ function extractMessage(body: ApiErrorBody | null, fallback: string): string {
   return fallback;
 }
 
+/** True for HTTP methods that mutate state — used to gate the CSRF header. */
 function isMutatingMethod(method: string): boolean {
   return ["POST", "PUT", "PATCH", "DELETE"].includes(method.toUpperCase());
 }
@@ -119,6 +127,12 @@ export async function apiFetch<T>(
 // Auth
 // ---------------------------------------------------------------------------
 
+/**
+ * Wraps `/api/auth/*` — Google Identity Services login, logout, and the
+ * "who am I" check. `me()` is called both by `AuthProvider` on mount (where
+ * a 401 is expected/normal for logged-out users, hence `skipAuthRedirect`)
+ * and by the auth guard, which wants the default redirect-to-/login behavior.
+ */
 export const authApi = {
   loginWithGoogle: (idToken: string) =>
     apiFetch<UserOut>("/api/auth/google", {
@@ -134,6 +148,15 @@ export const authApi = {
 // Onboarding
 // ---------------------------------------------------------------------------
 
+/**
+ * Wraps `/api/onboarding` — the user profile that feeds curriculum
+ * personalization (bio, background, goals, resume text, synthesized
+ * profile). `uploadResume` wraps the file in `FormData` and sets
+ * `isFormData: true` so `apiFetch` sends it verbatim instead of
+ * JSON-stringifying it (no `Content-Type` header is set, letting the
+ * browser attach the correct multipart boundary). `synthesize` triggers the
+ * backend to LLM-summarize the raw profile fields into `synthesized_profile`.
+ */
 export const onboardingApi = {
   get: () => apiFetch<ProfileOut>("/api/onboarding"),
   update: (profile: ProfileIn) =>
@@ -155,6 +178,13 @@ export const onboardingApi = {
 // Curricula
 // ---------------------------------------------------------------------------
 
+/**
+ * Wraps `/api/curricula` — the generated curricula themselves (list/detail
+ * for the dashboard and reader, delete, and the proposed task plan used by
+ * the HITL plan-approval flow). `get` returns the full nested
+ * modules/sections tree (`CurriculumFull`); `list` returns lightweight
+ * summaries for the dashboard grid.
+ */
 export const curriculaApi = {
   list: () => apiFetch<CurriculumSummary[]>("/api/curricula"),
   get: (id: string) => apiFetch<CurriculumFull>(`/api/curricula/${id}`),
@@ -167,6 +197,14 @@ export const curriculaApi = {
 // Conversations
 // ---------------------------------------------------------------------------
 
+/**
+ * Wraps `/api/conversations` — the chat threads that drive curriculum
+ * generation via the agent. `create` starts a new conversation (optionally
+ * seeded with an initial `curriculum_prompt`) and returns the id used to open
+ * the chat WebSocket (see `ChatSocket` in `lib/ws.ts`). `messages` fetches
+ * persisted history for hydrating the store on load
+ * (`useChatStore.hydrateHistory`).
+ */
 export const conversationsApi = {
   list: () => apiFetch<ConversationSummary[]>("/api/conversations"),
   create: (payload: CreateConversationRequest) =>
@@ -182,12 +220,21 @@ export const conversationsApi = {
 // Settings
 // ---------------------------------------------------------------------------
 
+/**
+ * Wraps `/api/settings` — user-level preferences (theme, LLM/search provider
+ * overrides) that are persisted server-side and synced across devices.
+ */
 export const settingsApi = {
   get: () => apiFetch<UserSettings>("/api/settings"),
   update: (payload: SettingsUpdateRequest) =>
     apiFetch<UserSettings>("/api/settings", { method: "PUT", body: payload }),
 };
 
+/**
+ * Wraps `/api/healthz` — a liveness probe. Always passes
+ * `skipAuthRedirect: true` since this endpoint is unauthenticated and a 401
+ * here should never bounce the user to `/login`.
+ */
 export const healthApi = {
   check: () => apiFetch<{ status: string }>("/api/healthz", { skipAuthRedirect: true }),
 };

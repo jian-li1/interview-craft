@@ -15,6 +15,21 @@ from app.services.llm.base import LLMProvider
 
 @lru_cache
 def _build_provider(name: str) -> LLMProvider:
+    """Construct (and cache) the LLMProvider instance for a given provider name.
+
+    Cached via `lru_cache` keyed on `name` since providers are stateless aside from
+    their configured client, avoiding repeated client construction across requests.
+
+    Args:
+        name (str): The provider identifier: "openai", "llamacpp", or "gemini".
+
+    Returns:
+        LLMProvider: The constructed provider instance.
+
+    Raises:
+        ValueError: If `name` is not a recognized provider, or if required
+            provider-specific settings (e.g. `OPENAI_BASE_URL` for llamacpp) are missing.
+    """
     settings = get_settings()
     if name == "openai":
         from app.services.llm.openai_provider import OpenAIProvider
@@ -54,7 +69,18 @@ def _build_provider(name: str) -> LLMProvider:
 
 
 def get_llm_provider(user_override: str | None = None, settings: Settings | None = None) -> LLMProvider:
-    """Return the LLMProvider to use, honoring a per-user override if provided."""
+    """Return the LLMProvider to use, honoring a per-user override if provided.
+
+    Args:
+        user_override (str | None): A per-user provider preference (from
+            `users/{uid}.settings.llm_provider`), which wins over the server default
+            when set.
+        settings (Settings | None): The settings instance to read the server-wide
+            default from; defaults to the process-wide cached settings.
+
+    Returns:
+        LLMProvider: The resolved (and cached) provider instance to use for this call.
+    """
     settings = settings or get_settings()
     name = user_override or settings.llm_provider
     return _build_provider(name)

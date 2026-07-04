@@ -10,6 +10,15 @@ const navItems = [
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 
+/**
+ * Primary navigation for the authenticated shell: logo/home link, a
+ * "New curriculum" button (routes to `/dashboard`, where the prompt box
+ * lives), and nav links (`navItems`: Dashboard, Settings) with active-route
+ * highlighting via `usePathname()` compared against each `item.href`
+ * (exact match, styled through `cn()`). `onNavigate` is supplied by
+ * `AppShell` when this is rendered inside the mobile drawer, so link/button
+ * clicks can also close the drawer.
+ */
 export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname();
   const router = useRouter();
@@ -67,6 +76,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   );
 }
 
+/** Close ("X") button shown at the top of the mobile sidebar drawer in `AppShell`. */
 export function MobileSidebarClose({ onClose }: { onClose: () => void }) {
   return (
     <button

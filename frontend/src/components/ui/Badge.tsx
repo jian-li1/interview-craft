@@ -16,6 +16,13 @@ export interface BadgeProps extends HTMLAttributes<HTMLSpanElement> {
   variant?: Variant;
 }
 
+/**
+ * Small pill label. `variant` selects the color treatment — "default"
+ * (accent), "success", "warning", "destructive", "info" (all soft/tinted
+ * backgrounds), or "outline" (transparent with a border) — via
+ * `variantClasses`. Any other span props (e.g. `className`, `onClick`)
+ * pass through.
+ */
 export function Badge({ className, variant = "default", ...props }: BadgeProps) {
   return (
     <span

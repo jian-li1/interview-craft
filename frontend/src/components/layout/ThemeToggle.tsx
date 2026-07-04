@@ -5,6 +5,16 @@ import { useTheme } from "next-themes";
 import { Moon, Sun } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 
+/**
+ * Light/dark theme toggle button. Reads/writes theme state via
+ * `next-themes`' `useTheme()` (the store of record for the current theme,
+ * provided by `ThemeProvider` higher in the tree) and flips between
+ * "light" and "dark" based on `resolvedTheme` (the actual applied theme,
+ * accounting for a "system" preference rather than the raw `theme` value).
+ * Renders an empty placeholder of the same size until mounted, since
+ * `resolvedTheme` is only accurate on the client post-hydration — rendering
+ * the real icon before that would risk a server/client mismatch.
+ */
 export function ThemeToggle({ className }: { className?: string }) {
   const { resolvedTheme, setTheme } = useTheme();
   const [mounted, setMounted] = useState(false);

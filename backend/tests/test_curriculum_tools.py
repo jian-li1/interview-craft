@@ -10,6 +10,17 @@ from app.core.config import get_settings
 
 
 def _make_ctx(curriculum_id: str, conversation_id: str) -> AgentContext:
+    """Build a minimal `AgentContext` for exercising a tool in isolation.
+
+    Args:
+        curriculum_id (str): Curriculum id to scope the context to.
+        conversation_id (str): Conversation id to scope the context to.
+
+    Returns:
+        AgentContext: Context with a fixed owner uid, real settings, and placeholder
+            (non-functional) LLM/search clients — sufficient for tools that only touch
+            Firestore via the `fake_fs` fixture.
+    """
     return AgentContext(
         curriculum_id=curriculum_id,
         conversation_id=conversation_id,
@@ -24,6 +35,9 @@ def _make_ctx(curriculum_id: str, conversation_id: str) -> AgentContext:
 
 @pytest.mark.asyncio
 async def test_set_curriculum_title_updates_curriculum_and_conversation(fake_fs):
+    """Verify SetCurriculumTitleTool updates both the curriculum's title/emoji and the
+    linked conversation's title, and emits a `curriculum_updated` WS event.
+    """
     conv = fake_fs.fs.create_conversation("uid1", "New conversation", curriculum_id=None)
     curriculum = fake_fs.fs.create_curriculum(
         "uid1", "prep me for a google swe interview...", "prep me for a google swe interview", conversation_id=conv["id"]
@@ -54,6 +68,9 @@ async def test_set_curriculum_title_updates_curriculum_and_conversation(fake_fs)
 
 @pytest.mark.asyncio
 async def test_set_curriculum_title_without_emoji_does_not_clear_existing_emoji(fake_fs):
+    """Verify calling the tool with `emoji=None` leaves a previously-set emoji intact,
+    since the field is omitted from the update rather than explicitly cleared.
+    """
     conv = fake_fs.fs.create_conversation("uid1", "New conversation", curriculum_id=None)
     curriculum = fake_fs.fs.create_curriculum(
         "uid1", "placeholder title", "prep me for consulting case interviews", conversation_id=conv["id"]
@@ -72,11 +89,15 @@ async def test_set_curriculum_title_without_emoji_does_not_clear_existing_emoji(
 
 
 def test_set_curriculum_title_rejects_titles_over_80_chars():
+    """Verify the input model's length validation rejects titles longer than 80 chars."""
     with pytest.raises(Exception):
         SetCurriculumTitleInput(title="x" * 81)
 
 
 def test_set_curriculum_title_registered_and_always_available():
+    """Verify `set_curriculum_title` is registered, marked always-available, and shows
+    up in the tool specs for every agent phase.
+    """
     from app.agent.tools.registry import ToolRegistry, _ALWAYS_AVAILABLE
 
     registry = ToolRegistry()

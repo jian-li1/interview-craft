@@ -10,12 +10,35 @@ import { Textarea } from "@/components/ui/Input";
 import type { ProposedPlan } from "@/stores/useChatStore";
 
 interface PlanApprovalCardProps {
+  /** The plan proposed by the agent's `propose_task_plan` tool call (HITL pause), sourced from useChatStore's `plan` field (set via the `plan_proposed` WS event -> proposePlan). */
   plan: ProposedPlan;
   disabled: boolean;
+  /**
+   * Called with the user's decision. The caller (ChatPanel.handlePlanDecision)
+   * forwards this straight to `ChatSocket.sendPlanDecision(decision, feedback)`
+   * over the WS connection, which resumes the paused ReAct loop server-side
+   * with the decision payload.
+   */
   onDecision: (decision: "approve" | "modify", feedback: string | null) => void;
 }
 
+/**
+ * HITL (human-in-the-loop) card rendered inline in the transcript whenever
+ * the agent's `propose_task_plan` tool pauses the ReAct loop awaiting a
+ * decision (see root CLAUDE.md "HITL" section). Renders the plan's outline
+ * markdown and task checklist, then offers two decision paths:
+ *  - **Approve & build** — immediately calls `onDecision("approve", null)`.
+ *  - **Request changes** — switches to a "requesting" mode that reveals a
+ *    feedback textarea; submitting calls `onDecision("modify", feedback)`
+ *    with the trimmed text (never an empty string — the Send button is
+ *    disabled until there's non-whitespace feedback).
+ * Either path unblocks the composer (see ChatPanel's composerDisabled, which
+ * gates on `planAwaitingDecision`) once the parent resolves the plan.
+ */
 export function PlanApprovalCard({ plan, disabled, onDecision }: PlanApprovalCardProps) {
+  // `feedback`: draft text for the "modify" path's textarea.
+  // `mode`: "idle" shows the two top-level action buttons; "requesting"
+  // swaps to the feedback textarea + cancel/send controls.
   const [feedback, setFeedback] = useState("");
   const [mode, setMode] = useState<"idle" | "requesting">("idle");
 

@@ -6,11 +6,29 @@ import { BrainCircuit, ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface ReasoningBlockProps {
+  /** Accumulated reasoning text for this message, built up from `reasoning_delta` WS events. */
   reasoning: string;
+  /** True while more reasoning deltas are still expected for this message (i.e. before message_end). */
   streaming: boolean;
 }
 
+/**
+ * Renders the agent's `<thinking>...</thinking>` stream for one assistant
+ * message — a provider-agnostic convention (see root CLAUDE.md "Agent
+ * streaming") where the backend splits reasoning text from user-facing text
+ * and the WS layer emits them as two distinct event types:
+ * `reasoning_delta` (appended here via useChatStore.appendReasoningDelta)
+ * vs `text_delta` (rendered in MessageBubble's markdown bubble instead).
+ * This component only ever sees the reasoning half of that split.
+ *
+ * Collapsible: auto-opens while `streaming` is true (so the user watches the
+ * thought process live) and can be toggled manually afterward via the
+ * disclosure button. Renders nothing once `reasoning` is empty (e.g. before
+ * the first delta arrives).
+ */
 export function ReasoningBlock({ reasoning, streaming }: ReasoningBlockProps) {
+  // Seed `open` from `streaming` so a message that arrives already-streaming
+  // starts expanded; once toggled by the user it's independent of `streaming`.
   const [open, setOpen] = useState(streaming);
 
   if (!reasoning) return null;

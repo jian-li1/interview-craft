@@ -31,6 +31,15 @@ const sizeClasses: Record<Size, string> = {
   icon: "h-9 w-9 rounded-md",
 };
 
+/**
+ * Base button primitive. `variant` ("primary" | "secondary" | "outline" |
+ * "ghost" | "destructive" | "link") controls color treatment via
+ * `variantClasses`; `size` ("sm" | "md" | "lg" | "icon") controls
+ * dimensions via `sizeClasses` (skipped for the "link" variant, which is
+ * sized like inline text instead). `loading` shows a spinner before
+ * `children` and implicitly disables the button alongside the `disabled`
+ * prop. Forwards `ref` to the underlying `<button>`.
+ */
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
   (
     { className, variant = "primary", size = "md", loading, disabled, children, ...props },

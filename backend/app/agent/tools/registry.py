@@ -44,6 +44,17 @@ class ToolResult:
     __slots__ = ("output", "status", "elapsed_ms")
 
     def __init__(self, output: dict[str, Any], status: str, elapsed_ms: int) -> None:
+        """Store the tool's output dict alongside execution metadata.
+
+        Args:
+            output (dict[str, Any]): The tool's JSON-serializable observation, possibly
+                still containing internal `_hitl_gate`/`_ws_event`/`_ws_events` keys that
+                the orchestrator pops before building the client-visible preview.
+            status (str): `"ok"` or `"error"`, derived from whether `output` contains an
+                `"error"` key.
+            elapsed_ms (int): Wall-clock milliseconds the execution took, for WS
+                reporting/telemetry.
+        """
         self.output = output
         self.status = status
         self.elapsed_ms = elapsed_ms
@@ -133,6 +144,12 @@ class ToolRegistry:
     """Holds all tool instances and provides phase-filtered, provider-formatted access."""
 
     def __init__(self) -> None:
+        """Instantiate every known tool once and index them by name.
+
+        The `tool_instances` list here is the single place new tools must be registered
+        (per the "Adding a new tool" steps in `app/agent/CLAUDE.md`) — a tool class that
+        exists but isn't listed here is never available to the agent.
+        """
         tool_instances: list[Tool] = [
             WebSearchTool(),
             FetchUrlTool(),
@@ -156,7 +173,20 @@ class ToolRegistry:
         self._tools: dict[str, Tool] = {t.name: t for t in tool_instances}
 
     def specs_for_phase(self, phase: str) -> list[ToolSpec]:
-        """Return provider-neutral ToolSpecs for the tools allowed in `phase`."""
+        """Return provider-neutral ToolSpecs for the tools allowed in `phase`.
+
+        Tools not listed for a phase are omitted entirely from the returned specs — the
+        LLM never even sees them as function-calling options for that phase (see
+        `_PHASE_TOOLS`). Falls back to `_ALWAYS_AVAILABLE` for any phase without an
+        explicit entry.
+
+        Args:
+            phase (str): The current agent phase (e.g. "writing", "deep_research").
+
+        Returns:
+            list[ToolSpec]: One spec per allowed tool that's actually registered
+                (silently skips names in `_PHASE_TOOLS` that have no matching instance).
+        """
         allowed = _PHASE_TOOLS.get(phase, _ALWAYS_AVAILABLE)
         specs = []
         for name in allowed:
@@ -169,6 +199,18 @@ class ToolRegistry:
         return specs
 
     def is_hitl_gate(self, tool_name: str) -> bool:
+        """Check whether `tool_name` is a registry-level HITL gate tool (backstop check).
+
+        This is a backstop alongside each gate tool's own `_hitl_gate: True` output flag
+        — the orchestrator treats a step as gated if *either* signal fires, so a gate
+        tool that forgets to set the flag on a given call still pauses the loop.
+
+        Args:
+            tool_name (str): The tool name to check.
+
+        Returns:
+            bool: True if `tool_name` is in `HITL_GATE_TOOLS`.
+        """
         return tool_name in HITL_GATE_TOOLS
 
     async def execute(self, tool_name: str, raw_input: dict[str, Any], ctx: AgentContext) -> ToolResult:
@@ -176,7 +218,23 @@ class ToolRegistry:
 
         Never raises: validation errors, execution errors, and unknown-tool lookups are
         all captured and converted into {"error": "..."} observations so the ReAct loop
-        never crashes on a bad or failing tool call (spec 02 §3).
+        never crashes on a bad or failing tool call (spec 02 §3). Handles three
+        failure points explicitly (unknown tool name, pydantic input validation, and
+        execution) plus a catch-all for any other unexpected exception, each logged
+        appropriately and each producing a `ToolResult` with `status="error"`.
+
+        Args:
+            tool_name (str): The name of the tool to execute, as requested by the LLM.
+            raw_input (dict[str, Any]): The raw (unvalidated) arguments dict from the
+                LLM's tool call, to be parsed against the tool's `input_model`.
+            ctx (AgentContext): The current agent run's context, passed through to the
+                tool's `execute` method.
+
+        Returns:
+            ToolResult: The execution result — `status="ok"` with the tool's output
+                dict, or `status="error"` with an `{"error": "..."}` dict describing
+                what went wrong (unknown tool, invalid input, `ToolExecutionError`, or
+                an unexpected exception).
         """
         start = time.monotonic()
         tool = self._tools.get(tool_name)

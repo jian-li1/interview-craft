@@ -3,6 +3,11 @@
 import { motion } from "framer-motion";
 import { ArrowDown } from "lucide-react";
 
+/**
+ * Small floating pill shown by ChatPanel when the user has scrolled away
+ * from the bottom of the transcript while new messages keep arriving.
+ * Presentational only — `onClick` re-arms auto-scroll and jumps down.
+ */
 export function ScrollToBottomPill({ onClick }: { onClick: () => void }) {
   return (
     <motion.button

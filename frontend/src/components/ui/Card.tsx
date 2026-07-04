@@ -2,6 +2,14 @@ import { forwardRef } from "react";
 import type { HTMLAttributes } from "react";
 import { cn } from "@/lib/utils";
 
+/**
+ * Card primitive family: `Card` (bordered container) composed with
+ * `CardHeader`, `CardTitle`, `CardDescription`, `CardContent`, and
+ * `CardFooter` — plain `<div>`/`<h3>`/`<p>` wrappers with fixed spacing/
+ * typography, each forwarding `ref` and merging any extra `className`/props.
+ * No compound-component context; they're just styled building blocks meant
+ * to be composed directly (see settings/*Tab.tsx for typical usage).
+ */
 export const Card = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElement>>(
   ({ className, ...props }, ref) => (
     <div

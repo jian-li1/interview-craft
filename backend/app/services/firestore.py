@@ -69,11 +69,24 @@ def get_firestore_client() -> firestore.Client:
 
 
 def new_id() -> str:
-    """Generate a new random document id."""
+    """Generate a new random document id.
+
+    Returns:
+        str: A 32-character hex string derived from a random UUID4, suitable for use as
+            a Firestore document id.
+    """
     return uuid.uuid4().hex
 
 
 def utcnow() -> dt.datetime:
+    """Return the current time as a timezone-aware UTC datetime.
+
+    Centralizing this avoids naive-datetime bugs when writing timestamp fields to
+    Firestore, which expects timezone-aware values.
+
+    Returns:
+        datetime.datetime: The current instant in UTC, with tzinfo set.
+    """
     return dt.datetime.now(dt.timezone.utc)
 
 
@@ -83,6 +96,17 @@ def utcnow() -> dt.datetime:
 
 
 def get_user(uid: str) -> dict[str, Any] | None:
+    """Fetch a `users/{uid}` document.
+
+    No ownership check is performed here; callers must ensure `uid` matches the
+    requesting user before returning this data to a client.
+
+    Args:
+        uid (str): The Firebase Auth uid identifying the user document.
+
+    Returns:
+        dict[str, Any] | None: The user document fields, or None if it doesn't exist.
+    """
     db = get_firestore_client()
     snap = db.collection("users").document(uid).get()
     return snap.to_dict() if snap.exists else None
@@ -91,7 +115,20 @@ def get_user(uid: str) -> dict[str, Any] | None:
 def upsert_user_login(
     uid: str, email: str, name: str, picture: str | None, google_sub: str
 ) -> dict[str, Any]:
-    """Create the user doc on first login, or refresh last_login_at on subsequent ones."""
+    """Create the user doc on first login, or refresh last_login_at on subsequent ones.
+
+    Args:
+        uid (str): The Firebase Auth uid to key the `users/{uid}` document on.
+        email (str): The user's email address from the verified Google ID token.
+        name (str): The user's display name from the verified Google ID token.
+        picture (str | None): URL of the user's profile picture, if provided by Google.
+        google_sub (str): The Google account's stable subject identifier, stored only
+            on first creation (never overwritten on subsequent logins).
+
+    Returns:
+        dict[str, Any]: The resulting user document fields (freshly created, or the
+            existing document merged with the refreshed login/name/picture fields).
+    """
     db = get_firestore_client()
     ref = db.collection("users").document(uid)
     snap = ref.get()
@@ -117,6 +154,19 @@ def upsert_user_login(
 
 
 def update_user_settings(uid: str, partial: dict[str, Any]) -> dict[str, Any]:
+    """Merge a partial settings update into `users/{uid}.settings`.
+
+    Keys whose value is None are dropped from the update so callers can pass a fully
+    populated model without accidentally clearing existing settings (e.g. a user's
+    provider override) with an unset field.
+
+    Args:
+        uid (str): The Firebase Auth uid identifying the user document.
+        partial (dict[str, Any]): Settings fields to merge in; None values are ignored.
+
+    Returns:
+        dict[str, Any]: The fully merged settings dict now stored on the user document.
+    """
     db = get_firestore_client()
     ref = db.collection("users").document(uid)
     snap = ref.get()
@@ -127,6 +177,12 @@ def update_user_settings(uid: str, partial: dict[str, Any]) -> dict[str, Any]:
 
 
 def set_onboarding_completed(uid: str, completed: bool) -> None:
+    """Set the `onboarding_completed` flag on a user document.
+
+    Args:
+        uid (str): The Firebase Auth uid identifying the user document.
+        completed (bool): Whether the user has finished the onboarding wizard.
+    """
     db = get_firestore_client()
     db.collection("users").document(uid).set({"onboarding_completed": completed}, merge=True)
 
@@ -137,16 +193,44 @@ def set_onboarding_completed(uid: str, completed: bool) -> None:
 
 
 def _profile_ref(uid: str):
+    """Return the document reference for `users/{uid}/profile/main`.
+
+    Args:
+        uid (str): The Firebase Auth uid owning the profile subcollection.
+
+    Returns:
+        google.cloud.firestore.DocumentReference: Reference to the singleton profile doc.
+    """
     db = get_firestore_client()
     return db.collection("users").document(uid).collection("profile").document("main")
 
 
 def get_profile(uid: str) -> dict[str, Any] | None:
+    """Fetch the synthesized user profile doc (agent memory layer) for a user.
+
+    No ownership check is performed here; callers must verify the requesting user owns
+    `uid` before returning this data.
+
+    Args:
+        uid (str): The Firebase Auth uid owning the profile.
+
+    Returns:
+        dict[str, Any] | None: The profile document fields, or None if it doesn't exist.
+    """
     snap = _profile_ref(uid).get()
     return snap.to_dict() if snap.exists else None
 
 
 def upsert_profile(uid: str, fields: dict[str, Any]) -> dict[str, Any]:
+    """Merge fields into the user's profile doc, stamping `updated_at`.
+
+    Args:
+        uid (str): The Firebase Auth uid owning the profile.
+        fields (dict[str, Any]): Profile fields to merge into the existing document.
+
+    Returns:
+        dict[str, Any]: The full profile document after the merge, re-read from Firestore.
+    """
     ref = _profile_ref(uid)
     fields = {**fields, "updated_at": utcnow()}
     ref.set(fields, merge=True)
@@ -160,6 +244,19 @@ def upsert_profile(uid: str, fields: dict[str, Any]) -> dict[str, Any]:
 
 
 def create_curriculum(owner_uid: str, title: str, user_prompt: str, conversation_id: str) -> dict[str, Any]:
+    """Create a new `curricula/{id}` document in the initial "researching" state.
+
+    Args:
+        owner_uid (str): The Firebase Auth uid of the curriculum's owner.
+        title (str): Initial working title for the curriculum (may later be revised via
+            the `set_curriculum_title` tool).
+        user_prompt (str): The original user prompt that kicked off this curriculum.
+        conversation_id (str): The id of the conversation driving this curriculum's
+            agent run.
+
+    Returns:
+        dict[str, Any]: The newly created curriculum document, including its `id`.
+    """
     db = get_firestore_client()
     cid = new_id()
     now = utcnow()
@@ -183,6 +280,18 @@ def create_curriculum(owner_uid: str, title: str, user_prompt: str, conversation
 
 
 def get_curriculum(curriculum_id: str) -> dict[str, Any] | None:
+    """Fetch a curriculum document by id.
+
+    No ownership check is performed here; callers must verify `owner_uid` on the
+    returned document matches the requesting user before exposing it.
+
+    Args:
+        curriculum_id (str): The curriculum document id.
+
+    Returns:
+        dict[str, Any] | None: The curriculum fields (with `id` included), or None if
+            no such document exists.
+    """
     db = get_firestore_client()
     snap = db.collection("curricula").document(curriculum_id).get()
     if not snap.exists:
@@ -191,6 +300,15 @@ def get_curriculum(curriculum_id: str) -> dict[str, Any] | None:
 
 
 def list_curricula(owner_uid: str) -> list[dict[str, Any]]:
+    """List all curricula owned by a user, most recently updated first.
+
+    Args:
+        owner_uid (str): The Firebase Auth uid to filter curricula by.
+
+    Returns:
+        list[dict[str, Any]]: Curriculum documents (each with `id` included), ordered by
+            `updated_at` descending.
+    """
     db = get_firestore_client()
     query = db.collection("curricula").where("owner_uid", "==", owner_uid).order_by(
         "updated_at", direction=firestore.Query.DESCENDING
@@ -199,13 +317,33 @@ def list_curricula(owner_uid: str) -> list[dict[str, Any]]:
 
 
 def update_curriculum(curriculum_id: str, fields: dict[str, Any]) -> None:
+    """Merge fields into a curriculum document, stamping `updated_at`.
+
+    No ownership check is performed here; callers must verify the requesting user owns
+    the curriculum before calling this.
+
+    Args:
+        curriculum_id (str): The curriculum document id to update.
+        fields (dict[str, Any]): Fields to merge into the existing document.
+    """
     db = get_firestore_client()
     fields = {**fields, "updated_at": utcnow()}
     db.collection("curricula").document(curriculum_id).set(fields, merge=True)
 
 
 def delete_curriculum(curriculum_id: str) -> None:
-    """Delete a curriculum and all known subcollections (best-effort recursive delete)."""
+    """Delete a curriculum and all known subcollections (best-effort recursive delete).
+
+    Firestore does not cascade-delete subcollections automatically, so this walks each
+    known subcollection (`modules` with nested `sections`, `research`, `plan`, `state`)
+    and deletes documents individually before deleting the curriculum doc itself. No
+    ownership check is performed here; callers must verify the requesting user owns the
+    curriculum before calling this.
+
+    Args:
+        curriculum_id (str): The curriculum document id to delete, along with all of its
+            subcollections.
+    """
     db = get_firestore_client()
     curriculum_ref = db.collection("curricula").document(curriculum_id)
 
@@ -228,47 +366,134 @@ def delete_curriculum(curriculum_id: str) -> None:
 
 
 def _modules_ref(curriculum_id: str):
+    """Return the collection reference for `curricula/{curriculum_id}/modules`.
+
+    Args:
+        curriculum_id (str): The parent curriculum document id.
+
+    Returns:
+        google.cloud.firestore.CollectionReference: Reference to the modules subcollection.
+    """
     db = get_firestore_client()
     return db.collection("curricula").document(curriculum_id).collection("modules")
 
 
 def create_module(curriculum_id: str, module_id: str, fields: dict[str, Any]) -> None:
+    """Create (overwrite) a module document under a curriculum.
+
+    Args:
+        curriculum_id (str): The parent curriculum document id.
+        module_id (str): The id to assign to the new module document.
+        fields (dict[str, Any]): The full module document fields to write.
+    """
     _modules_ref(curriculum_id).document(module_id).set(fields)
 
 
 def get_module(curriculum_id: str, module_id: str) -> dict[str, Any] | None:
+    """Fetch a single module document.
+
+    Args:
+        curriculum_id (str): The parent curriculum document id.
+        module_id (str): The module document id.
+
+    Returns:
+        dict[str, Any] | None: The module fields (with `id` included), or None if it
+            doesn't exist.
+    """
     snap = _modules_ref(curriculum_id).document(module_id).get()
     return {"id": snap.id, **(snap.to_dict() or {})} if snap.exists else None
 
 
 def list_modules(curriculum_id: str) -> list[dict[str, Any]]:
+    """List all modules under a curriculum, in their defined display order.
+
+    Args:
+        curriculum_id (str): The parent curriculum document id.
+
+    Returns:
+        list[dict[str, Any]]: Module documents (each with `id` included), ordered by the
+            `order` field ascending.
+    """
     docs = _modules_ref(curriculum_id).order_by("order").stream()
     return [{"id": d.id, **(d.to_dict() or {})} for d in docs]
 
 
 def update_module(curriculum_id: str, module_id: str, fields: dict[str, Any]) -> None:
+    """Merge fields into an existing module document.
+
+    Args:
+        curriculum_id (str): The parent curriculum document id.
+        module_id (str): The module document id to update.
+        fields (dict[str, Any]): Fields to merge into the existing document.
+    """
     _modules_ref(curriculum_id).document(module_id).set(fields, merge=True)
 
 
 def _sections_ref(curriculum_id: str, module_id: str):
+    """Return the collection reference for a module's nested `sections` subcollection.
+
+    Args:
+        curriculum_id (str): The parent curriculum document id.
+        module_id (str): The parent module document id.
+
+    Returns:
+        google.cloud.firestore.CollectionReference: Reference to the sections subcollection.
+    """
     return _modules_ref(curriculum_id).document(module_id).collection("sections")
 
 
 def create_section(curriculum_id: str, module_id: str, section_id: str, fields: dict[str, Any]) -> None:
+    """Create (overwrite) a section document under a module.
+
+    Args:
+        curriculum_id (str): The top-level curriculum document id.
+        module_id (str): The parent module document id.
+        section_id (str): The id to assign to the new section document.
+        fields (dict[str, Any]): The full section document fields to write.
+    """
     _sections_ref(curriculum_id, module_id).document(section_id).set(fields)
 
 
 def get_section(curriculum_id: str, module_id: str, section_id: str) -> dict[str, Any] | None:
+    """Fetch a single section document.
+
+    Args:
+        curriculum_id (str): The top-level curriculum document id.
+        module_id (str): The parent module document id.
+        section_id (str): The section document id.
+
+    Returns:
+        dict[str, Any] | None: The section fields (with `id` included), or None if it
+            doesn't exist.
+    """
     snap = _sections_ref(curriculum_id, module_id).document(section_id).get()
     return {"id": snap.id, **(snap.to_dict() or {})} if snap.exists else None
 
 
 def list_sections(curriculum_id: str, module_id: str) -> list[dict[str, Any]]:
+    """List all sections under a module, in their defined display order.
+
+    Args:
+        curriculum_id (str): The top-level curriculum document id.
+        module_id (str): The parent module document id.
+
+    Returns:
+        list[dict[str, Any]]: Section documents (each with `id` included), ordered by
+            the `order` field ascending.
+    """
     docs = _sections_ref(curriculum_id, module_id).order_by("order").stream()
     return [{"id": d.id, **(d.to_dict() or {})} for d in docs]
 
 
 def update_section(curriculum_id: str, module_id: str, section_id: str, fields: dict[str, Any]) -> None:
+    """Merge fields into an existing section document.
+
+    Args:
+        curriculum_id (str): The top-level curriculum document id.
+        module_id (str): The parent module document id.
+        section_id (str): The section document id to update.
+        fields (dict[str, Any]): Fields to merge into the existing document.
+    """
     _sections_ref(curriculum_id, module_id).document(section_id).set(fields, merge=True)
 
 
@@ -278,16 +503,41 @@ def update_section(curriculum_id: str, module_id: str, section_id: str, fields: 
 
 
 def _plan_ref(curriculum_id: str):
+    """Return the document reference for `curricula/{curriculum_id}/plan/main`.
+
+    Args:
+        curriculum_id (str): The parent curriculum document id.
+
+    Returns:
+        google.cloud.firestore.DocumentReference: Reference to the singleton plan doc
+            used by the `propose_task_plan` HITL flow.
+    """
     db = get_firestore_client()
     return db.collection("curricula").document(curriculum_id).collection("plan").document("main")
 
 
 def get_plan(curriculum_id: str) -> dict[str, Any] | None:
+    """Fetch the task plan document proposed by the agent for a curriculum.
+
+    Args:
+        curriculum_id (str): The parent curriculum document id.
+
+    Returns:
+        dict[str, Any] | None: The plan document fields, or None if no plan has been
+            proposed yet.
+    """
     snap = _plan_ref(curriculum_id).get()
     return snap.to_dict() if snap.exists else None
 
 
 def set_plan(curriculum_id: str, fields: dict[str, Any]) -> None:
+    """Merge fields into the curriculum's task plan document.
+
+    Args:
+        curriculum_id (str): The parent curriculum document id.
+        fields (dict[str, Any]): Plan fields to merge into the existing document (e.g.
+            tasks, approval status).
+    """
     _plan_ref(curriculum_id).set(fields, merge=True)
 
 
@@ -297,11 +547,31 @@ def set_plan(curriculum_id: str, fields: dict[str, Any]) -> None:
 
 
 def _research_ref(curriculum_id: str):
+    """Return the collection reference for `curricula/{curriculum_id}/research`.
+
+    Args:
+        curriculum_id (str): The parent curriculum document id.
+
+    Returns:
+        google.cloud.firestore.CollectionReference: Reference to the research notes
+            subcollection (pulled on demand by agent tools, never injected wholesale
+            into the LLM context — see the memory-layers note in the root CLAUDE.md).
+    """
     db = get_firestore_client()
     return db.collection("curricula").document(curriculum_id).collection("research")
 
 
 def create_research_note(curriculum_id: str, fields: dict[str, Any]) -> str:
+    """Append a new research note (with citation/URL fields) to a curriculum.
+
+    Args:
+        curriculum_id (str): The parent curriculum document id.
+        fields (dict[str, Any]): Note fields to store (expected to include source URLs
+            per the citation requirements in the root CLAUDE.md).
+
+    Returns:
+        str: The generated id of the newly created research note document.
+    """
     note_id = new_id()
     fields = {**fields, "created_at": utcnow()}
     _research_ref(curriculum_id).document(note_id).set(fields)
@@ -309,6 +579,15 @@ def create_research_note(curriculum_id: str, fields: dict[str, Any]) -> str:
 
 
 def list_research_notes(curriculum_id: str) -> list[dict[str, Any]]:
+    """List all research notes for a curriculum in creation order.
+
+    Args:
+        curriculum_id (str): The parent curriculum document id.
+
+    Returns:
+        list[dict[str, Any]]: Research note documents (each with `id` included), ordered
+            by `created_at` ascending.
+    """
     docs = _research_ref(curriculum_id).order_by("created_at").stream()
     return [{"id": d.id, **(d.to_dict() or {})} for d in docs]
 
@@ -319,16 +598,43 @@ def list_research_notes(curriculum_id: str) -> list[dict[str, Any]]:
 
 
 def _state_ref(curriculum_id: str):
+    """Return the document reference for `curricula/{curriculum_id}/state/main`.
+
+    Args:
+        curriculum_id (str): The parent curriculum document id.
+
+    Returns:
+        google.cloud.firestore.DocumentReference: Reference to the singleton agent
+            working-state doc, used to persist ReAct loop state across HITL pauses/resumes.
+    """
     db = get_firestore_client()
     return db.collection("curricula").document(curriculum_id).collection("state").document("main")
 
 
 def get_agent_state(curriculum_id: str) -> dict[str, Any] | None:
+    """Fetch the persisted agent working-state doc for a curriculum's ReAct loop.
+
+    Args:
+        curriculum_id (str): The parent curriculum document id.
+
+    Returns:
+        dict[str, Any] | None: The agent state fields, or None if no run has persisted
+            state yet.
+    """
     snap = _state_ref(curriculum_id).get()
     return snap.to_dict() if snap.exists else None
 
 
 def set_agent_state(curriculum_id: str, fields: dict[str, Any]) -> None:
+    """Merge fields into the agent working-state doc, stamping `updated_at`.
+
+    Called when the ReAct loop pauses (e.g. for `propose_task_plan` or
+    `request_user_input`) so the run can be resumed on the next WS frame.
+
+    Args:
+        curriculum_id (str): The parent curriculum document id.
+        fields (dict[str, Any]): State fields to merge into the existing document.
+    """
     fields = {**fields, "updated_at": utcnow()}
     _state_ref(curriculum_id).set(fields, merge=True)
 
@@ -339,6 +645,17 @@ def set_agent_state(curriculum_id: str, fields: dict[str, Any]) -> None:
 
 
 def create_conversation(owner_uid: str, title: str, curriculum_id: str | None) -> dict[str, Any]:
+    """Create a new `conversations/{id}` document.
+
+    Args:
+        owner_uid (str): The Firebase Auth uid of the conversation's owner.
+        title (str): Initial title for the conversation.
+        curriculum_id (str | None): The curriculum this conversation drives, if any (a
+            conversation can exist briefly before a curriculum is created).
+
+    Returns:
+        dict[str, Any]: The newly created conversation document, including its `id`.
+    """
     db = get_firestore_client()
     conv_id = new_id()
     now = utcnow()
@@ -357,6 +674,18 @@ def create_conversation(owner_uid: str, title: str, curriculum_id: str | None) -
 
 
 def get_conversation(conversation_id: str) -> dict[str, Any] | None:
+    """Fetch a conversation document by id.
+
+    No ownership check is performed here; callers must verify `owner_uid` on the
+    returned document matches the requesting user before exposing it.
+
+    Args:
+        conversation_id (str): The conversation document id.
+
+    Returns:
+        dict[str, Any] | None: The conversation fields (with `id` included), or None if
+            no such document exists.
+    """
     db = get_firestore_client()
     snap = db.collection("conversations").document(conversation_id).get()
     if not snap.exists:
@@ -365,6 +694,15 @@ def get_conversation(conversation_id: str) -> dict[str, Any] | None:
 
 
 def list_conversations(owner_uid: str) -> list[dict[str, Any]]:
+    """List all conversations owned by a user, most recently updated first.
+
+    Args:
+        owner_uid (str): The Firebase Auth uid to filter conversations by.
+
+    Returns:
+        list[dict[str, Any]]: Conversation documents (each with `id` included), ordered
+            by `updated_at` descending.
+    """
     db = get_firestore_client()
     query = (
         db.collection("conversations")
@@ -375,13 +713,30 @@ def list_conversations(owner_uid: str) -> list[dict[str, Any]]:
 
 
 def update_conversation(conversation_id: str, fields: dict[str, Any]) -> None:
+    """Merge fields into a conversation document, stamping `updated_at`.
+
+    No ownership check is performed here; callers must verify the requesting user owns
+    the conversation before calling this.
+
+    Args:
+        conversation_id (str): The conversation document id to update.
+        fields (dict[str, Any]): Fields to merge into the existing document.
+    """
     db = get_firestore_client()
     fields = {**fields, "updated_at": utcnow()}
     db.collection("conversations").document(conversation_id).set(fields, merge=True)
 
 
 def delete_conversation(conversation_id: str) -> None:
-    """Delete a conversation and its `messages` subcollection (best-effort recursive delete)."""
+    """Delete a conversation and its `messages` subcollection (best-effort recursive delete).
+
+    No ownership check is performed here; callers must verify the requesting user owns
+    the conversation before calling this.
+
+    Args:
+        conversation_id (str): The conversation document id to delete, along with all
+            of its messages.
+    """
     db = get_firestore_client()
     conversation_ref = db.collection("conversations").document(conversation_id)
 
@@ -392,12 +747,29 @@ def delete_conversation(conversation_id: str) -> None:
 
 
 def _messages_ref(conversation_id: str):
+    """Return the collection reference for `conversations/{conversation_id}/messages`.
+
+    Args:
+        conversation_id (str): The parent conversation document id.
+
+    Returns:
+        google.cloud.firestore.CollectionReference: Reference to the messages subcollection.
+    """
     db = get_firestore_client()
     return db.collection("conversations").document(conversation_id).collection("messages")
 
 
 def append_message(conversation_id: str, fields: dict[str, Any]) -> dict[str, Any]:
-    """Append a message with a fresh monotonic `seq`, returning the stored doc."""
+    """Append a message with a fresh monotonic `seq`, returning the stored doc.
+
+    Args:
+        conversation_id (str): The parent conversation document id.
+        fields (dict[str, Any]): Message fields to store (role, content, etc.).
+
+    Returns:
+        dict[str, Any]: The stored message document, including its generated `id`,
+            assigned `seq`, and `created_at` timestamp.
+    """
     db = get_firestore_client()
     msg_id = new_id()
     coll = _messages_ref(conversation_id)
@@ -410,15 +782,45 @@ def append_message(conversation_id: str, fields: dict[str, Any]) -> dict[str, An
 
 
 def update_message(conversation_id: str, message_id: str, fields: dict[str, Any]) -> None:
+    """Merge fields into an existing message document.
+
+    Args:
+        conversation_id (str): The parent conversation document id.
+        message_id (str): The message document id to update.
+        fields (dict[str, Any]): Fields to merge into the existing document.
+    """
     _messages_ref(conversation_id).document(message_id).set(fields, merge=True)
 
 
 def list_messages(conversation_id: str) -> list[dict[str, Any]]:
+    """List all messages in a conversation in chronological order.
+
+    Args:
+        conversation_id (str): The parent conversation document id.
+
+    Returns:
+        list[dict[str, Any]]: Message documents (each with `id` included), ordered by
+            `seq` ascending.
+    """
     docs = _messages_ref(conversation_id).order_by("seq").stream()
     return [{"id": d.id, **(d.to_dict() or {})} for d in docs]
 
 
 def list_recent_messages(conversation_id: str, limit: int) -> list[dict[str, Any]]:
+    """List the most recent messages in a conversation, in chronological order.
+
+    Fetches the last `limit` messages by querying in descending `seq` order (cheapest
+    way to get the tail of the conversation) and then reverses the result back into
+    chronological order for callers.
+
+    Args:
+        conversation_id (str): The parent conversation document id.
+        limit (int): Maximum number of most-recent messages to return.
+
+    Returns:
+        list[dict[str, Any]]: Up to `limit` message documents (each with `id` included),
+            ordered by `seq` ascending (oldest of the recent batch first).
+    """
     docs = (
         _messages_ref(conversation_id)
         .order_by("seq", direction=firestore.Query.DESCENDING)

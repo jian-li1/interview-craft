@@ -71,10 +71,30 @@ class Settings(BaseSettings):
 
     @property
     def is_production(self) -> bool:
+        """Report whether the app is running in the production environment.
+
+        Returns:
+            bool: True if `app_env` is "production", False otherwise (e.g. "development").
+        """
         return self.app_env == "production"
 
 
 @lru_cache
 def get_settings() -> Settings:
-    """Return the process-wide cached Settings instance."""
+    """Return the process-wide cached Settings instance.
+
+    `lru_cache` ensures the environment is parsed into a `Settings` instance exactly once
+    per process; all callers (including FastAPI `Depends(get_settings)`) share the same
+    object. Because `session_jwt_secret` and `google_oauth_client_id` have no default,
+    the first call (typically at import time of `app.main`) raises a pydantic
+    `ValidationError` immediately if either is unset — a deliberate fail-fast so missing
+    secrets are never silently defaulted.
+
+    Returns:
+        Settings: The singleton settings instance sourced from environment / `.env` file.
+
+    Raises:
+        pydantic.ValidationError: If a required setting (e.g. `session_jwt_secret`,
+            `google_oauth_client_id`) is missing from the environment.
+    """
     return Settings()  # type: ignore[call-arg]

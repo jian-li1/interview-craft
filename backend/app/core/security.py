@@ -45,8 +45,24 @@ class InvalidSessionTokenError(Exception):
 def verify_google_id_token(id_token_str: str, settings: Settings) -> GoogleUserInfo:
     """Verify a Google Identity Services ID token server-side.
 
-    Checks signature, expiry, audience (== GOOGLE_OAUTH_CLIENT_ID) and issuer.
-    Raises InvalidGoogleTokenError on any failure.
+    Checks signature, expiry, audience (== GOOGLE_OAUTH_CLIENT_ID) and issuer. This is the
+    only point where the backend trusts a Google-issued token; everything downstream
+    (session cookie, Firestore user doc) is derived from the verified claims, never from
+    unverified client input.
+
+    Args:
+        id_token_str (str): The raw Google ID token (JWT) obtained from Google Identity
+            Services on the frontend.
+        settings (Settings): Application settings, used for the expected OAuth client id
+            (audience).
+
+    Returns:
+        GoogleUserInfo: The verified subject id, email, display name, and optional
+            picture URL extracted from the token claims.
+
+    Raises:
+        InvalidGoogleTokenError: If the token fails google-auth's signature/expiry/audience
+            checks, has an unexpected issuer, or is missing the `sub`/`email` claims.
     """
     try:
         claims = google_id_token.verify_oauth2_token(
@@ -57,6 +73,9 @@ def verify_google_id_token(id_token_str: str, settings: Settings) -> GoogleUserI
     except Exception as exc:  # google-auth raises several exception types
         raise InvalidGoogleTokenError(str(exc)) from exc
 
+    # Defense in depth: verify_oauth2_token already validates signature/expiry/audience,
+    # but we additionally pin the issuer to Google's two known values to reject tokens
+    # from any other (even validly-signed) issuer.
     issuer = claims.get("iss")
     if issuer not in ("accounts.google.com", "https://accounts.google.com"):
         raise InvalidGoogleTokenError(f"unexpected issuer: {issuer}")
@@ -75,7 +94,22 @@ def verify_google_id_token(id_token_str: str, settings: Settings) -> GoogleUserI
 
 
 def create_session_jwt(uid: str, settings: Settings) -> str:
-    """Mint a signed session JWT carrying {sub: uid, exp}."""
+    """Mint a signed session JWT carrying {sub: uid, exp}.
+
+    This is the backend's own credential, issued after a Google ID token has been
+    verified; it is what gets stored in the `ic_session` httpOnly cookie and used to
+    authenticate all subsequent requests, so the frontend never needs to re-present the
+    Google token.
+
+    Args:
+        uid (str): The user's stable unique identifier (the Google `sub` claim), used as
+            the JWT `sub` claim.
+        settings (Settings): Application settings, providing the signing secret and
+            expiry duration.
+
+    Returns:
+        str: The encoded, signed JWT string.
+    """
     now = dt.datetime.now(dt.timezone.utc)
     payload = {
         "sub": uid,
@@ -88,7 +122,18 @@ def create_session_jwt(uid: str, settings: Settings) -> str:
 def decode_session_jwt(token: str, settings: Settings) -> str:
     """Decode and validate a session JWT, returning the uid (`sub` claim).
 
-    Raises InvalidSessionTokenError on any validation failure.
+    Args:
+        token (str): The session JWT, typically read from the `ic_session` cookie (or
+            the WebSocket `?token=` query-param fallback).
+        settings (Settings): Application settings, providing the signing secret used to
+            verify the token's signature.
+
+    Returns:
+        str: The user id (`sub` claim) encoded in the token.
+
+    Raises:
+        InvalidSessionTokenError: If the token is missing, malformed, expired, has an
+            invalid signature, or lacks a `sub` claim.
     """
     try:
         payload = jwt.decode(token, settings.session_jwt_secret, algorithms=[_JWT_ALGORITHM])

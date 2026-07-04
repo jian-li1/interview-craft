@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/Button";
 import { ProductMock } from "@/components/landing/ProductMock";
 import { useRouter } from "next/navigation";
 
+/** Landing page section: above-the-fold hero with headline, CTA buttons (both route to /login), and the `ProductMock` illustration. */
 export function Hero() {
   const router = useRouter();
   return (

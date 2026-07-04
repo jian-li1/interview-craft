@@ -8,6 +8,15 @@ import { settingsApi, ApiError } from "@/lib/api";
 import type { UserSettings } from "@/lib/types";
 import { Loader2 } from "lucide-react";
 
+/**
+ * Settings tab: per-user provider overrides (LLM_PROVIDER / SEARCH_PROVIDER
+ * equivalents), fetched via `settingsApi.get()` and persisted field-by-field
+ * through `settingsApi.update()` on change (each `<Select>`'s `onChange`
+ * calls `save()` with just the changed key, which is optimistically merged
+ * into local state before the request resolves). An empty option value
+ * means "use the server default" (sent as `null`), leaving the provider
+ * unset for that user.
+ */
 export function PreferencesTab() {
   const [settings, setSettings] = useState<UserSettings | null>(null);
   const [saving, setSaving] = useState(false);
