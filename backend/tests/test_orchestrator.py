@@ -186,6 +186,94 @@ async def test_run_turn_applies_plan_decision_approve_and_materializes(monkeypat
     modules = fake_fs.fs.list_modules(curriculum["id"])
     assert any(m["id"] == "m1" for m in modules)
 
+    curriculum_updated_events = [e for e in events if e["type"] == "curriculum_updated"]
+    assert len(curriculum_updated_events) == 1
+    assert curriculum_updated_events[0] == {
+        "type": "curriculum_updated",
+        "curriculum_id": curriculum["id"],
+        "scope": "curriculum",
+    }
+
+
+@pytest.mark.asyncio
+async def test_plan_decision_approve_appends_system_message_with_approved(monkeypatch, fake_fs, orchestrator):
+    conv, curriculum = _setup_conversation(fake_fs, phase="awaiting_approval")
+    fake_fs.fs.set_plan(
+        curriculum["id"],
+        {
+            "version": 2,
+            "outline_markdown": "# Outline",
+            "tasks": [{"id": "m1-s1", "title": "Intro", "module_ref": "m1", "status": "pending"}],
+            "status": "proposed",
+            "user_feedback": [],
+        },
+    )
+
+    scripted = ScriptedLLM([TextDelta(text="Great, let's get writing!"), Done()])
+    monkeypatch.setattr("app.agent.orchestrator.get_llm_provider", lambda *a, **k: scripted)
+    monkeypatch.setattr("app.agent.orchestrator.get_search_provider", lambda *a, **k: StubSearch())
+
+    async def emit(event):
+        pass
+
+    result = await orchestrator.run_turn(
+        conversation_id=conv["id"],
+        curriculum_id=curriculum["id"],
+        owner_uid="uid1",
+        user_input=PlanDecision(decision="approve", feedback=None),
+        emit=emit,
+    )
+    assert result.outcome == TurnOutcome.DONE
+
+    messages = fake_fs.fs.list_messages(conv["id"])
+    system_msgs = [m for m in messages if m["role"] == "system"]
+    assert len(system_msgs) == 1
+    assert "APPROVED" in system_msgs[0]["content"]
+    assert "v2" in system_msgs[0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_plan_decision_modify_appends_system_message_with_feedback(monkeypatch, fake_fs, orchestrator):
+    conv, curriculum = _setup_conversation(fake_fs, phase="awaiting_approval")
+    fake_fs.fs.set_plan(
+        curriculum["id"],
+        {
+            "version": 1,
+            "outline_markdown": "# Outline",
+            "tasks": [{"id": "m1-s1", "title": "Intro", "module_ref": "m1", "status": "pending"}],
+            "status": "proposed",
+            "user_feedback": [],
+        },
+    )
+
+    scripted = ScriptedLLM([TextDelta(text="Sure, let me revise the outline."), Done()])
+    monkeypatch.setattr("app.agent.orchestrator.get_llm_provider", lambda *a, **k: scripted)
+    monkeypatch.setattr("app.agent.orchestrator.get_search_provider", lambda *a, **k: StubSearch())
+
+    events = []
+
+    async def emit(event):
+        events.append(event)
+
+    result = await orchestrator.run_turn(
+        conversation_id=conv["id"],
+        curriculum_id=curriculum["id"],
+        owner_uid="uid1",
+        user_input=PlanDecision(decision="modify", feedback="Add more system design content"),
+        emit=emit,
+    )
+    assert result.outcome == TurnOutcome.DONE
+
+    messages = fake_fs.fs.list_messages(conv["id"])
+    system_msgs = [m for m in messages if m["role"] == "system"]
+    assert len(system_msgs) == 1
+    assert "Add more system design content" in system_msgs[0]["content"]
+
+    # curriculum_updated fires on modify too (harmless — keeps client status in sync).
+    curriculum_updated_events = [e for e in events if e["type"] == "curriculum_updated"]
+    assert len(curriculum_updated_events) == 1
+    assert curriculum_updated_events[0]["curriculum_id"] == curriculum["id"]
+
 
 @pytest.mark.asyncio
 async def test_run_turn_rejects_concurrent_run_on_same_conversation(monkeypatch, fake_fs, orchestrator):

@@ -72,9 +72,16 @@ async def get_curriculum_full(
 
 @router.delete("/{curriculum_id}", dependencies=[Depends(require_csrf_header)])
 async def delete_curriculum(curriculum_id: str, user: CurrentUser = Depends(get_current_user)) -> dict:
-    """Delete a curriculum (and its subcollections) if owned by the current user."""
-    get_owned_curriculum(curriculum_id, user)
+    """Delete a curriculum (and its subcollections) if owned by the current user.
+
+    Also deletes the linked conversation (and its messages) if one is set — a curriculum
+    and its conversation are 1:1, so an orphaned conversation would otherwise linger.
+    """
+    curriculum = get_owned_curriculum(curriculum_id, user)
     fs.delete_curriculum(curriculum_id)
+    conversation_id = curriculum.get("conversation_id")
+    if conversation_id:
+        fs.delete_conversation(conversation_id)
     return {"ok": True}
 
 

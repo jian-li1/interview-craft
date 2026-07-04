@@ -238,6 +238,51 @@ class WriteCurriculumOverviewTool(Tool):
         }
 
 
+class SetCurriculumTitleInput(BaseModel):
+    title: str = Field(
+        ...,
+        max_length=80,
+        description=(
+            "Concise, descriptive, human-friendly curriculum title (<=80 chars), e.g. "
+            "'Google SWE Interview Prep — 3-Week Plan'. Avoid generic titles like "
+            "'Interview Prep' when there is enough signal to be specific."
+        ),
+    )
+    emoji: str | None = Field(
+        None, description="A single fitting emoji representing the curriculum, if you have one."
+    )
+
+
+class SetCurriculumTitleTool(Tool):
+    name = "set_curriculum_title"
+    description = (
+        "Set (or rename) the curriculum's display title and optionally its emoji. Call this "
+        "as one of your FIRST actions during intake to replace the placeholder title derived "
+        "from the user's raw prompt with a concise, specific, human-friendly name — e.g. "
+        "'Google Software Engineer Interview Prep' rather than a truncated copy of what the "
+        "user typed. Updates both the curriculum document and the conversation's sidebar/"
+        "dashboard title so they stay in sync. Can also be called later (e.g. during "
+        "refinement) if the user asks to rename the curriculum."
+    )
+    input_model = SetCurriculumTitleInput
+
+    async def execute(self, input: SetCurriculumTitleInput, ctx: AgentContext) -> dict[str, Any]:
+        curriculum_fields: dict[str, Any] = {"title": input.title}
+        if input.emoji:
+            curriculum_fields["emoji"] = input.emoji
+        fs.update_curriculum(ctx.curriculum_id, curriculum_fields)
+        fs.update_conversation(ctx.conversation_id, {"title": input.title})
+        return {
+            "status": "updated",
+            "title": input.title,
+            "_ws_event": {
+                "type": "curriculum_updated",
+                "curriculum_id": ctx.curriculum_id,
+                "scope": "curriculum",
+            },
+        }
+
+
 class SetModuleStatusInput(BaseModel):
     module_id: str = Field(..., description="The module id.")
     status: Literal["planned", "writing", "complete"] = Field(..., description="New status for the module.")

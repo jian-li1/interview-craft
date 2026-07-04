@@ -29,6 +29,11 @@ interface CurriculumPanelProps {
 
 type View = "workflow" | "reader";
 
+export interface ActiveSelection {
+  moduleId: string;
+  sectionId: string | null;
+}
+
 export function CurriculumPanel({ curriculumId, onExplain }: CurriculumPanelProps) {
   const curriculum = useCurriculumStore((s) => s.curriculum);
   const loading = useCurriculumStore((s) => s.loading);
@@ -39,14 +44,23 @@ export function CurriculumPanel({ curriculumId, onExplain }: CurriculumPanelProp
   const phaseLabel = useChatStore((s) => s.phaseLabel);
 
   const [view, setView] = useState<View>("workflow");
-  const [activeModuleOrder, setActiveModuleOrder] = useState<number | null>(null);
+  const [activeSelection, setActiveSelection] = useState<ActiveSelection | null>(null);
 
   useEffect(() => {
+    // Reset local view state whenever the curriculum identity changes so the
+    // reader never shows a section carried over from the previous
+    // curriculum, and the panel always lands back on the workflow view.
+    setView("workflow");
+    setActiveSelection(null);
     if (curriculumId) void fetchCurriculum(curriculumId);
   }, [curriculumId, fetchCurriculum]);
 
-  function handleSelectModule(order: number) {
-    setActiveModuleOrder(order);
+  function handleSelectModule(moduleId: string) {
+    const mod = curriculum?.modules.find((m) => m.id === moduleId);
+    const firstSection = mod
+      ? [...mod.sections].sort((a, b) => a.order - b.order)[0] ?? null
+      : null;
+    setActiveSelection({ moduleId, sectionId: firstSection?.id ?? null });
     setView("reader");
   }
 
@@ -108,7 +122,8 @@ export function CurriculumPanel({ curriculumId, onExplain }: CurriculumPanelProp
         ) : (
           <ReaderView
             curriculum={curriculum!}
-            activeModuleOrder={activeModuleOrder}
+            activeSelection={activeSelection}
+            onSelectSection={(moduleId, sectionId) => setActiveSelection({ moduleId, sectionId })}
             onExplain={onExplain}
           />
         )}

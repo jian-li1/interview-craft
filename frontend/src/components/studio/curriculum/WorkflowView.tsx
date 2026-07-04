@@ -13,16 +13,23 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { useTheme } from "next-themes";
-import { StartNode, type StartNodeType } from "@/components/studio/curriculum/nodes/StartNode";
+import {
+  StartNode,
+  START_NODE_WIDTH,
+  type StartNodeType,
+} from "@/components/studio/curriculum/nodes/StartNode";
 import { ModuleNode, type ModuleNodeType } from "@/components/studio/curriculum/nodes/ModuleNode";
 import { StatusEdge, type StatusEdgeType } from "@/components/studio/curriculum/edges/StatusEdge";
-import type { CurriculumFull } from "@/lib/types";
+import type { CurriculumFull, ModuleStatus } from "@/lib/types";
 import { useEffect } from "react";
 
 const NODE_WIDTH = 240;
-const NODE_HEIGHT = 110;
-const V_GAP = 70;
-const COLS = 2;
+// Approximate rendered height of a ModuleNode card (title row + status pill +
+// meta row, with padding) — used only so the MiniMap can draw node rects
+// without waiting on DOM measurement (see WorkflowView minimap notes below).
+const NODE_HEIGHT = 132;
+const START_NODE_HEIGHT = 64;
+const H_GAP = 80;
 
 const nodeTypes: NodeTypes = {
   start: StartNode,
@@ -35,15 +42,17 @@ const edgeTypes: EdgeTypes = {
 
 interface WorkflowViewProps {
   curriculum: CurriculumFull;
-  onSelectModule: (order: number) => void;
+  onSelectModule: (moduleId: string) => void;
 }
 
-function buildLayout(curriculum: CurriculumFull, onSelectModule: (order: number) => void) {
+function buildLayout(curriculum: CurriculumFull, onSelectModule: (moduleId: string) => void) {
   const nodes: (StartNodeType | ModuleNodeType)[] = [
     {
       id: "start",
       type: "start",
-      position: { x: (NODE_WIDTH * COLS) / 2 - NODE_WIDTH / 2, y: 0 },
+      position: { x: 0, y: 0 },
+      width: START_NODE_WIDTH,
+      height: START_NODE_HEIGHT,
       data: { title: curriculum.title, emoji: curriculum.emoji },
     },
   ];
@@ -52,19 +61,20 @@ function buildLayout(curriculum: CurriculumFull, onSelectModule: (order: number)
   const modules = [...curriculum.modules].sort((a, b) => a.order - b.order);
 
   modules.forEach((mod, i) => {
-    // Serpentine layout: alternate left/right column per row.
-    const row = Math.floor(i / COLS);
-    const colIndex = i % COLS;
-    const rowReversed = row % 2 === 1;
-    const col = rowReversed ? COLS - 1 - colIndex : colIndex;
-    const x = col * (NODE_WIDTH + 40);
-    const y = (row + 1) * (NODE_HEIGHT + V_GAP);
+    // Single horizontal row, left to right: start node occupies
+    // [0, START_NODE_WIDTH], then each module one step further right so the
+    // animated status edges read clearly.
+    const x = START_NODE_WIDTH + H_GAP + i * (NODE_WIDTH + H_GAP);
+    const y = 0;
 
     nodes.push({
       id: mod.id,
       type: "module",
       position: { x, y },
+      width: NODE_WIDTH,
+      height: NODE_HEIGHT,
       data: {
+        id: mod.id,
         order: mod.order,
         title: mod.title,
         status: mod.status,
@@ -85,6 +95,18 @@ function buildLayout(curriculum: CurriculumFull, onSelectModule: (order: number)
   });
 
   return { nodes, edges };
+}
+
+const MINIMAP_STATUS_COLOR: Record<ModuleStatus, string> = {
+  planned: "var(--muted-foreground)",
+  writing: "var(--accent)",
+  complete: "var(--success)",
+};
+
+function minimapNodeColor(node: { type?: string; data?: unknown }): string {
+  if (node.type === "start") return "var(--accent)";
+  const status = (node.data as { status?: ModuleStatus } | undefined)?.status;
+  return status ? MINIMAP_STATUS_COLOR[status] : "var(--muted-foreground)";
 }
 
 function WorkflowInner({ curriculum, onSelectModule }: WorkflowViewProps) {
@@ -120,7 +142,11 @@ function WorkflowInner({ curriculum, onSelectModule }: WorkflowViewProps) {
         pannable
         zoomable
         className="!bg-card"
-        maskColor="rgba(0,0,0,0.08)"
+        nodeColor={minimapNodeColor}
+        nodeStrokeColor={() => "var(--border)"}
+        nodeStrokeWidth={2}
+        nodeBorderRadius={6}
+        maskColor="color-mix(in srgb, var(--background) 65%, transparent)"
       />
     </ReactFlow>
   );

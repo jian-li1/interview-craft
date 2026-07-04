@@ -4,9 +4,6 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { LayoutGrid, PlusCircle, Settings, Sparkles, X } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { conversationsApi } from "@/lib/api";
-import { toast } from "sonner";
-import { useState } from "react";
 
 const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutGrid },
@@ -16,19 +13,10 @@ const navItems = [
 export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname();
   const router = useRouter();
-  const [creating, setCreating] = useState(false);
 
-  async function handleNewCurriculum() {
-    setCreating(true);
-    try {
-      const { conversation_id } = await conversationsApi.create({ curriculum_prompt: null });
-      onNavigate?.();
-      router.push(`/studio/${conversation_id}`);
-    } catch {
-      toast.error("Couldn't start a new curriculum. Please try again.");
-    } finally {
-      setCreating(false);
-    }
+  function handleNewCurriculum() {
+    onNavigate?.();
+    router.push("/dashboard");
   }
 
   return (
@@ -43,8 +31,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
       <button
         type="button"
         onClick={handleNewCurriculum}
-        disabled={creating}
-        className="flex items-center gap-2 rounded-lg bg-primary px-3 py-2.5 text-sm font-medium text-primary-foreground shadow-sm transition-opacity hover:opacity-90 disabled:opacity-60"
+        className="flex items-center gap-2 rounded-lg bg-primary px-3 py-2.5 text-sm font-medium text-primary-foreground shadow-sm transition-opacity hover:opacity-90"
       >
         <PlusCircle className="h-4 w-4" aria-hidden="true" />
         New curriculum

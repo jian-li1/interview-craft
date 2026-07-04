@@ -52,15 +52,20 @@ export function ChipInput({
         className
       )}
     >
-      {values.map((value) => (
+      {values.map((value, index) => (
         <span
-          key={value}
+          key={`${value}-${index}`}
+          onMouseDown={(e) => e.preventDefault()}
           className="inline-flex items-center gap-1 rounded-full bg-accent-soft px-2.5 py-1 text-xs font-medium text-accent"
         >
           {value}
           <button
             type="button"
-            onClick={() => onChange(values.filter((v) => v !== value))}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={(e) => {
+              e.stopPropagation();
+              onChange(values.filter((_, i) => i !== index));
+            }}
             aria-label={`Remove ${value}`}
             className="rounded-full hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           >

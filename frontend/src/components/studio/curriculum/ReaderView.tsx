@@ -2,14 +2,24 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { CheckCircle2, ChevronDown, Circle, List, Loader2 } from "lucide-react";
+import {
+  CheckCircle2,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  Circle,
+  List,
+  Loader2,
+} from "lucide-react";
 import { SectionContent } from "@/components/studio/curriculum/SectionContent";
 import { cn } from "@/lib/utils";
-import type { CurriculumFull, ModuleStatus, SectionStatus } from "@/lib/types";
+import type { CurriculumFull, ModuleOut, ModuleStatus, SectionOut, SectionStatus } from "@/lib/types";
+import type { ActiveSelection } from "@/components/studio/curriculum/CurriculumPanel";
 
 interface ReaderViewProps {
   curriculum: CurriculumFull;
-  activeModuleOrder: number | null;
+  activeSelection: ActiveSelection | null;
+  onSelectSection: (moduleId: string, sectionId: string | null) => void;
   onExplain: (prompt: string) => void;
 }
 
@@ -25,29 +35,45 @@ function statusClasses(status: ModuleStatus | SectionStatus): string {
   return "text-muted-foreground";
 }
 
+interface FlatEntry {
+  module: ModuleOut;
+  section: SectionOut | null;
+}
+
 /**
  * Reader view: a left mini-TOC (modules -> sections, with status icons) and a
- * scrollable content area rendering each section's markdown. Selecting a TOC
- * entry scrolls the corresponding section into view.
+ * single-section content pane. Selecting a TOC entry (or a Prev/Next button)
+ * changes which section is shown — no scrolling within a long document.
  */
-export function ReaderView({ curriculum, activeModuleOrder, onExplain }: ReaderViewProps) {
+export function ReaderView({
+  curriculum,
+  activeSelection,
+  onSelectSection,
+  onExplain,
+}: ReaderViewProps) {
   const modules = useMemo(
     () => [...curriculum.modules].sort((a, b) => a.order - b.order),
     [curriculum.modules]
   );
-  const [activeSectionId, setActiveSectionId] = useState<string | null>(null);
-  const [activeModuleId, setActiveModuleId] = useState<string | null>(null);
+
+  // Flattened module/section order used for prev/next traversal and for
+  // resolving the active selection to a concrete (module, section) pair.
+  const flat = useMemo<FlatEntry[]>(() => {
+    const entries: FlatEntry[] = [];
+    for (const mod of modules) {
+      const sections = [...mod.sections].sort((a, b) => a.order - b.order);
+      if (sections.length === 0) {
+        entries.push({ module: mod, section: null });
+      } else {
+        for (const sec of sections) entries.push({ module: mod, section: sec });
+      }
+    }
+    return entries;
+  }, [modules]);
+
   const [tocOpen, setTocOpen] = useState(false);
   const tocRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (activeModuleOrder == null) return;
-    const mod = modules.find((m) => m.order === activeModuleOrder);
-    if (!mod) return;
-    setActiveModuleId(mod.id);
-    const el = document.getElementById(`module-${mod.id}`);
-    el?.scrollIntoView({ behavior: "smooth", block: "start" });
-  }, [activeModuleOrder, modules]);
+  const contentRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!tocOpen) return;
@@ -58,17 +84,36 @@ export function ReaderView({ curriculum, activeModuleOrder, onExplain }: ReaderV
     return () => document.removeEventListener("mousedown", onClick);
   }, [tocOpen]);
 
-  function scrollToSection(sectionId: string, moduleId: string) {
-    setActiveSectionId(sectionId);
-    setActiveModuleId(moduleId);
-    setTocOpen(false);
-    document.getElementById(`section-${sectionId}`)?.scrollIntoView({
-      behavior: "smooth",
-      block: "start",
-    });
-  }
+  // Resolve the active index within `flat`, falling back gracefully when the
+  // selection is null, or points at a module/section that no longer exists
+  // (e.g. after a refetch) — default to the very first entry.
+  const activeIndex = useMemo(() => {
+    if (activeSelection) {
+      const idx = flat.findIndex((e) => {
+        if (e.module.id !== activeSelection.moduleId) return false;
+        if (activeSelection.sectionId == null) return e.section == null;
+        return e.section?.id === activeSelection.sectionId;
+      });
+      if (idx !== -1) return idx;
+      // Selection's module still exists but the exact section vanished —
+      // land on that module's first entry instead of jumping away entirely.
+      const modIdx = flat.findIndex((e) => e.module.id === activeSelection.moduleId);
+      if (modIdx !== -1) return modIdx;
+    }
+    return 0;
+  }, [activeSelection, flat]);
 
-  const currentModule = modules.find((m) => m.id === activeModuleId) ?? modules[0] ?? null;
+  const current = flat[activeIndex] ?? null;
+
+  // Reset content scroll position to top whenever the active section changes.
+  useEffect(() => {
+    contentRef.current?.scrollTo({ top: 0 });
+  }, [current?.module.id, current?.section?.id]);
+
+  function select(moduleId: string, sectionId: string | null) {
+    onSelectSection(moduleId, sectionId);
+    setTocOpen(false);
+  }
 
   if (modules.length === 0) {
     return (
@@ -78,13 +123,24 @@ export function ReaderView({ curriculum, activeModuleOrder, onExplain }: ReaderV
     );
   }
 
+  const prevEntry = activeIndex > 0 ? flat[activeIndex - 1] : null;
+  const nextEntry = activeIndex < flat.length - 1 ? flat[activeIndex + 1] : null;
+
   const tocList = (
     <ul className="space-y-3">
       {modules.map((mod) => {
         const ModIcon = STATUS_ICON[mod.status];
+        const isActiveModule = current?.module.id === mod.id;
         return (
           <li key={mod.id}>
-            <div className="flex items-center gap-1.5 text-xs font-semibold">
+            <button
+              type="button"
+              onClick={() => select(mod.id, [...mod.sections].sort((a, b) => a.order - b.order)[0]?.id ?? null)}
+              className={cn(
+                "flex w-full items-center gap-1.5 rounded-md px-1 py-0.5 text-left text-xs font-semibold hover:bg-muted",
+                isActiveModule && mod.sections.length === 0 && "text-accent"
+              )}
+            >
               <ModIcon
                 className={cn("h-3.5 w-3.5 shrink-0", statusClasses(mod.status), mod.status === "writing" && "animate-spin")}
                 aria-hidden="true"
@@ -92,21 +148,22 @@ export function ReaderView({ curriculum, activeModuleOrder, onExplain }: ReaderV
               <span className="truncate">
                 {mod.order}. {mod.title}
               </span>
-            </div>
+            </button>
             {mod.sections.length > 0 && (
               <ul className="mt-1.5 space-y-1 border-l border-border pl-4">
                 {[...mod.sections]
                   .sort((a, b) => a.order - b.order)
                   .map((sec) => {
                     const SecIcon = STATUS_ICON[sec.status];
+                    const isActive = current?.section?.id === sec.id;
                     return (
                       <li key={sec.id}>
                         <button
                           type="button"
-                          onClick={() => scrollToSection(sec.id, mod.id)}
+                          onClick={() => select(mod.id, sec.id)}
                           className={cn(
                             "flex w-full items-center gap-1.5 truncate rounded-md px-1.5 py-1 text-left text-xs text-muted-foreground hover:bg-muted hover:text-foreground",
-                            activeSectionId === sec.id && "bg-accent-soft text-accent"
+                            isActive && "bg-accent-soft text-accent"
                           )}
                         >
                           <SecIcon
@@ -125,6 +182,9 @@ export function ReaderView({ curriculum, activeModuleOrder, onExplain }: ReaderV
       })}
     </ul>
   );
+
+  const currentModule = current?.module ?? null;
+  const currentSection = current?.section ?? null;
 
   return (
     <div className="flex h-full min-h-0 flex-col lg:flex-row">
@@ -171,53 +231,86 @@ export function ReaderView({ curriculum, activeModuleOrder, onExplain }: ReaderV
         {tocList}
       </nav>
 
-      {/* Content */}
-      <div className="min-w-0 flex-1 overflow-y-auto p-6 scrollbar-thin">
-        <AnimatePresence initial={false}>
-          {modules.map((mod) => (
-            <motion.section
-              key={mod.id}
-              id={`module-${mod.id}`}
+      {/* Content: one section at a time */}
+      <div ref={contentRef} className="min-w-0 flex-1 overflow-y-auto p-6 scrollbar-thin">
+        <AnimatePresence mode="wait" initial={false}>
+          {currentModule && (
+            <motion.div
+              key={`${currentModule.id}-${currentSection?.id ?? "empty"}`}
               initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.25 }}
-              className="mb-10 scroll-mt-4"
+              exit={{ opacity: 0, y: -8 }}
+              transition={{ duration: 0.2 }}
             >
               <div className="mb-4 flex items-start justify-between gap-3 border-b border-border pb-3">
                 <div>
                   <p className="text-xs font-semibold uppercase tracking-wide text-accent">
-                    Module {mod.order}
+                    Module {currentModule.order}
                   </p>
-                  <h2 className="text-xl font-semibold">{mod.title}</h2>
-                  {mod.summary && (
-                    <p className="mt-1 text-sm text-muted-foreground">{mod.summary}</p>
+                  <h2 className="text-xl font-semibold">{currentModule.title}</h2>
+                  {currentModule.summary && (
+                    <p className="mt-1 text-sm text-muted-foreground">{currentModule.summary}</p>
                   )}
                 </div>
               </div>
 
-              {mod.sections.length === 0 ? (
+              {!currentSection ? (
                 <div className="rounded-xl border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
-                  {mod.status === "planned" ? "This module hasn't been written yet." : "Writing in progress…"}
+                  {currentModule.status === "planned"
+                    ? "This module hasn't been written yet."
+                    : "Writing in progress…"}
                 </div>
               ) : (
-                [...mod.sections]
-                  .sort((a, b) => a.order - b.order)
-                  .map((sec) => (
-                    <div key={sec.id} id={`section-${sec.id}`} className="mb-8 scroll-mt-4">
-                      <h3 className="mb-2 flex items-center gap-2 text-base font-semibold">
-                        {sec.title}
-                      </h3>
-                      {sec.status === "planned" ? (
-                        <p className="text-sm text-muted-foreground">Not written yet.</p>
-                      ) : (
-                        <SectionContent section={sec} onExplain={onExplain} />
-                      )}
-                    </div>
-                  ))
+                <div className="mb-2">
+                  <h3 className="mb-2 flex items-center gap-2 text-base font-semibold">
+                    {currentSection.title}
+                  </h3>
+                  {currentSection.status === "planned" ? (
+                    <p className="text-sm text-muted-foreground">Not written yet.</p>
+                  ) : (
+                    <SectionContent section={currentSection} onExplain={onExplain} />
+                  )}
+                </div>
               )}
-            </motion.section>
-          ))}
+            </motion.div>
+          )}
         </AnimatePresence>
+
+        {/* Prev / Next section navigation */}
+        <div className="mt-8 flex items-center justify-between gap-3 border-t border-border pt-4">
+          <button
+            type="button"
+            disabled={!prevEntry}
+            onClick={() => prevEntry && select(prevEntry.module.id, prevEntry.section?.id ?? null)}
+            className={cn(
+              "flex min-w-0 max-w-[45%] items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-left text-xs font-medium transition-colors",
+              prevEntry
+                ? "text-foreground hover:bg-muted"
+                : "cursor-not-allowed text-muted-foreground/40"
+            )}
+          >
+            <ChevronLeft className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+            <span className="min-w-0 truncate">
+              {prevEntry ? prevEntry.section?.title ?? prevEntry.module.title : "Start"}
+            </span>
+          </button>
+          <button
+            type="button"
+            disabled={!nextEntry}
+            onClick={() => nextEntry && select(nextEntry.module.id, nextEntry.section?.id ?? null)}
+            className={cn(
+              "flex min-w-0 max-w-[45%] items-center justify-end gap-1.5 rounded-lg border border-border px-3 py-2 text-right text-xs font-medium transition-colors",
+              nextEntry
+                ? "text-foreground hover:bg-muted"
+                : "cursor-not-allowed text-muted-foreground/40"
+            )}
+          >
+            <span className="min-w-0 truncate">
+              {nextEntry ? nextEntry.section?.title ?? nextEntry.module.title : "End"}
+            </span>
+            <ChevronRight className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+          </button>
+        </div>
       </div>
     </div>
   );

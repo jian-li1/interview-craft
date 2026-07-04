@@ -27,6 +27,9 @@ Next.js 15 App Router + TypeScript + Tailwind v4. Conform to API/WS contracts in
 Route group `(app)` with shared authenticated layout (sidebar nav: Dashboard, New
 Curriculum, Settings; user avatar menu with logout). Auth guard: fetch `/api/auth/me` in a
 client provider; redirect to /login on 401; redirect to /onboarding when profile incomplete.
+The sidebar's "New curriculum" button does **not** call any API — it never creates a
+conversation doc — it simply navigates to /dashboard, where the PromptBox is the sole entry
+point for starting a curriculum (avoids junk empty-conversation documents).
 
 - **Landing**: hero (headline, subheadline, CTA → /login), animated product mock (stylized
   chat+workflow illustration built with divs, no images), features grid (Deep Research,
@@ -44,7 +47,9 @@ client provider; redirect to /login on 401; redirect to /onboarding when profile
   preparing for?") with example prompt chips — submitting creates a conversation
   (POST /api/conversations with the prompt) and routes to /studio/[id]; grid of curriculum
   cards (emoji, title, status badge, progress bar when generating, module count, updated
-  time, delete w/ confirm). Empty state illustration.
+  time, delete w/ confirm). Empty state illustration. The dashboard's prompt box is the
+  *only* way to create a curriculum — the sidebar's "New curriculum" button never calls the
+  API; it just navigates to /dashboard (see §2 sidebar note below).
 - **Settings**: tabs — Profile (link/embed onboarding edit), Preferences (LLM provider,
   search provider dropdowns — "server default" option), Appearance (theme), Account (email, logout).
 
@@ -71,23 +76,44 @@ nice-to-have; fixed split acceptable). Mobile: tabbed switcher.
   is running (sends `stop`), disabled states, reconnect logic with exponential backoff and
   "reconnecting…" toast.
 - History hydration: on load fetch GET /api/conversations/{id}/messages and render
-  (including persisted tool calls + reasoning as collapsed blocks).
+  (including persisted tool calls + reasoning as collapsed blocks). Messages with
+  `role: "system"` (internal bookkeeping — auto-continue nudges, plan-approval records) are
+  filtered out at the history-load boundary and never rendered in the chat UI.
 
 ### Curriculum panel
 Two views, toggle: **Workflow** and **Reader**.
-- **Workflow view (n8n-style)**: @xyflow/react canvas. Custom nodes: a Start node
-  (curriculum title + emoji), then module nodes laid out sequentially (vertical or
-  serpentine) connected by animated edges; each module node shows order badge, title,
-  status (planned=dashed border, writing=pulsing accent, complete=filled check), section
-  count, estimated minutes; clicking a module expands/navigates to Reader view at that
-  module. Section child-nodes fan out from a module (or listed inside the node card).
-  Auto-fit view; smooth node status animations as `curriculum_updated` events arrive.
-- **Reader view**: left mini-TOC (modules→sections, status icons) + content area rendering
-  section `content_markdown`: react-markdown + remark-gfm + rehype-highlight; **Mermaid**
-  code fences rendered as diagrams (client component, re-render on theme change);
-  citations: `[^n]` footnotes rendered, plus a Sources card at the section end (favicon,
-  title, url, external-link). "Explain this" affordance: selecting a section header shows
-  a button that prefills the chat composer with "Explain <section> in simpler terms".
+- **Workflow view (n8n-style)**: @xyflow/react canvas, linear left-to-right layout. Custom
+  nodes: a Start node (curriculum title + emoji) at the far left with a **fixed width**
+  (`START_NODE_WIDTH`, exported from `nodes/StartNode.tsx`) so long curriculum titles
+  truncate instead of widening the card and overlapping the first module, then module
+  nodes sorted by `order` laid out as a single horizontal row to its right (one node per
+  step, equal spacing), connected by animated edges that flow left→right; node handles are
+  `Position.Left` (target) / `Position.Right` (source) to match. Each module node shows
+  order badge, title, status (planned=dashed border, writing=pulsing accent, complete=filled
+  check), section count, estimated minutes. Clicking a module node resolves that module's
+  first section (lowest `order`) and switches to the Reader view focused there (module with
+  no sections yet: Reader still switches to that module, showing its "not written" state).
+  Auto-fit view; smooth node status animations as `curriculum_updated` events arrive. Every
+  node object also carries explicit `width`/`height` (matching its rendered card size) so
+  the `MiniMap` can draw node rectangles without depending on DOM measurement; the minimap
+  gives each node an explicit `nodeColor` keyed off status (planned=muted, writing=accent,
+  complete=success) plus a theme-aware `maskColor` (CSS custom properties, not hardcoded
+  hex) so it renders visibly in both light and dark themes.
+- **Reader view**: left mini-TOC (modules→sections, status icons) + a single-section content
+  pane — only the active module's active section is rendered at a time (not a long
+  all-sections scroll). Selecting a TOC entry (desktop nav or mobile dropdown) sets the
+  active section directly rather than scrolling to it. Content: module context header
+  (module title/order/status) above the section title + body, rendered via react-markdown +
+  remark-gfm + rehype-highlight; **Mermaid** code fences rendered as diagrams (client
+  component, re-render on theme change); citations: `[^n]` footnotes rendered, plus a
+  Sources card at the section end (favicon, title, url, external-link). `"planned"` sections
+  show a "Not written yet" placeholder. Previous/Next buttons at the bottom of the content
+  area traverse the flattened section order across module boundaries (disabled at the ends,
+  labeled with the neighboring section's title); section transitions animate via
+  AnimatePresence and reset scroll to top. If the active selection is deleted/absent after a
+  refetch, falls back to the first section. "Explain this" affordance: selecting a section
+  header shows a button that prefills the chat composer with "Explain <section> in simpler
+  terms".
 - Panel live-updates: on `curriculum_updated` refetch curriculum (SWR-style with the api
   client) and animate new/changed nodes & sections.
 - While researching/planning (no content yet): show an animated activity feed panel

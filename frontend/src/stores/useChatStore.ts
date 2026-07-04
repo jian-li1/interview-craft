@@ -9,7 +9,7 @@ import type {
 
 export interface ChatMessage {
   id: string;
-  role: MessageRole;
+  role: Exclude<MessageRole, "system">;
   content: string;
   reasoning: string | null;
   reasoningStreaming: boolean;
@@ -80,7 +80,7 @@ interface ChatState {
   pushActivity: (item: ActivityItem) => void;
 }
 
-function toChatMessage(m: MessageOut): ChatMessage {
+function toChatMessage(m: MessageOut & { role: Exclude<MessageRole, "system"> }): ChatMessage {
   return {
     id: m.id,
     role: m.role,
@@ -111,7 +111,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
   setCurriculumId: (id) => set({ curriculumId: id }),
 
   hydrateHistory: (messages) =>
-    set({ messages: messages.map(toChatMessage).sort((a, b) => a.seq - b.seq) }),
+    set({
+      // System-role messages are internal bookkeeping (auto-continue nudges,
+      // plan-approval records) and must never be rendered in the chat UI.
+      messages: messages
+        .filter(
+          (m): m is MessageOut & { role: Exclude<MessageRole, "system"> } =>
+            m.role !== "system"
+        )
+        .map(toChatMessage)
+        .sort((a, b) => a.seq - b.seq),
+    }),
 
   reset: () =>
     set({

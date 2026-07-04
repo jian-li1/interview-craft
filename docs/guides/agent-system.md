@@ -129,9 +129,8 @@ suggest — `review`'s status is still `"writing"` (from `CompletePhaseTool`'s
    - On cancellation mid-stream: flushes the splitter, still persists the partial
      assistant message (with whatever reasoning/text arrived) to Firestore before
      returning `CANCELLED` — cancellation never discards partial output.
-   - **No tool calls** → the turn is a plain-text answer: persist the assistant message,
-     emit `message_end` + `agent_done(status="ok")`, bump `iteration_count`, return
-     `DONE`.
+   - **No tool calls** → persist the assistant message, emit `message_end`, bump
+     `iteration_count`, emit `agent_done(status="ok")`, return `DONE`.
    - **Tool calls present** → for each tool call (in order): emit `tool_call_start`,
      `await registry.execute(...)`, pop any `_ws_events`/`_ws_event`/`_hitl_gate` keys
      out of the raw tool output (these are orchestrator-only signaling — never sent to
@@ -274,6 +273,15 @@ precisely or if the profile changed mid-run.
   `curriculum_updated` (no `progress` event, since this isn't task-queue-driven).
 - **`write_curriculum_overview`** — sets `overview`, `emoji`, `tags` on the curriculum
   doc; emits `curriculum_updated(scope="overview")`.
+- **`set_curriculum_title`** — `title` (<=80 chars), optional `emoji`. Always available
+  (in `_ALWAYS_AVAILABLE`, not phase-gated) so the model can call it as one of its first
+  actions in `intake` to replace the placeholder title (the raw user prompt, truncated to
+  80 chars by `POST /api/conversations`) with something concise and human-friendly. Sets
+  `curricula/{id}.title` (and `.emoji` if provided) via `fs.update_curriculum`, and also
+  `conversations/{id}.title` via `fs.update_conversation` so the sidebar/dashboard stay
+  in sync; emits `curriculum_updated(scope="curriculum")` — same event shape as
+  `write_curriculum_overview`'s, so the existing frontend refetch path handles it
+  unchanged.
 - **`set_module_status`** — bookkeeping helper to flip a module's `planned/writing/
   complete` status independent of any specific section write.
 
@@ -384,7 +392,8 @@ provider adapters expect (Gemini's adapter further translates this into its own
 Research notes are deliberately **never** part of the assembled context — they're
 retrieved only on demand via `search_research_notes`/`list_research_notes`/
 `list_curriculum_structure`/`read_section`. This is the single biggest lever keeping
-context lean during `writing`, since a curriculum can accumulate 12-25+ notes and 20+
+context lean during `writing`, since a curriculum can accumulate a large, uncapped
+number of comprehensive notes (however many the topic's coverage areas warrant) and many
 sections whose combined text would otherwise dwarf the token budget.
 
 ### Auto-compaction algorithm (`memory/compaction.py` + the tail of `build_context`)
@@ -454,12 +463,24 @@ runs synchronously before the iteration loop starts:
   exist so re-approval after a crash doesn't duplicate), computes the not-yet-`done`
   task ids as the new `task_queue`, sets agent state `phase="writing"` with
   `current_task_id` = the first queued task, and sets curriculum `status="writing"`.
+  Finally appends a synthetic `role:"system"` message via `fs.append_message` stating the
+  plan was APPROVED (with its version number), that stubs are materialized and the phase
+  is now `writing`, and instructing the model to begin the first task immediately without
+  asking for confirmation again — this is what lets the very next iteration's model turn
+  see that the approval already happened instead of re-asking the user.
 - **`modify`**: appends `feedback` (if given) to the plan's `user_feedback` list, sets
   `plan.status = "revising"`, sets agent state back to `phase="outline_planning"`, sets
-  curriculum `status="planning"`. The next iteration's `outline_planning` prompt (which
-  includes the full accumulated `user_feedback` via working memory / `get_task_plan`)
-  guides the model to revise and call `propose_task_plan` again (which auto-increments
-  `version`).
+  curriculum `status="planning"`, then appends a synthetic `role:"system"` message
+  restating the user's feedback text and instructing the model to revise the outline and
+  re-propose via `propose_task_plan`. The next iteration's `outline_planning` prompt
+  (which includes the full accumulated `user_feedback` via working memory /
+  `get_task_plan`, plus this system message) guides the model to revise and call
+  `propose_task_plan` again (which auto-increments `version`).
+
+Both branches take `conversation_id` (threaded through from `_run_turn_inner`) precisely
+so `_apply_plan_decision` can append these messages — the model has no other way to know
+a plan decision was applied, since `plan_decision` frames don't produce an ordinary chat
+message of their own.
 
 **Resuming a clarifying question**: the client just sends an ordinary
 `{"type": "user_message", "content": "..."}` frame with the user's answer — there's no
@@ -476,8 +497,8 @@ All ten files live in `backend/app/agent/prompts/` and are treated as code (per 
 |---|---|---|---|
 | `base_system.md` | 131 | Every phase (always layer 1) | Identity, the `<thinking>` ReAct convention, tool-error adaptation rules, tone, the "no fabricated citations" hard rule, the personalization mandate, phase discipline, HITL gate etiquette, scratchpad hygiene, tool-call efficiency guidance. |
 | `intake_phase.md` | 57 | `intake` | What to figure out (interview type, scope, constraints) from the user's message + profile; strict guidance on when to ask a clarifying question vs. proceed (err toward proceeding); curriculum naming; exit via `complete_phase("deep_research")`. |
-| `research_phase.md` | 105 | `deep_research` | The 6 query-diversification coverage areas (format/stages; foundational skills; real sample questions; sample answers/frameworks; prep roadmaps; company/domain specifics); source-quality heuristics; fetch-vs-skip heuristics; note-taking standards; stop criteria (12-25 notes, all relevant areas covered, diminishing returns); anti-patterns (no duplicate notes, don't retry dead ends, don't pad count with filler). |
-| `planning_phase.md` | 91 | `outline_planning`, `awaiting_approval` | The beginner→interview-ready module arc (foundations → core skills → question drills → mock/strategy); sizing guidance (4-8 modules × 3-6 sections, every module needs a sample-Q&A section); task-plan field contract; how `propose_task_plan` behaves as a HITL gate; how to incorporate `modify` feedback on revision (read all feedback, targeted changes, top-up research if needed). |
+| `research_phase.md` | ~115 | `deep_research` | The 6 query-diversification coverage areas (format/stages; foundational skills; real sample questions; sample answers/frameworks; prep roadmaps; company/domain specifics); source-quality heuristics; mandatory fetch-before-note rule (snippets are relevance triage only; a failed fetch means skip the source, never note-from-snippet); note-taking standards (long, comprehensive, multi-paragraph summaries — roughly 150-500+ words — written from the fetched full text, sufficient that `writing` never needs to re-fetch); qualitative stop criteria (all relevant areas covered with fetched-and-distilled notes, diminishing returns — no numeric note-count target); anti-patterns (no duplicate notes, don't retry dead ends, don't pad or artificially cap count). |
+| `planning_phase.md` | ~95 | `outline_planning`, `awaiting_approval` | The beginner→interview-ready module arc (foundations → core skills → question drills → mock/strategy); no fixed module/section count — scope driven by researched material and user goals, timeline respected via priority ordering rather than a count cap; every module needs a sample-Q&A section; task-plan field contract; how `propose_task_plan` behaves as a HITL gate; how to incorporate `modify` feedback on revision (read all feedback, targeted changes, top-up research if needed). |
 | `writing_phase.md` | 89 | `writing`, `review` | Per-task workflow (search notes → optional targeted top-up research → `write_section`); markdown/Mermaid/table/callout formatting standards; sample-Q&A authoring standard (personalize to the user's actual background); 800-2000 word/section length guidance; "ground everything in research first" mandate; resumability via `update_scratchpad`; exit via `complete_phase("review")` when the task queue is empty. |
 | `refinement_phase.md` | 67 | `ready`, `refinement` | Three request types and how to handle each: edits (read-before-write, minimal targeted changes, preserve citations, `change_note`), explanations (teach in chat, never silently modify content), additions/deep-dives (scoped targeted research, not a full re-run of `deep_research`). |
 | `citation_guidelines.md` | 79 | Every phase (always layer 3) | The exact `[^n]` marker mechanics, the `## Sources` footnote section format, the `citations` array contract (must mirror footnotes exactly), the hard "no fabricated URLs" rule, and a checklist of what does/doesn't need a citation. |
@@ -527,17 +548,21 @@ with the `complete_phase` tool call attached. Loop continues (no HITL gate fired
 
 **4. `deep_research` phase runs for several iterations.** Each iteration: the model
 issues a batch of diverse `web_search` calls (covering the 6 coverage areas from
-`research_phase.md`), each producing `tool_call_start`/`tool_call_result` WS events;
-promising results get `fetch_url` calls (SSRF-guarded); useful pages get distilled into
-`save_research_note` calls, each writing a `curricula/{curId}/research/{noteId}` doc.
-Periodically the model calls `list_research_notes` to self-check coverage. Once ~12-25
-notes exist spanning the coverage areas, it calls `complete_phase("outline_planning",
+`research_phase.md`) used only for relevance triage; every promising result then gets a
+mandatory `fetch_url` call (SSRF-guarded) — useful pages get distilled into
+`save_research_note` calls from the fetched full text (long, comprehensive summaries),
+each writing a `curricula/{curId}/research/{noteId}` doc; a failed fetch means the source
+is skipped rather than noted from its snippet. Periodically the model calls
+`list_research_notes` to self-check coverage. Once every relevant coverage area has
+solid fetched-and-distilled notes and new searches hit diminishing returns (no fixed
+note-count target), it calls `complete_phase("outline_planning",
 ...)` → state `phase="outline_planning"`, curriculum `status="planning"`, WS
 `phase_change{label: "Planning the curriculum"}`.
 
 **5. `outline_planning` phase**: the model calls `search_research_notes`/
-`list_research_notes` to review its evidence base, drafts a 4-8 module outline
-personalized to the user's profile, then calls `propose_task_plan(outline_markdown,
+`list_research_notes` to review its evidence base, drafts an outline sized to what the
+research and the user's goals warrant (no fixed module/section count) and personalized
+to the user's profile, then calls `propose_task_plan(outline_markdown,
 tasks=[...])` — **alone**, per prompt instruction. This writes
 `curricula/{curId}/plan/main` (`version: 1, status: "proposed"`), sets curriculum
 `status="awaiting_approval"`, sets state `phase="awaiting_approval"`, and the tool's

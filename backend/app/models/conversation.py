@@ -9,7 +9,7 @@ from pydantic import Field
 
 from app.models.common import ApiModel
 
-Role = Literal["user", "assistant"]
+Role = Literal["user", "assistant", "system"]
 ToolCallStatus = Literal["ok", "error"]
 
 

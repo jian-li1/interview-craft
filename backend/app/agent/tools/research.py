@@ -33,8 +33,9 @@ class WebSearchTool(Tool):
         "Search the web for a query and return a list of results (title, url, snippet). "
         "Use this to discover candidate sources during research. Issue diverse, specific "
         "queries rather than broad generic ones — see research_phase.md for the query "
-        "diversification strategy. Does not fetch full page content; follow up with "
-        "fetch_url on the most promising results."
+        "diversification strategy. Snippets returned here are for RELEVANCE TRIAGE ONLY — "
+        "deciding which results to fetch or skip. Always call fetch_url on a result before "
+        "saving a research note about it; never save a note from a snippet alone."
     )
     input_model = WebSearchInput
 
@@ -132,11 +133,13 @@ class FetchUrlTool(Tool):
     name = "fetch_url"
     description = (
         "Fetch a web page by URL and return cleaned, readable text content (scripts/styles "
-        "stripped, truncated to roughly 8k tokens). Use this on the most promising web_search "
-        "results before writing a research note. Blocks private/internal/loopback network "
+        "stripped, truncated to roughly 8k tokens). This is a REQUIRED step before "
+        "save_research_note for any source you intend to keep — search snippets alone are "
+        "never enough to write a note from. Blocks private/internal/loopback network "
         "addresses (SSRF protection) and times out gracefully on slow or unreachable pages — "
-        "such failures return an error observation rather than crashing; treat that as a "
-        "signal to move on to a different source rather than retrying the same URL."
+        "such failures return an error observation rather than crashing; when a fetch fails, "
+        "skip that source entirely (do not write a note from the snippet as a fallback) and "
+        "move on to a different candidate rather than retrying the same URL."
     )
     input_model = FetchUrlInput
 
@@ -188,8 +191,13 @@ class SaveResearchNoteInput(BaseModel):
     summary: str = Field(
         ...,
         description=(
-            "A dense distillation of the useful content, in your own words (2-5 sentences). "
-            "Must NOT be a raw copy/paste of page text."
+            "A comprehensive, multi-paragraph distillation of the FETCHED FULL CONTENT "
+            "(via fetch_url), in your own words — not a 2-5 sentence teaser, and not a raw "
+            "copy-paste of page text. Cover all key ideas, concepts, frameworks, process "
+            "details, example questions, and advice the source contains, scaled to the "
+            "richness of the source (roughly 150-500+ words for a substantial source). The "
+            "writing phase must be able to write curriculum content from this summary alone, "
+            "without re-fetching the source."
         ),
     )
     key_facts: list[str] = Field(
@@ -203,10 +211,10 @@ class SaveResearchNoteInput(BaseModel):
 class SaveResearchNoteTool(Tool):
     name = "save_research_note"
     description = (
-        "Save a distilled research note derived from a source you found via web_search/"
-        "fetch_url. Summaries must be dense distillations in your own words, not raw copies. "
-        "Every note's url is preserved for later citation. Aim for 12-25 quality notes total "
-        "covering the 6 research coverage areas before moving on from deep_research."
+        "Save a comprehensive research note distilled from a source's FETCHED FULL CONTENT — "
+        "the source must have been retrieved with fetch_url first; do not call this based on "
+        "a web_search snippet alone. Summaries must be thorough, multi-paragraph distillations "
+        "in your own words, not raw copies. Every note's url is preserved for later citation."
     )
     input_model = SaveResearchNoteInput
 

@@ -255,12 +255,20 @@ repopulates the chat on page load/refresh), `resolvePlan()` (clears
 triggered by any WS event, since the actual pause-lift only happens once the backend
 starts a new turn), `reset()` (clears everything except the ids), `setConnectionState`.
 
-**`stores/useCurriculumStore.ts`** shape: `{ curriculum: CurriculumFull | null, loading,
-error, lastUpdatedScope: {scope, moduleId?, sectionId?} | null }`. `fetchCurriculum(id)`
-does the initial `GET /api/curricula/{id}` load; `refetch(scope?)` **bails silently if
-`curriculum` is currently null** — i.e. it only ever replaces already-loaded data, so
-`CurriculumPanel` must call `fetchCurriculum` on mount/id-change before any
-`curriculum_updated`-triggered `refetch` can do anything.
+**`stores/useCurriculumStore.ts`** shape: `{ curriculum: CurriculumFull | null, currentId:
+string | null, loading, error, lastUpdatedScope: {scope, moduleId?, sectionId?} | null }`.
+`currentId` tracks which curriculum id is "current" independent of whether `curriculum`
+has loaded yet. `fetchCurriculum(id)` sets `currentId` synchronously and — if `id` differs
+from the previous `currentId` — clears `curriculum`/`lastUpdatedScope` immediately, so a
+previously-loaded curriculum never renders while a different one is being fetched; once
+the awaited `GET /api/curricula/{id}` resolves (success or error), the result is only
+committed if `get().currentId` still equals `id` (guards against out-of-order responses
+when switching curricula quickly). `refetch(scope?)` reads `currentId` (not
+`curriculum?.id`) and bails silently if there's no current id — it works even while
+`curriculum` is still null mid-load, which matters because a `curriculum_updated` WS event
+can arrive during the initial fetch. `CurriculumPanel` resets its local `view`/
+`activeSelection` state whenever `curriculumId` changes, in addition to the store clearing
+`curriculum`, so switching curricula never leaves the Reader showing a stale section.
 
 ### 5.4 Chat panel components (`components/studio/chat/`)
 
@@ -305,8 +313,12 @@ render server-side). It toggles a local `view: "workflow" | "reader"` (default
 `"workflow"`); render precedence: no `curriculumId` → `EmptyState`; loading with no data
 yet → spinner; error with no data → `EmptyState`; curriculum loaded but no modules yet →
 `ActivityFeed` (the pre-content activity mirror described in spec 03); otherwise the
-selected view. `handleSelectModule(order)` switches to `"reader"` and sets
-`activeModuleOrder`.
+selected view. `CurriculumPanel` owns the reader's selection state as
+`activeSelection: { moduleId, sectionId } | null` (lifted here, not local to
+`ReaderView`, so a workflow-node click and the reader's own TOC/prev-next controls stay in
+sync). `handleSelectModule(moduleId)` resolves that module's first section (lowest
+`order`; `sectionId: null` if the module has no sections yet), sets `activeSelection`, and
+switches to `"reader"`.
 
 - **`ActivityFeed.tsx`** — a spinning `Sparkles` header showing `phaseLabel`, an
   `AnimatePresence`+`layout`-animated list of the most recent 12 activity items, plus
@@ -319,12 +331,21 @@ selected view. `handleSelectModule(order)` switches to `"reader"` and sets
   dark-or-default, securityLevel: "strict", fontFamily: "var(--font-sans-var),
   sans-serif" })` and injects the rendered SVG via `dangerouslySetInnerHTML` (justified
   by `securityLevel: "strict"`).
-- **`ReaderView.tsx`** — a left mini-TOC (module/section tree with status icons:
-  `Circle`/`Loader2`/`CheckCircle2` for planned/writing/complete) rendered as a sidebar
-  at `lg+`; below `lg` the same tree is available from a sticky "Contents" header row
-  that opens an animated dropdown (Framer Motion, click-outside-to-close, mirroring the
-  `UserMenu.tsx` pattern) and closes on selection. Both share the scroll-to-section
-  logic that brings the chosen `#module-{id}`/section into view.
+- **`ReaderView.tsx`** — single-section paging, not an all-sections scroll. A left
+  mini-TOC (module/section tree with status icons: `Circle`/`Loader2`/`CheckCircle2` for
+  planned/writing/complete) rendered as a sidebar at `lg+`; below `lg` the same tree is
+  available from a sticky "Contents" header row that opens an animated dropdown (Framer
+  Motion, click-outside-to-close, mirroring the `UserMenu.tsx` pattern). Both set the
+  active section directly via the controlled `activeSelection`/`onSelectSection` props
+  from `CurriculumPanel` — no `scrollIntoView` involved. The content pane renders only the
+  active module's active section (module context header + section title/body;
+  `"planned"` sections show a "Not written yet" placeholder), flattens all
+  module→section pairs in `order` to compute Previous/Next neighbors (labeled with the
+  neighbor's title, disabled at the ends, traverses across module boundaries), animates
+  the transition with `AnimatePresence` (`mode="wait"`, fade+slide) and resets scroll to
+  top on every section change. If `activeSelection` points at a module/section that no
+  longer exists after a refetch, it falls back to that module's first entry, then to the
+  very first section overall.
 - **`SectionContent.tsx`** — custom `ReactMarkdown` `components` overrides: a `code`
   renderer intercepts ` ```mermaid ` fences and renders `<MermaidDiagram>` instead of a
   code block; an `h2` renderer appends an always-rendered, muted "Explain" icon button
@@ -338,16 +359,35 @@ selected view. `handleSelectModule(order)` switches to `"reader"` and sets
   network call with no self-hosted fallback), a numbered badge, and an external-link
   icon.
 - **`WorkflowView.tsx`** — `@xyflow/react` canvas. `buildLayout()` places the Start node
-  at the top and lays module nodes out in a **hand-rolled serpentine 2-column grid**
-  (`COLS = 2`, alternating left/right per row, fixed `NODE_WIDTH`/`NODE_HEIGHT`/`V_GAP`),
-  connecting them sequentially with `status` edges (`data.animated = status ===
-  "writing"`). `fitView({ padding: 0.25, duration: 300 })` re-runs (via
-  `requestAnimationFrame`) whenever the module count changes. The canvas is read-only:
-  `nodesDraggable={false}`, `nodesConnectable={false}`, `elementsSelectable={false}`.
-  `colorMode` follows `next-themes`. Note: **`dagre` is listed in `package.json` but is
-  not imported or used anywhere in this file** — the layout is entirely hand-rolled grid
-  math, not a dagre auto-layout call; this looks like a leftover dependency from an
-  earlier layout approach.
+  at `x=0` (fixed width `START_NODE_WIDTH = 260`, exported from `nodes/StartNode.tsx` —
+  the node has no natural max-width, so without a fixed width a long curriculum title
+  widens the card past where module 0 is positioned and the two visibly overlap) and lays
+  module nodes out in a **single horizontal row, left to right**, sorted by `order`:
+  module `i` sits at `x = START_NODE_WIDTH + H_GAP + i * (NODE_WIDTH + H_GAP)`, all at the
+  same `y`, connecting them sequentially with `status` edges (`data.animated = status ===
+  "writing"`). Node handles are `Position.Left` (target) / `Position.Right` (source) on
+  `ModuleNode`/`StartNode` to match the left-to-right flow. Every node object also sets
+  explicit `width`/`height` (`START_NODE_WIDTH`×`START_NODE_HEIGHT` for the Start node,
+  `NODE_WIDTH`×`NODE_HEIGHT` for module nodes) matching the rendered card dimensions —
+  **this is required for the `MiniMap`**: React Flow's minimap only draws a node's
+  rectangle once it knows that node's dimensions, and for custom node types (no default
+  width/height) it otherwise waits on `ResizeObserver`-based DOM measurement, which in this
+  fully-controlled canvas (`nodes`/`edges` rebuilt via `useMemo`, no `onNodesChange`)
+  wasn't resolving — the minimap rendered as a solid mask-colored rectangle with zero
+  visible node rects (confirmed via `getComputedStyle` on `.react-flow__minimap-node`:
+  before the fix there were no such elements at all; the CSS-custom-property `nodeColor`
+  values and the `maskColor` `color-mix()` were both fine in isolation). `fitView({
+  padding: 0.25, duration: 300 })` re-runs (via `requestAnimationFrame`) whenever the
+  module count changes. The canvas is read-only: `nodesDraggable={false}`,
+  `nodesConnectable={false}`, `elementsSelectable={false}`. `colorMode` follows
+  `next-themes`. The `MiniMap` sets an explicit `nodeColor` function keyed off each node's
+  `status` (via CSS custom properties: `--muted-foreground`/`--accent`/`--success` for
+  planned/writing/complete, `--accent` for the Start node) plus
+  `nodeStrokeColor`/`nodeBorderRadius` and a `maskColor` built from `color-mix(...
+  var(--background) ...)` so it stays legible in both themes. Note: **`dagre` is listed in
+  `package.json` but is not imported or used anywhere in this file** — the layout is
+  entirely hand-rolled positional math, not a dagre auto-layout call; this looks like a
+  leftover dependency from an earlier layout approach.
 - **`edges/StatusEdge.tsx`** — a custom `Edge` using `getSmoothStepPath` (12px border
   radius); dashed + CSS-animated stroke (`xyflow-dash` keyframe in `globals.css`) when
   `data.animated`.
@@ -434,10 +474,21 @@ anywhere** (see discrepancies below).
    which prefills the chat composer via `onExplain(...)`.
 4. **Reader TOC responsiveness**: the sidebar TOC renders at `lg+`; below `lg`,
    `ReaderView.tsx` shows a sticky "Contents" header row that opens an animated dropdown
-   with the same module/section tree and scroll-to-section behavior.
+   with the same module/section tree. Both set the active section directly (single-section
+   paging) rather than scrolling to it.
 5. **Code-block syntax highlighting** is a hand-written dual-theme hljs palette at the
    end of `globals.css` (GitHub-light colors under `:root`, GitHub-dark under `.dark`)
    rather than an imported highlight.js stylesheet.
+6. **Sidebar's "New curriculum" button never hits the API.** `Sidebar.tsx`'s
+   `handleNewCurriculum` just navigates to `/dashboard` (closing the mobile drawer via
+   `onNavigate?.()` first) — it does not call `conversationsApi.create(...)`. The
+   dashboard's `PromptBox` is the only place a conversation/curriculum doc gets created,
+   avoiding empty junk conversations from an unused sidebar click.
+7. **`role: "system"` messages are never rendered.** The backend persists internal
+   bookkeeping messages (plan-approval records) with `role: "system"`.
+   `useChatStore.hydrateHistory` filters them out before they ever enter the `messages`
+   array — this is the single boundary where filtering happens, so
+   `ChatPanel`/`MessageBubble` never need to special-case the role.
 
 ## Related documents
 

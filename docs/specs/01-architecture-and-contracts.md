@@ -95,6 +95,10 @@ TAVILY_API_KEY=
 # Agent behavior
 AGENT_MAX_ITERATIONS=60
 CONTEXT_TOKEN_LIMIT=100000           # trigger compaction above ~80% of this
+
+# LLM request shape / resilience
+LLM_MAX_OUTPUT_TOKENS=8192           # hard cap on generated tokens per call (all providers)
+LLM_REQUEST_TIMEOUT_SECONDS=120      # inter-chunk timeout for streaming; also applies to non-streaming calls
 ```
 
 ### Frontend (`frontend/.env.local`)
@@ -176,12 +180,16 @@ conversations/{convId}
   created_at, updated_at
 
 conversations/{convId}/messages/{msgId}
-  role: "user"|"assistant"
+  role: "user"|"assistant"|"system"
   content: str
   reasoning: str|null                       # assistant thinking text
   tool_calls: [{ id, name, input: obj, output_preview: str, status }]
   created_at
   seq: int                                  # monotonic ordering
+  # role:"system" — internal agent-control records synthesized by the orchestrator itself
+  # (not typed by the user or the LLM), e.g. plan_decision confirmations. They are
+  # persisted so they flow through the same context-rebuild path as any other message,
+  # but the frontend hides/filters them out of the rendered chat.
 ```
 
 ## 6. REST API (all under `/api`, JSON, session cookie auth)
@@ -201,7 +209,7 @@ FRONTEND_ORIGIN with credentials. All mutating routes require header
 | POST | /api/onboarding/synthesize | → `{synthesized_profile}` (runs LLM profile synthesis, saves) |
 | GET  | /api/curricula | → `[CurriculumSummary]` |
 | GET  | /api/curricula/{id} | → `CurriculumFull` (with modules + sections nested) |
-| DELETE | /api/curricula/{id} | → `{ok: true}` |
+| DELETE | /api/curricula/{id} | → `{ok: true}` — cascades: also deletes the curriculum's linked conversation doc and its `messages` subcollection (a curriculum:conversation is 1:1, so no orphaned conversation is left behind) |
 | GET  | /api/curricula/{id}/plan | → plan doc |
 | GET  | /api/conversations | → `[ConversationSummary]` |
 | POST | /api/conversations | `{curriculum_prompt: str|null}` → `{conversation_id}` (new chat) |
@@ -241,8 +249,10 @@ All frames are JSON: `{ "type": string, ...payload }`.
 {type:"phase_change", phase, label: str}                 # e.g. "deep_research" → "Researching"
 {type:"progress", completed: int, total: int, detail: str}
 {type:"plan_proposed", plan: {outline_markdown, tasks:[...], version}}  # HITL gate
-{type:"curriculum_updated", curriculum_id, scope:"overview"|"module"|"section",
+{type:"curriculum_updated", curriculum_id, scope:"overview"|"module"|"section"|"curriculum",
       module_id?: str, section_id?: str}                 # frontend refetches affected part
+      # scope:"curriculum" — emitted by set_curriculum_title (title/emoji rename); refetch
+      # the curriculum summary (dashboard/sidebar title) rather than a specific sub-part.
 {type:"compaction", summary_preview: str, tokens_before: int, tokens_after: int}
 {type:"agent_done", status}
 {type:"error", message: str, recoverable: bool}
@@ -252,6 +262,13 @@ All frames are JSON: `{ "type": string, ...payload }`.
 Frontend behavior: on `plan_proposed`, render an interactive approval card in the chat and
 the plan in the right panel; agent run pauses until `plan_decision` arrives (HITL). On
 `curriculum_updated`, refetch that scope via REST and animate it into the right panel.
+
+Handling `plan_decision`: in addition to mutating the plan/state/curriculum docs
+(materializing module/section stubs on approve, or recording feedback on modify), the
+orchestrator appends a synthetic `role:"system"` message to the conversation confirming
+the decision (see §5) before resuming the ReAct loop — this lets the model see, on the
+very next iteration, that the approval/feedback already happened instead of re-asking the
+user to confirm.
 
 ## 8. Security requirements
 

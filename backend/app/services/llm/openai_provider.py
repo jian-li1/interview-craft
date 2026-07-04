@@ -12,6 +12,7 @@ import json
 from collections.abc import AsyncIterator
 from typing import Any
 
+import httpx
 from openai import AsyncOpenAI
 
 from app.core.logging import get_logger
@@ -69,13 +70,19 @@ class OpenAIProvider:
         model: str,
         small_model: str,
         base_url: str | None = None,
+        max_output_tokens: int = 8192,
+        request_timeout_seconds: float = 120.0,
     ) -> None:
         resolved_key = api_key or ("not-needed" if base_url else None)
         if not resolved_key:
             raise ValueError("OPENAI_API_KEY is required unless OPENAI_BASE_URL is set")
-        self._client = AsyncOpenAI(api_key=resolved_key, base_url=base_url)
+        timeout = httpx.Timeout(
+            connect=10.0, read=request_timeout_seconds, write=30.0, pool=10.0
+        )
+        self._client = AsyncOpenAI(api_key=resolved_key, base_url=base_url, timeout=timeout)
         self._model = model
         self._small_model = small_model
+        self._max_output_tokens = max_output_tokens
 
     def _model_for(self, small: bool) -> str:
         return self._small_model if small else self._model
@@ -91,6 +98,7 @@ class OpenAIProvider:
             "model": model,
             "messages": _to_openai_messages(messages),
             "stream": True,
+            "max_tokens": self._max_output_tokens,
         }
         openai_tools = _to_openai_tools(tools)
         if openai_tools:
@@ -142,6 +150,7 @@ class OpenAIProvider:
             model=model,
             messages=_to_openai_messages(messages),
             stream=False,
+            max_tokens=self._max_output_tokens,
         )
         choice = response.choices[0]
         return choice.message.content or ""

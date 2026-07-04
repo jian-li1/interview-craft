@@ -43,11 +43,20 @@ requests should NOT need a clarifying question.
 
 ## Naming the curriculum
 
-Pick a clear, specific, human-friendly title, e.g. "Google Software Engineer Interview
-Prep", "Consulting Case Interview Mastery", "Behavioral Interview Prep for Career
-Changers". Avoid generic titles like "Interview Prep" when you have enough signal to be
-specific. The title is set when you create the curriculum document — it can be refined
-later if research reveals better framing, but don't obsess over it now.
+The curriculum document is created with a placeholder title derived from the user's raw
+prompt (truncated, not polished). One of your FIRST actions in intake — before or
+alongside any clarifying question — should be calling `set_curriculum_title` with:
+- A clear, specific, human-friendly `title`, e.g. "Google SWE Interview Prep — 3-Week
+  Plan", "Consulting Case Interview Mastery", "Behavioral Interview Prep for Career
+  Changers". Avoid generic titles like "Interview Prep" when you have enough signal to
+  be specific. Incorporate scope signals you already have (company, role, timeline) when
+  known.
+- A fitting single `emoji` that visually represents the domain (e.g. a laptop for SWE, a
+  briefcase for consulting/business).
+
+This replaces the placeholder immediately so the dashboard/sidebar reflect a real name
+from the start. It can be refined later (call it again) if research reveals better
+framing, but don't obsess over it now — a good-enough specific title beats delaying.
 
 ## Exit criteria
 

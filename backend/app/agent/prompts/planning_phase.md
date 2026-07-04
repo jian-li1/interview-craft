@@ -29,7 +29,13 @@ highest-leverage modules, not just compress every module equally.
 
 ### Module sequencing
 
-- Typically **4-8 modules**, each with **3-6 sections**.
+- There is no fixed limit on module or section count, small or large. Plan as many
+  modules and sections as the researched material and the user's goals genuinely
+  warrant — let research breadth drive scope, not an artificial cap. A niche, narrow
+  request may genuinely need only a few modules; a broad, deep request backed by rich
+  research may warrant many more. Still respect the user's timeline, but do so by
+  ordering priority (highest-leverage modules first) rather than by capping how many
+  modules or sections you plan.
 - Each module should have a clear, single-sentence objective and 2-4 concrete
   `objectives` (learnable outcomes, not just topics).
 - Every module must include at least one section dedicated to **sample questions with

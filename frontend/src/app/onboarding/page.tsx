@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
 import { ArrowLeft, ArrowRight, Loader2, Sparkles, RotateCcw } from "lucide-react";
@@ -244,13 +244,32 @@ export default function OnboardingPage() {
   );
 }
 
-function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
+function Field({
+  label,
+  hint,
+  children,
+}: {
+  label: string;
+  hint?: string;
+  children: React.ReactNode | ((id: string) => React.ReactNode);
+}) {
+  // Plain <div>, not <label> — wrapping a ChipInput (or any field with
+  // multiple labelable descendants) in a <label> makes the browser forward
+  // activation clicks/:hover to the FIRST labelable descendant, which for a
+  // ChipInput with existing chips is the first chip's remove button. That
+  // caused clicking/hovering anywhere in the field to hit chip 1's ✕.
+  // Instead we associate the label explicitly via htmlFor/id, and let
+  // callers that want click-to-focus pass a render-prop to receive the id.
+  const id = useId();
+  const content = typeof children === "function" ? children(id) : children;
   return (
-    <label className="block">
-      <span className="text-sm font-medium">{label}</span>
+    <div className="block">
+      <label htmlFor={id} className="text-sm font-medium">
+        {label}
+      </label>
       {hint && <span className="ml-1.5 text-xs text-muted-foreground">{hint}</span>}
-      <div className="mt-1.5">{children}</div>
-    </label>
+      <div className="mt-1.5">{content}</div>
+    </div>
   );
 }
 
@@ -265,20 +284,26 @@ function StepBackground({
     <div className="space-y-5">
       <h2 className="text-lg font-semibold">Tell us about yourself</h2>
       <Field label="Bio" hint="A short introduction">
-        <Textarea
-          rows={3}
-          value={profile.bio}
-          onChange={(e) => update("bio", e.target.value)}
-          placeholder="I'm a self-taught developer looking to break into backend engineering…"
-        />
+        {(id) => (
+          <Textarea
+            id={id}
+            rows={3}
+            value={profile.bio}
+            onChange={(e) => update("bio", e.target.value)}
+            placeholder="I'm a self-taught developer looking to break into backend engineering…"
+          />
+        )}
       </Field>
       <Field label="Background" hint="Education & work history">
-        <Textarea
-          rows={4}
-          value={profile.background}
-          onChange={(e) => update("background", e.target.value)}
-          placeholder="BS in Computer Science, 2 years as a frontend engineer at a startup…"
-        />
+        {(id) => (
+          <Textarea
+            id={id}
+            rows={4}
+            value={profile.background}
+            onChange={(e) => update("background", e.target.value)}
+            placeholder="BS in Computer Science, 2 years as a frontend engineer at a startup…"
+          />
+        )}
       </Field>
     </div>
   );
@@ -302,23 +327,29 @@ function StepRoles({
         />
       </Field>
       <Field label="Experience level">
-        <Select
-          value={profile.experience_level}
-          onChange={(e) => update("experience_level", e.target.value as ExperienceLevel)}
-        >
-          {EXPERIENCE_OPTIONS.map((o) => (
-            <option key={o.value} value={o.value}>
-              {o.label}
-            </option>
-          ))}
-        </Select>
+        {(id) => (
+          <Select
+            id={id}
+            value={profile.experience_level}
+            onChange={(e) => update("experience_level", e.target.value as ExperienceLevel)}
+          >
+            {EXPERIENCE_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </Select>
+        )}
       </Field>
       <Field label="Timeline" hint="When is your interview?">
-        <Input
-          value={profile.timeline}
-          onChange={(e) => update("timeline", e.target.value)}
-          placeholder="e.g. Interview in 3 weeks"
-        />
+        {(id) => (
+          <Input
+            id={id}
+            value={profile.timeline}
+            onChange={(e) => update("timeline", e.target.value)}
+            placeholder="e.g. Interview in 3 weeks"
+          />
+        )}
       </Field>
     </div>
   );
@@ -350,19 +381,25 @@ function StepSkills({
         />
       </Field>
       <Field label="Goals">
-        <Textarea
-          rows={2}
-          value={profile.goals}
-          onChange={(e) => update("goals", e.target.value)}
-          placeholder="What does success look like for you?"
-        />
+        {(id) => (
+          <Textarea
+            id={id}
+            rows={2}
+            value={profile.goals}
+            onChange={(e) => update("goals", e.target.value)}
+            placeholder="What does success look like for you?"
+          />
+        )}
       </Field>
       <Field label="Learning style" hint="Optional">
-        <Input
-          value={profile.learning_style}
-          onChange={(e) => update("learning_style", e.target.value)}
-          placeholder="e.g. Visual, hands-on, reading deep dives"
-        />
+        {(id) => (
+          <Input
+            id={id}
+            value={profile.learning_style}
+            onChange={(e) => update("learning_style", e.target.value)}
+            placeholder="e.g. Visual, hands-on, reading deep dives"
+          />
+        )}
       </Field>
       <Field label="Resume" hint="Optional but recommended">
         <ResumeDropzone

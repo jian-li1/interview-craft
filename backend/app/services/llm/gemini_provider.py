@@ -116,12 +116,21 @@ def _split_system_and_contents(
 class GeminiProvider:
     """Implements LLMProvider using google-genai's async client."""
 
-    def __init__(self, api_key: str, model: str, small_model: str) -> None:
+    def __init__(
+        self,
+        api_key: str,
+        model: str,
+        small_model: str,
+        max_output_tokens: int = 8192,
+        request_timeout_seconds: float = 120.0,
+    ) -> None:
         if not api_key:
             raise ValueError("GEMINI_API_KEY is required to use the gemini provider")
-        self._client = genai.Client(api_key=api_key)
+        http_options = genai_types.HttpOptions(timeout=int(request_timeout_seconds * 1000))
+        self._client = genai.Client(api_key=api_key, http_options=http_options)
         self._model = model
         self._small_model = small_model
+        self._max_output_tokens = max_output_tokens
 
     def _model_for(self, small: bool) -> str:
         return self._small_model if small else self._model
@@ -139,6 +148,7 @@ class GeminiProvider:
         config = genai_types.GenerateContentConfig(
             system_instruction=system_instruction,
             tools=gemini_tools,
+            max_output_tokens=self._max_output_tokens,
         )
 
         stream = await self._client.aio.models.generate_content_stream(
@@ -171,7 +181,10 @@ class GeminiProvider:
     async def complete(self, messages: list[ChatMessage], small: bool = False) -> str:
         model = self._model_for(small)
         system_instruction, contents = _split_system_and_contents(messages)
-        config = genai_types.GenerateContentConfig(system_instruction=system_instruction)
+        config = genai_types.GenerateContentConfig(
+            system_instruction=system_instruction,
+            max_output_tokens=self._max_output_tokens,
+        )
         response = await self._client.aio.models.generate_content(
             model=model, contents=contents, config=config
         )

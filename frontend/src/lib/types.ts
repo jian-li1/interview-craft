@@ -29,7 +29,7 @@ export type SectionStatus = "planned" | "writing" | "complete";
 export type PlanStatus = "proposed" | "approved" | "revising";
 export type TaskStatus = "pending" | "in_progress" | "done";
 export type ToolCallStatus = "ok" | "error" | "running";
-export type MessageRole = "user" | "assistant";
+export type MessageRole = "user" | "assistant" | "system";
 
 // ---------------------------------------------------------------------------
 // Users / auth / settings

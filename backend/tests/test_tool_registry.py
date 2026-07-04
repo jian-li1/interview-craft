@@ -26,6 +26,7 @@ ALL_TOOL_NAMES = {
     "request_user_input",
     "update_scratchpad",
     "complete_phase",
+    "set_curriculum_title",
 }
 
 
@@ -65,7 +66,13 @@ def test_specs_for_phase_returns_valid_provider_schemas(registry, phase):
 
 
 def test_always_available_tools_present_in_every_phase(registry):
-    always = {"get_user_profile", "update_scratchpad", "complete_phase", "request_user_input"}
+    always = {
+        "get_user_profile",
+        "update_scratchpad",
+        "complete_phase",
+        "request_user_input",
+        "set_curriculum_title",
+    }
     for phase in ["intake", "deep_research", "outline_planning", "writing", "refinement"]:
         names = {s.name for s in registry.specs_for_phase(phase)}
         assert always.issubset(names)
@@ -94,7 +101,13 @@ def test_writing_tools_hidden_during_intake(registry):
 def test_unknown_phase_falls_back_to_always_available(registry):
     specs = registry.specs_for_phase("not-a-real-phase")
     names = {s.name for s in specs}
-    assert names == {"get_user_profile", "update_scratchpad", "complete_phase", "request_user_input"}
+    assert names == {
+        "get_user_profile",
+        "update_scratchpad",
+        "complete_phase",
+        "request_user_input",
+        "set_curriculum_title",
+    }
 
 
 def test_hitl_gate_tools_match_spec():

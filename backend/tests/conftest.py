@@ -247,6 +247,10 @@ def fake_fs(monkeypatch) -> FakeFirestore:
         store.conversations.setdefault(conversation_id, {}).update(fields)
         store.conversations[conversation_id]["updated_at"] = store.utcnow()
 
+    def delete_conversation(conversation_id):
+        store.conversations.pop(conversation_id, None)
+        store.messages.pop(conversation_id, None)
+
     def append_message(conversation_id, fields):
         msgs = store.messages.setdefault(conversation_id, [])
         next_seq = (msgs[-1]["seq"] + 1) if msgs else 1
@@ -294,6 +298,7 @@ def fake_fs(monkeypatch) -> FakeFirestore:
         "get_conversation": get_conversation,
         "list_conversations": list_conversations,
         "update_conversation": update_conversation,
+        "delete_conversation": delete_conversation,
         "append_message": append_message,
         "list_messages": list_messages,
         "list_recent_messages": list_recent_messages,

@@ -26,9 +26,15 @@ intake ──► deep_research ──► outline_planning ──► awaiting_app
   covering: (a) the interview type's format/stages/evaluation criteria, (b) foundational
   concepts and skills to learn, (c) REAL sample interview questions commonly asked,
   (d) strong sample answers / answer frameworks, (e) preparation roadmaps, (f) company- or
-  domain-specific specifics from the user prompt. For promising results it fetches pages and
-  distills findings into **research notes** (tool: save_research_note). Target 12–25 quality
-  notes. Every note keeps its source URL — this feeds citations later.
+  domain-specific specifics from the user prompt. Search snippets are used ONLY for
+  relevance triage (deciding what to fetch or skip); fetching (`fetch_url`) is mandatory
+  for every source kept — the agent distills findings into **research notes** (tool:
+  save_research_note) from the fetched full text, never from a snippet alone (the sole
+  exception: a fetch fails, in which case the source is skipped entirely rather than
+  noted from its snippet). There is no note-count target, upper or lower — the agent
+  keeps researching, purely qualitatively, until every relevant coverage area has solid
+  fetched-and-distilled notes and new searches hit diminishing returns. Every note keeps
+  its source URL — this feeds citations later.
 - **outline_planning**: Synthesize research notes into a curriculum outline (modules →
   sections) + a task plan (one task ≈ one section or overview). Personalize using the
   synthesized user profile. Call `propose_task_plan` → emits `plan_proposed` WS event,
@@ -85,6 +91,13 @@ Key requirements:
 - **Tool errors never crash the loop**: return `{"error": "..."}` as the observation so the
   agent can adapt (retry different query, skip source, etc.).
 - Concurrency guard: one active run per conversation (asyncio lock keyed by conv id).
+- **Synthetic system messages on `plan_decision`**: `_apply_plan_decision` appends a
+  `{"role": "system", ...}` message via `fs.append_message` in both branches so the
+  resumed model can see the decision already happened instead of re-asking the user:
+  approve → a message stating the plan was APPROVED, stubs materialized, phase is now
+  `writing`, and to begin the first task immediately without asking for confirmation;
+  modify → a message stating the user's feedback text and instructing the model to revise
+  and re-propose via `propose_task_plan`.
 
 ## 4. Tool catalog (`agent/tools/`)
 
@@ -113,6 +126,12 @@ during writing-only refinements, etc. — keep filtering simple: a phase→allow
 - `read_section(module_id, section_id)` → full content (for explanation/refinement).
 - `update_section(module_id, section_id, content_markdown, citations[], change_note)` → for refinement phase.
 - `write_curriculum_overview(overview_markdown, emoji, tags[])` → sets curriculum overview/metadata.
+- `set_curriculum_title(title, emoji?)` → renames the curriculum (and the linked
+  conversation's sidebar/dashboard title) away from the placeholder derived from the raw
+  user prompt. Always available (not phase-restricted); the agent is instructed to call
+  this as one of its first actions in `intake`. Emits `curriculum_updated` (scope
+  `curriculum`), same shape as `write_curriculum_overview`'s event, so the frontend
+  refetch path is unchanged.
 - `set_module_status / internal helpers` as needed.
 
 **Control tools**
@@ -156,14 +175,20 @@ detailed, high-quality instruction document (not a stub). Required files:
   (no fabricated citations — every factual claim traceable to a research note).
 - `research_phase.md` — Deep-research methodology: query diversification strategy (the 6
   coverage areas in §2), source quality heuristics (prefer official docs, well-known prep
-  sites, recent content), when to fetch vs. skip, note-taking standards, stop criteria
-  (coverage checklist met, 12–25 notes), anti-patterns (don't save duplicate notes,
-  don't fetch paywalled/JS-only pages repeatedly).
+  sites, recent content), fetching is MANDATORY for every kept source (snippets are for
+  relevance triage only — never write a note from a snippet alone; the only exception is
+  a failed fetch, which means skip the source), note-taking standards (summary is a long,
+  comprehensive, multi-paragraph distillation of the fetched full text — roughly
+  150–500+ words for a substantial source, enough that the writing phase never needs to
+  re-fetch), stop criteria (purely qualitative coverage checklist + diminishing returns,
+  no numeric note-count target), anti-patterns (don't save duplicate notes, don't fetch
+  paywalled/JS-only pages repeatedly, don't pad or artificially cap note count).
 - `planning_phase.md` — Outline design principles: beginner→interview-ready arc,
   module sequencing (foundations → core skills → question drills → mock/strategy),
-  every module must include sample-questions-with-model-answers sections, sizing guidance
-  (typically 4–8 modules × 3–6 sections), task plan format, how to incorporate `modify`
-  feedback on revision.
+  every module must include sample-questions-with-model-answers sections, no fixed
+  module/section count limit (scope driven by researched material and user goals, with
+  timeline respected via priority ordering rather than capping count), task plan format,
+  how to incorporate `modify` feedback on revision.
 - `writing_phase.md` — Section authoring standards: rich GitHub-flavored Markdown; use
   Mermaid diagrams (flowchart/sequence/mindmap) wherever a process/relationship is
   explained; tables for comparisons; callout blockquotes; concrete examples; sample

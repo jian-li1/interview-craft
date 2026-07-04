@@ -59,6 +59,16 @@ class Settings(BaseSettings):
     agent_max_iterations: int = 60
     context_token_limit: int = 100_000
 
+    # --- LLM request shape / resilience ---
+    # Hard cap on generated tokens per LLM call. Without this, a local llama.cpp server
+    # (or any misbehaving OpenAI-compatible endpoint) can generate indefinitely — this is
+    # a defense-in-depth bound independent of any provider-side default.
+    llm_max_output_tokens: int = 8192
+    # Timeout (seconds) applied to the `read` leg of LLM HTTP requests — for streaming
+    # this is the max gap allowed *between* chunks, not the whole request. A healthy
+    # stream sends chunks continuously, so a gap this long means the server is stuck.
+    llm_request_timeout_seconds: float = 120.0
+
     @property
     def is_production(self) -> bool:
         return self.app_env == "production"

@@ -6,6 +6,7 @@ See docs/specs/02-agent-system-spec.md §3 for the exact contract this implement
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 from collections import defaultdict
 from collections.abc import Awaitable, Callable
@@ -153,7 +154,8 @@ class Orchestrator:
         if isinstance(user_input, str):
             fs.append_message(conversation_id, {"role": "user", "content": user_input})
         elif isinstance(user_input, PlanDecision):
-            await self._apply_plan_decision(curriculum_id, user_input)
+            await self._apply_plan_decision(conversation_id, curriculum_id, user_input)
+            await emit({"type": "curriculum_updated", "curriculum_id": curriculum_id, "scope": "curriculum"})
 
         profile = fs.get_profile(owner_uid)
         synthesized_profile = profile.get("synthesized_profile") if profile else None
@@ -214,8 +216,8 @@ class Orchestrator:
             text_acc = ""
             tool_calls: list[ToolCallDelta] = []
 
+            stream = llm.chat_stream(messages, tools=tool_specs)
             try:
-                stream = llm.chat_stream(messages, tools=tool_specs)
                 async for event in stream:
                     if cancel_event.is_set():
                         break
@@ -238,6 +240,14 @@ class Orchestrator:
                 await emit({"type": "error", "message": f"LLM error: {exc}", "recoverable": True})
                 await emit({"type": "message_end", "message_id": message_id})
                 return RunResult(TurnOutcome.ERROR, str(exc))
+            finally:
+                # If we broke out early due to cancellation, the async generator is still
+                # "open" from the provider's/SDK's point of view — closing it here signals
+                # the underlying HTTP stream to shut down instead of leaving it abandoned
+                # (which would otherwise keep a local llama.cpp server generating forever).
+                # aclose() on an already-exhausted generator is a harmless no-op.
+                with contextlib.suppress(Exception):
+                    await stream.aclose()
 
             if cancel_event.is_set():
                 final_delta = splitter.flush()
@@ -262,8 +272,9 @@ class Orchestrator:
                     {"role": "assistant", "content": text_acc, "reasoning": reasoning_acc or None, "tool_calls": []},
                 )
                 await emit({"type": "message_end", "message_id": message_id})
-                await emit({"type": "agent_done", "status": "ok"})
                 fs.set_agent_state(curriculum_id, {"iteration_count": iteration + 1})
+
+                await emit({"type": "agent_done", "status": "ok"})
                 return RunResult(TurnOutcome.DONE)
 
             tool_call_records: list[dict[str, Any]] = []
@@ -347,8 +358,15 @@ class Orchestrator:
         await emit({"type": "agent_done", "status": "max_iterations"})
         return RunResult(TurnOutcome.ERROR, "max iterations")
 
-    async def _apply_plan_decision(self, curriculum_id: str, decision: PlanDecision) -> None:
-        """Handle an incoming plan_decision frame: approve materializes stubs, modify records feedback."""
+    async def _apply_plan_decision(
+        self, conversation_id: str, curriculum_id: str, decision: PlanDecision
+    ) -> None:
+        """Handle an incoming plan_decision frame: approve materializes stubs, modify records feedback.
+
+        Appends a synthetic system message in both branches so the resumed model can see
+        (via the rebuilt context) that the decision already happened, instead of asking the
+        user to confirm/approve again next turn.
+        """
         plan = fs.get_plan(curriculum_id)
         if not plan:
             return
@@ -362,6 +380,19 @@ class Orchestrator:
                 {"phase": "writing", "task_queue": task_ids, "current_task_id": task_ids[0] if task_ids else None},
             )
             fs.update_curriculum(curriculum_id, {"status": "writing"})
+            plan_version = plan.get("version", 1)
+            fs.append_message(
+                conversation_id,
+                {
+                    "role": "system",
+                    "content": (
+                        f"The user APPROVED task plan v{plan_version} by clicking the Approve "
+                        f"button. Module and section stubs have been materialized and the phase "
+                        f"is now 'writing'. Begin executing the first task from the task queue "
+                        f"immediately. Do NOT ask for approval or confirmation again."
+                    ),
+                },
+            )
         else:
             feedback_list = plan.get("user_feedback", [])
             if decision.feedback:
@@ -369,6 +400,17 @@ class Orchestrator:
             fs.set_plan(curriculum_id, {"status": "revising", "user_feedback": feedback_list})
             fs.set_agent_state(curriculum_id, {"phase": "outline_planning"})
             fs.update_curriculum(curriculum_id, {"status": "planning"})
+            fs.append_message(
+                conversation_id,
+                {
+                    "role": "system",
+                    "content": (
+                        f"The user requested changes to the task plan with this feedback: "
+                        f"{decision.feedback!r}. Revise the outline accordingly and re-propose "
+                        f"with propose_task_plan."
+                    ),
+                },
+            )
 
     async def _materialize_modules_and_sections(self, curriculum_id: str, plan: dict[str, Any]) -> None:
         """Create module/section stub docs from the approved plan's tasks.

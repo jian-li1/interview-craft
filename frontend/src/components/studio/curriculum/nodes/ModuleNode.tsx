@@ -5,12 +5,13 @@ import { cn } from "@/lib/utils";
 import type { ModuleStatus } from "@/lib/types";
 
 export type ModuleNodeData = {
+  id: string;
   order: number;
   title: string;
   status: ModuleStatus;
   sectionCount: number;
   estimatedMinutes: number;
-  onSelect: (order: number) => void;
+  onSelect: (moduleId: string) => void;
 };
 
 export type ModuleNodeType = Node<ModuleNodeData, "module">;
@@ -27,10 +28,10 @@ export function ModuleNode({ data }: NodeProps<ModuleNodeType>) {
 
   return (
     <div>
-      <Handle type="target" position={Position.Top} className="!bg-border" />
+      <Handle type="target" position={Position.Left} className="!bg-border" />
       <motion.button
         type="button"
-        onClick={() => data.onSelect(data.order)}
+        onClick={() => data.onSelect(data.id)}
         layout
         className={cn(
           "flex w-[240px] flex-col gap-2 rounded-xl border bg-card p-3.5 text-left shadow-sm transition-shadow hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
@@ -87,7 +88,7 @@ export function ModuleNode({ data }: NodeProps<ModuleNodeType>) {
           </motion.div>
         )}
       </motion.button>
-      <Handle type="source" position={Position.Bottom} className="!bg-border" />
+      <Handle type="source" position={Position.Right} className="!bg-border" />
     </div>
   );
 }

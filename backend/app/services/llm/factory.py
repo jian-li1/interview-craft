@@ -24,6 +24,8 @@ def _build_provider(name: str) -> LLMProvider:
             model=settings.openai_model,
             small_model=settings.openai_small_model,
             base_url=settings.openai_base_url,
+            max_output_tokens=settings.llm_max_output_tokens,
+            request_timeout_seconds=settings.llm_request_timeout_seconds,
         )
     if name == "llamacpp":
         from app.services.llm.openai_provider import OpenAIProvider
@@ -35,6 +37,8 @@ def _build_provider(name: str) -> LLMProvider:
             model=settings.openai_model,
             small_model=settings.openai_small_model,
             base_url=settings.openai_base_url,
+            max_output_tokens=settings.llm_max_output_tokens,
+            request_timeout_seconds=settings.llm_request_timeout_seconds,
         )
     if name == "gemini":
         from app.services.llm.gemini_provider import GeminiProvider
@@ -43,6 +47,8 @@ def _build_provider(name: str) -> LLMProvider:
             api_key=settings.gemini_api_key or "",
             model=settings.gemini_model,
             small_model=settings.gemini_small_model,
+            max_output_tokens=settings.llm_max_output_tokens,
+            request_timeout_seconds=settings.llm_request_timeout_seconds,
         )
     raise ValueError(f"Unknown LLM provider: {name}")
 

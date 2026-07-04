@@ -380,6 +380,17 @@ def update_conversation(conversation_id: str, fields: dict[str, Any]) -> None:
     db.collection("conversations").document(conversation_id).set(fields, merge=True)
 
 
+def delete_conversation(conversation_id: str) -> None:
+    """Delete a conversation and its `messages` subcollection (best-effort recursive delete)."""
+    db = get_firestore_client()
+    conversation_ref = db.collection("conversations").document(conversation_id)
+
+    for message_doc in conversation_ref.collection("messages").stream():
+        message_doc.reference.delete()
+
+    conversation_ref.delete()
+
+
 def _messages_ref(conversation_id: str):
     db = get_firestore_client()
     return db.collection("conversations").document(conversation_id).collection("messages")

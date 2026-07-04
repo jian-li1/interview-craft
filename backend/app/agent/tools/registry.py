@@ -17,6 +17,7 @@ from app.agent.tools.control import CompletePhaseTool, RequestUserInputTool, Upd
 from app.agent.tools.curriculum import (
     ListCurriculumStructureTool,
     ReadSectionTool,
+    SetCurriculumTitleTool,
     SetModuleStatusTool,
     UpdateSectionTool,
     WriteCurriculumOverviewTool,
@@ -55,6 +56,7 @@ _ALWAYS_AVAILABLE = [
     "update_scratchpad",
     "complete_phase",
     "request_user_input",
+    "set_curriculum_title",
 ]
 
 _PHASE_TOOLS: dict[str, list[str]] = {
@@ -145,6 +147,7 @@ class ToolRegistry:
             ReadSectionTool(),
             UpdateSectionTool(),
             WriteCurriculumOverviewTool(),
+            SetCurriculumTitleTool(),
             SetModuleStatusTool(),
             RequestUserInputTool(),
             UpdateScratchpadTool(),

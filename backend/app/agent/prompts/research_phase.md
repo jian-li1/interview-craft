@@ -2,11 +2,12 @@
 
 ## Goal
 
-Build a solid, well-cited evidence base of 12–25 quality research notes before any
-outline is drafted. Everything you write later — the outline, the sections, the sample
-Q&A — should be traceable back to notes gathered here. Skipping or rushing this phase
-produces generic, unverifiable curricula; treat it as the foundation the whole product
-quality rests on.
+Build a solid, well-cited evidence base of quality research notes before any outline is
+drafted. There is no note-count target, upper or lower — gather as many notes as the
+topic genuinely warrants. Everything you write later — the outline, the sections, the
+sample Q&A — should be traceable back to notes gathered here. Skipping or rushing this
+phase produces generic, unverifiable curricula; treat it as the foundation the whole
+product quality rests on.
 
 ## Query diversification strategy — the 6 coverage areas
 
@@ -55,44 +56,62 @@ that requires login/paywall to read.
 
 ## When to fetch a page vs. just use the search snippet
 
-Fetch (`fetch_url`) when:
-- The snippet suggests substantial, specific, useful content (a real question list, a
-  detailed process breakdown, a worked framework) that's worth distilling in depth.
+Search snippets exist for ONE purpose only: **relevance triage** — deciding which
+results are worth fetching and which to skip. A snippet is never sufficient grounds for
+a research note.
 
-Skip fetching (use the snippet alone, or skip the result entirely) when:
-- The snippet already tells you it's thin, generic, or a duplicate of something you
-  already have a note on.
-- A previous fetch attempt to the same domain/page pattern already failed or returned
-  a paywall/JS-shell (see anti-patterns below) — don't retry the same dead end.
+Fetching is now **mandatory** for every source worth keeping:
+- If a snippet suggests the page might contain substantial, specific, useful content (a
+  real question list, a detailed process breakdown, a worked framework), call
+  `fetch_url` on it before doing anything else with it.
+- Never call `save_research_note` from a snippet alone. The only exception is when a
+  `fetch_url` call actually fails (paywall, JS-only shell, timeout, blocked host) — in
+  that case, do not fall back to writing a note from the snippet; simply skip the source
+  entirely and move to the next candidate.
+- If the snippet clearly signals the page is thin, generic, or a duplicate of a source
+  you've already fetched and noted, skip it without fetching — don't waste a fetch on
+  something you can already tell is low-value.
+- A previous fetch attempt to the same domain/page pattern already failed or returned a
+  paywall/JS-shell (see anti-patterns below) — don't retry the same dead end.
 
 ## Note-taking standards
 
-For every source worth keeping, call `save_research_note` with:
+For every source worth keeping, first `fetch_url` it, then call `save_research_note`
+with:
 - `query`: the search query that surfaced it (for traceability).
 - `url`, `title`: exact source identifiers.
-- `summary`: a DENSE DISTILLATION in your own words — 2-5 sentences capturing what's
-  actually useful, not a copy-paste of the page. Never paste raw scraped text as the
-  summary.
+- `summary`: a LONG, comprehensive, descriptive summary written from the FETCHED FULL
+  TEXT, in your own words. This is not a teaser — it's a multi-paragraph distillation
+  scaled to the richness of the source: roughly 150-500+ words for a substantial source
+  (shorter only if the fetched content itself is genuinely thin). Capture ALL the ideas,
+  concepts, frameworks, process details, example questions, and advice the source
+  contains — don't cherry-pick one takeaway and drop the rest. Never paste raw scraped
+  text; synthesize it. The bar to hit: the `writing` phase must be able to write a full
+  curriculum section directly from this note alone, without ever re-fetching the source.
+  If you find yourself writing 2-5 sentences, you have not met the bar — go back to the
+  fetched text and extract more.
 - `key_facts`: a short list of concrete, checkable facts/points pulled from the source
   (specific questions asked, specific process steps, specific frameworks named, etc.).
 - `relevance`: which outline/coverage area(s) this supports (e.g. "foundational
   concepts — system design basics" or "sample questions — behavioral").
 
-Quality over quantity. A note that just says "this page talks about interviews" is
-useless — make every note something you could directly build a curriculum section from.
+Quality over quantity, and depth over both. A note that just says "this page talks about
+interviews" is useless — make every note something you could directly build a
+curriculum section from without looking at anything else.
 
 ## Stop criteria
 
-Stop researching and call `complete_phase("outline_planning", reason=...)` when:
-- You have between 12 and 25 notes, AND
-- Every one of the 6 coverage areas relevant to this request has at least one solid
-  note (skip area (f) only if genuinely not applicable), AND
-- You're seeing diminishing returns — new searches mostly surface duplicates of what
-  you already have.
+Stop researching and call `complete_phase("outline_planning", reason=...)` purely
+qualitatively — there is no note-count target, upper or lower; as many notes as the
+topic warrants — when **all** of these are true:
+- Every one of the 6 coverage areas relevant to this request has at least one solid,
+  fetched-and-distilled note (skip area (f) only if genuinely not applicable), AND
+- New searches hit diminishing returns — mostly duplicates of what you already have, or
+  pages that don't clear the fetch-worthiness bar above.
 
-Use `list_research_notes` periodically to check your coverage at a glance before
-deciding you're done. If coverage on some area is thin, run 1-2 more targeted queries for
-just that area rather than broadly re-searching everything.
+Use `list_research_notes` periodically to check both your running count and your
+coverage across areas before deciding you're done. If coverage on some area is thin, run
+1-2 more targeted queries for just that area rather than broadly re-searching everything.
 
 ## Anti-patterns to avoid
 
@@ -100,6 +119,9 @@ just that area rather than broadly re-searching everything.
   check `search_research_notes`/`list_research_notes` first if a result looks familiar.
 - Don't keep fetching paywalled or JS-only pages that return empty/garbled text after
   one failed attempt — note the failure mentally and move to the next candidate.
-- Don't pad note count with low-value notes just to hit "12" — thin coverage with fewer,
-  excellent notes is better than hitting a quota with filler.
+- Don't write a note from a snippet just because a fetch would be "extra work" — every
+  kept source must be fetched; there is no shortcut.
+- Don't pad note count with thin, low-value notes just to look thorough — every note
+  must be genuinely comprehensive and meet the note-taking standards above. A shallow
+  note doesn't count just because it exists.
 - Don't start writing curriculum content in this phase — that belongs to `writing`.

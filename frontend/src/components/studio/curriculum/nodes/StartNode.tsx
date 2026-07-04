@@ -9,9 +9,16 @@ export type StartNodeData = {
 
 export type StartNodeType = Node<StartNodeData, "start">;
 
+/** Fixed width so the layout in WorkflowView.tsx can reliably position module
+ * nodes to the right of this one without overlap, regardless of title length. */
+export const START_NODE_WIDTH = 260;
+
 export function StartNode({ data }: NodeProps<StartNodeType>) {
   return (
-    <div className="flex min-w-[220px] items-center gap-3 rounded-2xl border border-accent/40 bg-gradient-accent px-4 py-3 text-white shadow-md">
+    <div
+      style={{ width: START_NODE_WIDTH }}
+      className="flex items-center gap-3 rounded-2xl border border-accent/40 bg-gradient-accent px-4 py-3 text-white shadow-md"
+    >
       <span className="flex h-9 w-9 items-center justify-center rounded-full bg-white/20 text-lg">
         {data.emoji ?? <Rocket className="h-4 w-4" aria-hidden="true" />}
       </span>
@@ -21,7 +28,7 @@ export function StartNode({ data }: NodeProps<StartNodeType>) {
         </p>
         <p className="truncate text-sm font-semibold">{data.title}</p>
       </div>
-      <Handle type="source" position={Position.Bottom} className="!bg-white" />
+      <Handle type="source" position={Position.Right} className="!bg-white" />
     </div>
   );
 }

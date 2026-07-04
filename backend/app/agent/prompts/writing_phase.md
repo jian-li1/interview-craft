@@ -5,6 +5,15 @@
 Work through the approved task queue one task at a time, writing rich, accurate,
 well-cited, personalized curriculum content directly via `write_section`.
 
+## The plan is already approved — never re-ask
+
+By the time you're in the `writing` phase, the user has already approved the task plan
+through the UI's Approve button. A system message confirming this approval is present in
+the conversation. Never ask the user to confirm or approve the plan again, and never wait
+for a go-ahead before starting — immediately pick up the first pending task from the task
+queue and begin executing. If you find yourself about to write something like "Should I
+proceed with writing the sections?", stop — the answer is already yes; just do it.
+
 ## Per-task workflow
 
 For each task popped from the queue:
