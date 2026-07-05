@@ -191,7 +191,8 @@ export function ReaderView({
                 aria-hidden="true"
               />
               <span className="truncate">
-                {mod.order}. {mod.title}
+                {/* order is 0-based in Firestore; display 1-based */}
+                {mod.order + 1}. {mod.title}
               </span>
             </button>
             {mod.sections.length > 0 && (
@@ -245,7 +246,8 @@ export function ReaderView({
         >
           <List className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
           <span className="min-w-0 flex-1 truncate text-sm font-medium">
-            {currentModule ? `${currentModule.order}. ${currentModule.title}` : "Contents"}
+            {/* order is 0-based in Firestore; display 1-based */}
+            {currentModule ? `${currentModule.order + 1}. ${currentModule.title}` : "Contents"}
           </span>
           <ChevronDown
             className={cn("h-4 w-4 shrink-0 text-muted-foreground transition-transform", tocOpen && "rotate-180")}
@@ -290,7 +292,8 @@ export function ReaderView({
               <div className="mb-4 flex items-start justify-between gap-3 border-b border-border pb-3">
                 <div>
                   <p className="text-xs font-semibold uppercase tracking-wide text-accent">
-                    Module {currentModule.order}
+                    {/* order is 0-based in Firestore; display 1-based */}
+                    Module {currentModule.order + 1}
                   </p>
                   <h2 className="text-xl font-semibold">{currentModule.title}</h2>
                   {currentModule.summary && (

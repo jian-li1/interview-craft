@@ -115,8 +115,11 @@ class WriteSectionTool(Tool):
             dict[str, Any]: On success, `{"status": "written", "module_id",
                 "section_id", "_ws_events": [...]}` — the `_ws_events` list carries a
                 `curriculum_updated` (scope "section") and a `progress` event that the
-                orchestrator pops and forwards to the client. On the citation-guard
-                failure, `{"error": "..."}` instead (no write performed).
+                orchestrator pops and forwards to the client. As a side effect, also
+                refreshes the parent module's derived `status` (planned/writing/complete,
+                from its sections) and `estimated_minutes` (~200 wpm over written
+                content) via `_refresh_module_status`. On the citation-guard failure,
+                `{"error": "..."}` instead (no write performed).
         """
         if len(input.content_markdown.strip()) > 400 and not input.citations:
             return {
@@ -152,6 +155,9 @@ class WriteSectionTool(Tool):
 
         _mark_task_done(ctx.curriculum_id, input.section_id)
         _refresh_curriculum_counts(ctx.curriculum_id)
+        # Derive the parent module's status/estimated_minutes from its sections now
+        # that this write may have changed the picture (e.g. last planned section done).
+        _refresh_module_status(ctx.curriculum_id, input.module_id)
         completed, total = _task_progress(ctx.curriculum_id)
 
         return {
@@ -243,8 +249,10 @@ class UpdateSectionTool(Tool):
         Returns:
             dict[str, Any]: On success, `{"status": "updated", "change_note",
                 "_ws_events": [...]}` with a `curriculum_updated` (scope "section")
-                event for the orchestrator to forward. `{"error": "..."}` if the section
-                doesn't exist yet.
+                event for the orchestrator to forward. Also refreshes the parent
+                module's derived `status`/`estimated_minutes` via
+                `_refresh_module_status`, since edited content changes reading time.
+                `{"error": "..."}` if the section doesn't exist yet.
         """
         existing = fs.get_section(ctx.curriculum_id, input.module_id, input.section_id)
         if not existing:
@@ -264,6 +272,8 @@ class UpdateSectionTool(Tool):
                 "status": "complete",
             },
         )
+        # Content edits change word count, so re-derive the module's reading time too.
+        _refresh_module_status(ctx.curriculum_id, input.module_id)
         return {
             "status": "updated",
             "change_note": input.change_note,
@@ -397,12 +407,13 @@ class SetModuleStatusTool(Tool):
     name = "set_module_status"
     description = (
         "Update a module's status (planned/writing/complete). Use as an internal bookkeeping "
-        "helper when starting or finishing work on a module's sections as a whole."
+        "helper when starting or finishing work on a module's sections as a whole. Emits a "
+        "curriculum_updated event (scope 'module') so the frontend refreshes."
     )
     input_model = SetModuleStatusInput
 
     async def execute(self, input: SetModuleStatusInput, ctx: AgentContext) -> dict[str, Any]:
-        """Update a module's status field.
+        """Update a module's status field and notify the client to refetch.
 
         Args:
             input (SetModuleStatusInput): The validated module_id and new status.
@@ -410,14 +421,27 @@ class SetModuleStatusTool(Tool):
                 scopes the lookup/update.
 
         Returns:
-            dict[str, Any]: `{"status": "updated", "module_id", "new_status"}` on
-                success, or `{"error": "..."}` if the module doesn't exist.
+            dict[str, Any]: `{"status": "updated", "module_id", "new_status",
+                "_ws_event": {...}}` on success — the `_ws_event` carries a
+                `curriculum_updated` (scope "module") event that the orchestrator pops
+                and forwards, so a manual status change refreshes the frontend. Returns
+                `{"error": "..."}` if the module doesn't exist.
         """
         module = fs.get_module(ctx.curriculum_id, input.module_id)
         if not module:
             return {"error": f"module {input.module_id} not found"}
         fs.update_module(ctx.curriculum_id, input.module_id, {"status": input.status})
-        return {"status": "updated", "module_id": input.module_id, "new_status": input.status}
+        return {
+            "status": "updated",
+            "module_id": input.module_id,
+            "new_status": input.status,
+            "_ws_event": {
+                "type": "curriculum_updated",
+                "curriculum_id": ctx.curriculum_id,
+                "scope": "module",
+                "module_id": input.module_id,
+            },
+        }
 
 
 # --------------------------------------------------------------------------------------
@@ -497,3 +521,38 @@ def _refresh_curriculum_counts(curriculum_id: str) -> None:
     modules = fs.list_modules(curriculum_id)
     section_count = sum(len(fs.list_sections(curriculum_id, m["id"])) for m in modules)
     fs.update_curriculum(curriculum_id, {"module_count": len(modules), "section_count": section_count})
+
+
+def _refresh_module_status(curriculum_id: str, module_id: str) -> None:
+    """Derive and persist a module's `status` and `estimated_minutes` from its sections.
+
+    Called after any section write/update so the UI never shows a stale "planned"/
+    "0m" module even if the LLM never explicitly calls `set_module_status`. No-ops if
+    the module has no sections yet (nothing to derive from).
+
+    Args:
+        curriculum_id (str): The curriculum containing the module.
+        module_id (str): The module whose derived fields to recompute.
+
+    Returns:
+        None: Persists via `fs.update_module`; nothing is returned.
+    """
+    sections = fs.list_sections(curriculum_id, module_id)
+    if not sections:
+        return
+
+    # Status: complete only when every section is complete; writing if any section
+    # is in-progress or already done; otherwise still fully planned.
+    statuses = {s.get("status") for s in sections}
+    if statuses == {"complete"}:
+        status = "complete"
+    elif "complete" in statuses or "writing" in statuses:
+        status = "writing"
+    else:
+        status = "planned"
+
+    # Reading time: ~200 words/minute over all sections' written content, rounded up.
+    word_count = sum(len(s.get("content_markdown", "").split()) for s in sections)
+    estimated_minutes = (word_count + 199) // 200 if word_count else 0
+
+    fs.update_module(curriculum_id, module_id, {"status": status, "estimated_minutes": estimated_minutes})

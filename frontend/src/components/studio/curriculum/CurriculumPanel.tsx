@@ -72,7 +72,8 @@ function CurriculumPanelImpl({ curriculumId, onExplain }: CurriculumPanelProps) 
 
   // Memoized: prevents identity churn that rebuilds all React Flow nodes on every
   // CurriculumPanel render (including unrelated chat-store updates), which caused
-  // max-update-depth errors.
+  // max-update-depth errors. Called via WorkflowView's onNodeClick (registered on
+  // <ReactFlow>, not threaded into node data) when a module card is clicked.
   const handleSelectModule = useCallback(
     (moduleId: string) => {
       const mod = curriculum?.modules.find((m) => m.id === moduleId);

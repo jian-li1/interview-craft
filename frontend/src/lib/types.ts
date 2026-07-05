@@ -318,13 +318,15 @@ export interface PlanProposedEvent {
 /**
  * Signals that `curriculaApi.get` should be refetched. `scope` narrows what
  * changed (whole-curriculum overview vs. a single module vs. a single
- * section); `module_id`/`section_id` are set accordingly so a scoped refetch
- * can target just the changed node if the store supports it.
+ * section vs. curriculum-level metadata like title/emoji); `module_id`/
+ * `section_id` are set accordingly so a scoped refetch can target just the
+ * changed node if the store supports it.
  */
 export interface CurriculumUpdatedEvent {
   type: "curriculum_updated";
   curriculum_id: string;
-  scope: "overview" | "module" | "section";
+  // "curriculum" — emitted by set_curriculum_title (title/emoji rename); no module/section id.
+  scope: "overview" | "module" | "section" | "curriculum";
   module_id?: string;
   section_id?: string;
 }

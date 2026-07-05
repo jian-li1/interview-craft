@@ -17,8 +17,6 @@ export type ModuleNodeData = {
   status: ModuleStatus;
   sectionCount: number;
   estimatedMinutes: number;
-  /** Called with this module's id on click — wired by WorkflowView to CurriculumPanel.handleSelectModule, which switches the panel to ReaderView focused on this module's first section. */
-  onSelect: (moduleId: string) => void;
 };
 
 export type ModuleNodeType = Node<ModuleNodeData, "module">;
@@ -39,10 +37,12 @@ const STATUS_META: Record<ModuleStatus, { label: string; icon: typeof Circle }> 
  *  - `writing` — accent border, accent badge, spinning icon, plus an
  *    animated indeterminate progress bar along the bottom of the card.
  *  - `complete` — success-tinted border and badge, static check icon.
- * Clicking the card calls `data.onSelect(data.id)` (see ModuleNodeData);
- * the node itself has no selection/drag behavior since WorkflowView disables
- * React Flow's built-in interactivity (`nodesDraggable`/`elementsSelectable`
- * are both false).
+ * Clicking the card is handled entirely by WorkflowView's `onNodeClick` prop
+ * on `<ReactFlow>` (not a local onClick here) — see that prop's comment for
+ * why this is the only path that actually receives pointer events. The
+ * `motion.button` element still matters for a11y: keyboard activation
+ * (Enter/Space) on a native button synthesizes a click event that bubbles up
+ * to the node wrapper, so onNodeClick still fires for keyboard users.
  */
 export function ModuleNode({ data }: NodeProps<ModuleNodeType>) {
   const meta = STATUS_META[data.status];
@@ -53,7 +53,6 @@ export function ModuleNode({ data }: NodeProps<ModuleNodeType>) {
       <Handle type="target" position={Position.Left} className="!bg-border" />
       <motion.button
         type="button"
-        onClick={() => data.onSelect(data.id)}
         layout
         className={cn(
           "flex w-[240px] flex-col gap-2 rounded-xl border bg-card p-3.5 text-left shadow-sm transition-shadow hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
@@ -64,7 +63,8 @@ export function ModuleNode({ data }: NodeProps<ModuleNodeType>) {
       >
         <div className="flex items-center gap-2">
           <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-muted text-[11px] font-semibold">
-            {data.order}
+            {/* order is 0-based in Firestore; display 1-based */}
+            {data.order + 1}
           </span>
           <p className="min-w-0 flex-1 truncate text-sm font-semibold">{data.title}</p>
         </div>

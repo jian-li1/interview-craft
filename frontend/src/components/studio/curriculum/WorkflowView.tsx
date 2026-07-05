@@ -10,7 +10,7 @@
 // Do not add a plain top-level `import { WorkflowView } from ...` anywhere
 // else (e.g. a server component, a page, another panel) — that would defeat
 // the dynamic-import boundary and break the build/hydration.
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import {
   ReactFlow,
   Background,
@@ -20,6 +20,7 @@ import {
   useReactFlow,
   type NodeTypes,
   type EdgeTypes,
+  type NodeMouseHandler,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { useTheme } from "next-themes";
@@ -40,6 +41,11 @@ const NODE_WIDTH = 240;
 const NODE_HEIGHT = 132;
 const START_NODE_HEIGHT = 64;
 const H_GAP = 80;
+// React Flow anchors Handles at CSS top:50% of the node wrapper's declared inline
+// height. Centering the shorter start node against the module cards' vertical
+// midpoint makes the first edge's endpoints share the same Y, so it renders straight
+// instead of doglegging.
+const START_NODE_Y = (NODE_HEIGHT - START_NODE_HEIGHT) / 2;
 
 // React Flow node/edge type registries: map the `type` string on each node/
 // edge object (set in buildLayout below) to the component that renders it.
@@ -66,16 +72,16 @@ interface WorkflowViewProps {
  * intentionally a simple left-to-right chain (n8n-style canvases can be much
  * more free-form, but curricula are inherently sequential, so a straight
  * line reads more clearly than a force-directed/grid layout here).
- * `onSelectModule` is threaded into every ModuleNode's data so clicking a
- * node can drive the parent's view switch to the reader (see
- * CurriculumPanel.handleSelectModule).
+ * Module selection is handled by `WorkflowInner`'s `onNodeClick` (registered
+ * on `<ReactFlow>`), not by anything built here — see the comment on that prop.
  */
-function buildLayout(curriculum: CurriculumFull, onSelectModule: (moduleId: string) => void) {
+function buildLayout(curriculum: CurriculumFull) {
   const nodes: (StartNodeType | ModuleNodeType)[] = [
     {
       id: "start",
       type: "start",
-      position: { x: 0, y: 0 },
+      // Centered against module nodes' handle Y (see START_NODE_Y) so the first edge is straight.
+      position: { x: 0, y: START_NODE_Y },
       width: START_NODE_WIDTH,
       height: START_NODE_HEIGHT,
       data: { title: curriculum.title, emoji: curriculum.emoji },
@@ -105,7 +111,6 @@ function buildLayout(curriculum: CurriculumFull, onSelectModule: (moduleId: stri
         status: mod.status,
         sectionCount: mod.sections.length,
         estimatedMinutes: mod.estimated_minutes,
-        onSelect: onSelectModule,
       },
     });
 
@@ -148,17 +153,14 @@ function minimapNodeColor(node: { type?: string; data?: unknown }): string {
  * Inner canvas — must be rendered inside a `ReactFlowProvider` (see
  * `WorkflowView` below) because it calls `useReactFlow()` to imperatively
  * fit the view. Rebuilds the node/edge layout via `buildLayout` whenever the
- * curriculum or the select-module callback changes, and re-fits the camera
- * whenever the module count changes (e.g. the agent adds a new module).
+ * curriculum changes, and re-fits the camera whenever the module count
+ * changes (e.g. the agent adds a new module).
  */
 function WorkflowInner({ curriculum, onSelectModule }: WorkflowViewProps) {
   const { resolvedTheme } = useTheme();
   const { fitView } = useReactFlow();
 
-  const { nodes, edges } = useMemo(
-    () => buildLayout(curriculum, onSelectModule),
-    [curriculum, onSelectModule]
-  );
+  const { nodes, edges } = useMemo(() => buildLayout(curriculum), [curriculum]);
 
   // Re-fit the camera (with a short animated transition) whenever the module
   // count changes, e.g. a new module is added while the agent is planning.
@@ -170,6 +172,18 @@ function WorkflowInner({ curriculum, onSelectModule }: WorkflowViewProps) {
     return () => cancelAnimationFrame(id);
   }, [curriculum.modules.length, fitView]);
 
+  // Single click path: React Flow's NodeWrapper only drops pointer-events:none
+  // on a node when it's selectable/draggable OR an onNodeClick handler is
+  // registered here — since nodesDraggable/nodesConnectable/elementsSelectable
+  // are all false below, THIS handler is the only reason ModuleNode's button
+  // is clickable at all. Do not remove it without an alternative.
+  const handleNodeClick = useCallback<NodeMouseHandler<StartNodeType | ModuleNodeType>>(
+    (_event, node) => {
+      if (node.type === "module") onSelectModule(node.id);
+    },
+    [onSelectModule]
+  );
+
   return (
     <ReactFlow
       nodes={nodes}
@@ -178,13 +192,16 @@ function WorkflowInner({ curriculum, onSelectModule }: WorkflowViewProps) {
       edgeTypes={edgeTypes}
       colorMode={resolvedTheme === "dark" ? "dark" : "light"}
       fitView
-      // The canvas is read-only / navigation-only: users can't rearrange,
-      // rewire, or select nodes — clicking a ModuleNode navigates to the
-      // reader view (via its own onClick, not React Flow selection) rather
-      // than participating in a generic node-selection model.
+      // The canvas is read-only / navigation-only: users can't rearrange or
+      // rewire nodes — clicking a ModuleNode navigates to the reader view via
+      // onNodeClick below (not React Flow's built-in selection model).
       nodesDraggable={false}
       nodesConnectable={false}
       elementsSelectable={false}
+      // Required for clicking to work at all: React Flow disables pointer-events
+      // on node wrappers unless nodes are draggable/selectable or onNodeClick is
+      // registered — with the flags above all false, this is the sole enabler.
+      onNodeClick={handleNodeClick}
       proOptions={{ hideAttribution: true }}
     >
       <Background gap={20} />

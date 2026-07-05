@@ -1,11 +1,21 @@
-"""Curriculum tools: set_curriculum_title updates both curriculum + conversation."""
+"""Curriculum tools: set_curriculum_title updates both curriculum + conversation;
+write_section/update_section auto-derive parent module status/estimated_minutes;
+set_module_status emits a curriculum_updated WS event.
+"""
 
 from __future__ import annotations
 
 import pytest
 
 from app.agent.tools.base import AgentContext
-from app.agent.tools.curriculum import SetCurriculumTitleInput, SetCurriculumTitleTool
+from app.agent.tools.curriculum import (
+    SetCurriculumTitleInput,
+    SetCurriculumTitleTool,
+    SetModuleStatusInput,
+    SetModuleStatusTool,
+    WriteSectionInput,
+    WriteSectionTool,
+)
 from app.core.config import get_settings
 
 
@@ -106,3 +116,68 @@ def test_set_curriculum_title_registered_and_always_available():
     for phase in ["intake", "deep_research", "outline_planning", "writing", "refinement"]:
         names = {s.name for s in registry.specs_for_phase(phase)}
         assert "set_curriculum_title" in names
+
+
+@pytest.mark.asyncio
+async def test_write_section_derives_module_status_writing_then_complete(fake_fs):
+    """Writing one of two planned sections flips the module to "writing" with
+    estimated_minutes > 0; writing the second flips it to "complete".
+    """
+    conv = fake_fs.fs.create_conversation("uid1", "New conversation", curriculum_id=None)
+    curriculum = fake_fs.fs.create_curriculum(
+        "uid1", "prep for a system design interview", "prep for a system design interview", conversation_id=conv["id"]
+    )
+    fake_fs.fs.update_conversation(conv["id"], {"curriculum_id": curriculum["id"]})
+    fake_fs.fs.create_module(curriculum["id"], "mod1", {"order": 0, "title": "Module 1", "status": "planned", "estimated_minutes": 0})
+    # Two planned section stubs with empty content, matching orchestrator plan materialization.
+    fake_fs.fs.create_section(curriculum["id"], "mod1", "sec1", {"order": 0, "title": "Section 1", "content_markdown": "", "citations": [], "status": "planned"})
+    fake_fs.fs.create_section(curriculum["id"], "mod1", "sec2", {"order": 1, "title": "Section 2", "content_markdown": "", "citations": [], "status": "planned"})
+
+    tool = WriteSectionTool()
+    ctx = _make_ctx(curriculum["id"], conv["id"])
+
+    # Keep content short (<=400 chars) so the citation guard doesn't trip.
+    await tool.execute(
+        WriteSectionInput(module_id="mod1", section_id="sec1", title="Section 1", content_markdown="Short content. " * 5, citations=[]),
+        ctx,
+    )
+    module_after_first = fake_fs.fs.get_module(curriculum["id"], "mod1")
+    assert module_after_first["status"] == "writing"
+    assert module_after_first["estimated_minutes"] > 0
+
+    await tool.execute(
+        WriteSectionInput(module_id="mod1", section_id="sec2", title="Section 2", content_markdown="Short content. " * 5, citations=[]),
+        ctx,
+    )
+    module_after_second = fake_fs.fs.get_module(curriculum["id"], "mod1")
+    assert module_after_second["status"] == "complete"
+    assert module_after_second["estimated_minutes"] > 0
+
+
+@pytest.mark.asyncio
+async def test_set_module_status_emits_ws_event_and_persists(fake_fs):
+    """SetModuleStatusTool returns a curriculum_updated _ws_event (scope "module") and
+    persists the new status on the module document.
+    """
+    conv = fake_fs.fs.create_conversation("uid1", "New conversation", curriculum_id=None)
+    curriculum = fake_fs.fs.create_curriculum(
+        "uid1", "prep for behavioral interviews", "prep for behavioral interviews", conversation_id=conv["id"]
+    )
+    fake_fs.fs.update_conversation(conv["id"], {"curriculum_id": curriculum["id"]})
+    fake_fs.fs.create_module(curriculum["id"], "mod1", {"order": 0, "title": "Module 1", "status": "planned", "estimated_minutes": 0})
+
+    tool = SetModuleStatusTool()
+    ctx = _make_ctx(curriculum["id"], conv["id"])
+    result = await tool.execute(SetModuleStatusInput(module_id="mod1", status="writing"), ctx)
+
+    assert result["status"] == "updated"
+    assert result["new_status"] == "writing"
+    assert result["_ws_event"] == {
+        "type": "curriculum_updated",
+        "curriculum_id": curriculum["id"],
+        "scope": "module",
+        "module_id": "mod1",
+    }
+
+    updated_module = fake_fs.fs.get_module(curriculum["id"], "mod1")
+    assert updated_module["status"] == "writing"
