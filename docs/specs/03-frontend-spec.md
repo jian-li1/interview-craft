@@ -30,6 +30,11 @@ client provider; redirect to /login on 401; redirect to /onboarding when profile
 The sidebar's "New curriculum" button does **not** call any API — it never creates a
 conversation doc — it simply navigates to /dashboard, where the PromptBox is the sole entry
 point for starting a curriculum (avoids junk empty-conversation documents).
+On desktop, the sidebar is collapsible: a `PanelLeftClose`/`PanelLeftOpen` toggle button in
+the header (left of the theme/user controls) animates the sidebar width between 256px and 0
+(Framer Motion tween, 200ms); state defaults open and persists in `localStorage` under
+`ic:sidebar-open`, synced client-side post-mount to avoid an SSR hydration mismatch. Mobile
+drawer behavior is unchanged (slide-in overlay, unaffected by the desktop collapse state).
 
 - **Landing**: hero (headline, subheadline, CTA → /login), animated product mock (stylized
   chat+workflow illustration built with divs, no images), features grid (Deep Research,
@@ -55,8 +60,11 @@ point for starting a curriculum (avoids junk empty-conversation documents).
 
 ## 3. Studio (the core screen)
 
-Split layout: chat panel left (~40%, min 380px), curriculum panel right (resizable divider
-nice-to-have; fixed split acceptable). Mobile: tabbed switcher.
+Split layout: chat panel left, curriculum panel right, separated by a drag-resizable
+divider (pointer-drag + ArrowLeft/ArrowRight keyboard support on a focusable
+`role="separator"`). Chat column defaults to 480px, clamped to [340px, min(720px, 60vw)],
+persisted across visits in `localStorage` under `ic:studio-chat-width`. Mobile: tabbed
+switcher (unaffected by the divider).
 
 ### Chat panel (Claude/ChatGPT-grade)
 - Message list with user/assistant bubbles, markdown rendering in assistant messages.

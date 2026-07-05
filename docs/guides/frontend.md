@@ -51,10 +51,17 @@ promise via `use(params)`. On mount / whenever `conversationId` changes: resets 
 chat and curriculum Zustand stores, sets the new `conversationId`, then fetches
 `conversationsApi.messages(conversationId)` and calls `hydrateHistory(messages)`.
 `useIsMobile()` returns `boolean | null`; while `null` it renders an empty placeholder to
-avoid a layout flash before the viewport check resolves. Desktop: fixed flex split —
-chat panel `w-[40%] min-w-[380px] max-w-[560px]`, curriculum panel `flex-1`. Mobile:
-a `Tabs` switcher between "chat" and "curriculum" where **only one subtree is mounted at
-a time** (an explicit choice to avoid double-mounting React Flow / Mermaid instances).
+avoid a layout flash before the viewport check resolves. Desktop: drag-resizable flex
+split — chat panel width is state (`chatWidth`, default 480px, lazily initialized from
+`localStorage` key `ic:studio-chat-width`), clamped to `[340, min(720, 0.6 * innerWidth)]`;
+a `role="separator"` divider between the panels handles pointer drag (`setPointerCapture`
+on `pointerdown`, width recomputed on `pointermove`, persisted to `localStorage` on
+`pointerup`/`pointercancel`) and ArrowLeft/ArrowRight keyboard nudges (24px/step, same
+clamp+persist); curriculum panel stays `flex-1`. Both panel wrappers get
+`pointer-events-none` while dragging so the React Flow canvas/chat can't swallow the
+pointer stream mid-drag. Mobile: a `Tabs` switcher between "chat" and "curriculum" where
+**only one subtree is mounted at a time** (an explicit choice to avoid double-mounting
+React Flow / Mermaid instances).
 `handleExplain(prompt)` — wired up from `SectionContent`'s per-heading "Explain" button
 through `CurriculumPanel` — prefills the chat composer and, on mobile, switches the
 active tab to "chat".
