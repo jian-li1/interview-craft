@@ -7,6 +7,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 from app.agent.tools.base import AgentContext, Tool
+from app.agent.tools.control import PHASE_LABELS
 from app.services import firestore as fs
 
 
@@ -33,11 +34,11 @@ class ProposeTaskPlanTool(Tool):
     name = "propose_task_plan"
     description = (
         "HITL GATE — propose the curriculum outline and task plan to the user for approval. "
-        "Saves the plan, sets curriculum status to 'awaiting_approval', emits a plan_proposed "
-        "event to the client, and PAUSES your loop until the user responds with approve or "
-        "modify. Call this alone, with no other tool calls in the same step. Use this both for "
-        "the initial proposal and for re-proposing after incorporating 'modify' feedback "
-        "(the plan version increments automatically)."
+        "Saves the plan, sets curriculum status to 'awaiting_approval', emits phase_change, "
+        "progress, and plan_proposed events to the client, and PAUSES your loop until the user "
+        "responds with approve or modify. Call this alone, with no other tool calls in the same "
+        "step. Use this both for the initial proposal and for re-proposing after incorporating "
+        "'modify' feedback (the plan version increments automatically)."
     )
     input_model = ProposeTaskPlanInput
 
@@ -57,9 +58,10 @@ class ProposeTaskPlanTool(Tool):
 
         Returns:
             dict[str, Any]: `{"status": "proposed", "version", "task_count",
-                "_ws_event": {...}, "_hitl_gate": True}` — the `_ws_event` carries a
-                `plan_proposed` event (with the full outline/tasks/version) for the
-                client to render as an approval card.
+                "_ws_events": [...], "_hitl_gate": True}` — `_ws_events` carries, in
+                order, a `phase_change` (awaiting_approval), a `progress` event (task
+                counts, only when there are tasks), and the `plan_proposed` event (with
+                the full outline/tasks/version) for the client to render an approval card.
         """
         existing = fs.get_plan(ctx.curriculum_id)
         # Plan versions increment monotonically across proposals (initial + any
@@ -76,24 +78,60 @@ class ProposeTaskPlanTool(Tool):
             "user_feedback": user_feedback,
         }
         fs.set_plan(ctx.curriculum_id, plan_doc)
-        fs.update_curriculum(ctx.curriculum_id, {"status": "awaiting_approval"})
+
+        # done_count mirrors the reconnect-snapshot derivation in app/ws/chat.py so a
+        # live client and a freshly (re)connected client see identical progress counts.
+        tasks = plan_doc["tasks"]
+        done_count = sum(1 for t in tasks if t.get("status") == "done")
+        # Full-object write: update_curriculum merges top-level fields only, so the
+        # nested "progress" dict must be written whole (same pattern as CompletePhaseTool).
+        fs.update_curriculum(
+            ctx.curriculum_id,
+            {
+                "status": "awaiting_approval",
+                "progress": {
+                    "phase": "awaiting_approval",
+                    "completed_tasks": done_count,
+                    "total_tasks": len(tasks),
+                    "detail": "",
+                },
+            },
+        )
         fs.set_agent_state(
             ctx.curriculum_id,
             {"phase": "awaiting_approval"},
         )
 
-        return {
-            "status": "proposed",
-            "version": next_version,
-            "task_count": len(input.tasks),
-            "_ws_event": {
+        # Live WS events for the plan-gate transition — previously only the reconnect
+        # snapshot emitted phase_change/progress, leaving a live client stuck showing
+        # the prior phase until the next page load.
+        ws_events: list[dict[str, Any]] = [
+            {
+                "type": "phase_change",
+                "phase": "awaiting_approval",
+                "label": PHASE_LABELS["awaiting_approval"],
+            },
+        ]
+        if tasks:
+            ws_events.append(
+                {"type": "progress", "completed": done_count, "total": len(tasks), "detail": ""}
+            )
+        ws_events.append(
+            {
                 "type": "plan_proposed",
                 "plan": {
                     "outline_markdown": input.outline_markdown,
                     "tasks": plan_doc["tasks"],
                     "version": next_version,
                 },
-            },
+            }
+        )
+
+        return {
+            "status": "proposed",
+            "version": next_version,
+            "task_count": len(input.tasks),
+            "_ws_events": ws_events,
             "_hitl_gate": True,
         }
 

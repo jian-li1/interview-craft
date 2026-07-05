@@ -152,12 +152,32 @@ async def test_run_turn_pauses_on_hitl_gate_tool_call(monkeypatch, fake_fs, orch
     assert event_types[-1] == "agent_done"
     assert events[-1]["status"] == "paused"
 
+    # phase_change/progress must be emitted live (not just on reconnect) so the sticky
+    # phase banner updates immediately when the plan is proposed, and both must arrive
+    # before plan_proposed so the client's phase/progress state is current when the
+    # approval card renders.
+    phase_change_events = [e for e in events if e["type"] == "phase_change"]
+    assert len(phase_change_events) == 1
+    assert phase_change_events[0]["phase"] == "awaiting_approval"
+    progress_events = [e for e in events if e["type"] == "progress"]
+    assert len(progress_events) == 1
+    assert progress_events[0] == {"type": "progress", "completed": 0, "total": 1, "detail": ""}
+    assert event_types.index("phase_change") < event_types.index("plan_proposed")
+    assert event_types.index("progress") < event_types.index("plan_proposed")
+
     # Plan and curriculum status persisted.
     plan = fake_fs.fs.get_plan(curriculum["id"])
     assert plan is not None
     assert plan["status"] == "proposed"
     updated_curriculum = fake_fs.fs.get_curriculum(curriculum["id"])
     assert updated_curriculum["status"] == "awaiting_approval"
+    # REST readers (dashboard) must see the same progress counters as the live WS event.
+    assert updated_curriculum["progress"] == {
+        "phase": "awaiting_approval",
+        "completed_tasks": 0,
+        "total_tasks": 1,
+        "detail": "",
+    }
 
 
 @pytest.mark.asyncio
@@ -264,6 +284,16 @@ async def test_run_turn_applies_plan_decision_approve_and_materializes(monkeypat
         "scope": "curriculum",
     }
 
+    # phase_change/progress must be emitted live on approval, not only via reconnect
+    # snapshot, else the client stays stuck showing "awaiting_approval" until reload.
+    phase_change_events = [e for e in events if e["type"] == "phase_change"]
+    assert len(phase_change_events) == 1
+    assert phase_change_events[0]["phase"] == "writing"
+    progress_events = [e for e in events if e["type"] == "progress"]
+    assert len(progress_events) == 1
+    assert progress_events[0]["completed"] == 0
+    assert progress_events[0]["total"] == 2
+
 
 @pytest.mark.asyncio
 async def test_plan_decision_approve_appends_system_message_with_approved(monkeypatch, fake_fs, orchestrator):
@@ -349,6 +379,12 @@ async def test_plan_decision_modify_appends_system_message_with_feedback(monkeyp
     curriculum_updated_events = [e for e in events if e["type"] == "curriculum_updated"]
     assert len(curriculum_updated_events) == 1
     assert curriculum_updated_events[0]["curriculum_id"] == curriculum["id"]
+
+    # phase_change must be emitted live so the banner bounces back to "Planning the
+    # curriculum" immediately instead of staying on "Awaiting your approval".
+    phase_change_events = [e for e in events if e["type"] == "phase_change"]
+    assert len(phase_change_events) == 1
+    assert phase_change_events[0]["phase"] == "outline_planning"
 
 
 @pytest.mark.asyncio

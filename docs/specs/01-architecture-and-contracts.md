@@ -293,6 +293,13 @@ the decision (see §5) before resuming the ReAct loop — this lets the model se
 very next iteration, that the approval/feedback already happened instead of re-asking the
 user to confirm.
 
+Note that `phase_change`/`progress` are not emitted *only* by `complete_phase` and the
+reconnect snapshot above — the two plan-gate transitions emit them live too, so a
+connected client never has to wait for a reload to see the current phase: `propose_task_plan`
+emits `phase_change` (awaiting_approval) and `progress` before `plan_proposed`; and
+`plan_decision` resumption emits `phase_change` (writing, plus a `progress` event) on
+approve or `phase_change` (outline_planning) on modify.
+
 ## 8. Security requirements
 
 - Verify Google ID tokens server-side with `google.oauth2.id_token.verify_oauth2_token`,

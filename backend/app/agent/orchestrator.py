@@ -17,6 +17,7 @@ from typing import Any
 from app.agent.memory.manager import MemoryManager
 from app.agent.stream_split import ThinkingStreamSplitter
 from app.agent.tools.base import AgentContext
+from app.agent.tools.control import PHASE_LABELS
 from app.agent.tools.registry import ToolRegistry
 from app.core.config import Settings
 from app.core.logging import get_logger
@@ -334,7 +335,7 @@ class Orchestrator:
         if isinstance(user_input, str):
             fs.append_message(conversation_id, {"role": "user", "content": user_input})
         elif isinstance(user_input, PlanDecision):
-            await self._apply_plan_decision(conversation_id, curriculum_id, user_input)
+            await self._apply_plan_decision(conversation_id, curriculum_id, user_input, emit)
             await emit({"type": "curriculum_updated", "curriculum_id": curriculum_id, "scope": "curriculum"})
 
         profile = fs.get_profile(owner_uid)
@@ -654,7 +655,7 @@ class Orchestrator:
         return RunResult(TurnOutcome.ERROR, "max iterations")
 
     async def _apply_plan_decision(
-        self, conversation_id: str, curriculum_id: str, decision: PlanDecision
+        self, conversation_id: str, curriculum_id: str, decision: PlanDecision, emit: Emitter
     ) -> None:
         """Handle an incoming plan_decision frame: approve materializes stubs, modify records feedback.
 
@@ -670,6 +671,9 @@ class Orchestrator:
             decision (PlanDecision): The user's decision — "approve" (materialize
                 modules/sections, jump to the "writing" phase) or "modify" (record
                 feedback, return to "outline_planning" for a re-proposal).
+            emit (Emitter): Async callable used to stream `phase_change`/`progress`
+                events live to the client — previously this transition only surfaced on
+                the next reconnect snapshot, leaving the sticky phase banner stale.
 
         Returns:
             None: Mutates Firestore state and appends a message; does not return a value.
@@ -701,6 +705,18 @@ class Orchestrator:
                     "detail": "Plan approved — writing sections",
                 },
             })
+            # Live WS events for the approval transition — mirrors the persisted state
+            # above so a connected client updates immediately, not just on reconnect.
+            await emit({"type": "phase_change", "phase": "writing", "label": PHASE_LABELS["writing"]})
+            if tasks:
+                await emit(
+                    {
+                        "type": "progress",
+                        "completed": done_count,
+                        "total": len(tasks),
+                        "detail": "Plan approved — writing sections",
+                    }
+                )
             plan_version = plan.get("version", 1)
             fs.append_message(
                 conversation_id,
@@ -721,6 +737,11 @@ class Orchestrator:
             fs.set_plan(curriculum_id, {"status": "revising", "user_feedback": feedback_list})
             fs.set_agent_state(curriculum_id, {"phase": "outline_planning"})
             fs.update_curriculum(curriculum_id, {"status": "planning"})
+            # Live phase_change so the client banner reflects the bounce back to
+            # outline_planning immediately, instead of staying on "awaiting_approval".
+            await emit(
+                {"type": "phase_change", "phase": "outline_planning", "label": PHASE_LABELS["outline_planning"]}
+            )
             fs.append_message(
                 conversation_id,
                 {

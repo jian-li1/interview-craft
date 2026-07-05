@@ -37,11 +37,15 @@ intake ──► deep_research ──► outline_planning ──► awaiting_app
   its source URL — this feeds citations later.
 - **outline_planning**: Synthesize research notes into a curriculum outline (modules →
   sections) + a task plan (one task ≈ one section or overview). Personalize using the
-  synthesized user profile. Call `propose_task_plan` → emits `plan_proposed` WS event,
-  sets curriculum status=awaiting_approval, and **pauses the loop**.
+  synthesized user profile. Call `propose_task_plan` → emits `phase_change`
+  (awaiting_approval), `progress` (task counts, if any tasks), and `plan_proposed` WS
+  events (in that order), sets curriculum status=awaiting_approval and persists the
+  progress blob, and **pauses the loop**.
 - **awaiting_approval (HITL)**: Resumes on `plan_decision`. approve → materialize modules/
-  sections stubs in Firestore, status=writing, go to writing. modify → feedback appended,
-  return to outline_planning to revise (increment plan version).
+  sections stubs in Firestore, status=writing, go to writing, emit live `phase_change`
+  (writing) + `progress` WS events. modify → feedback appended, return to
+  outline_planning to revise (increment plan version), emit a live `phase_change`
+  (outline_planning) WS event.
 - **writing**: Pop tasks from the queue one at a time. For each: search research notes for
   relevant material (`search_research_notes`), optionally do 1–2 targeted extra searches if
   a gap exists, then `write_section` with full rich markdown. Update progress after each
@@ -101,7 +105,9 @@ Key requirements:
   approve → a message stating the plan was APPROVED, stubs materialized, phase is now
   `writing`, and to begin the first task immediately without asking for confirmation;
   modify → a message stating the user's feedback text and instructing the model to revise
-  and re-propose via `propose_task_plan`.
+  and re-propose via `propose_task_plan`. Both branches also emit a live `phase_change`
+  WS event (approve → `writing`, plus a `progress` event; modify → `outline_planning`) so
+  the client's phase banner updates immediately rather than only on the next reconnect.
 
 ## 4. Tool catalog (`agent/tools/`)
 
@@ -121,7 +127,7 @@ during writing-only refinements, etc. — keep filtering simple: a phase→allow
 - `get_user_profile()` → synthesized_profile + structured fields (target roles, experience level, learning style, timeline).
 
 **Planning tools**
-- `propose_task_plan(outline_markdown, tasks[])` → HITL GATE: saves plan, sets status awaiting_approval, emits `plan_proposed`, pauses loop.
+- `propose_task_plan(outline_markdown, tasks[])` → HITL GATE: saves plan, sets status awaiting_approval, emits `phase_change` + `progress` + `plan_proposed`, pauses loop.
 - `get_task_plan()` → current plan + task statuses.
 
 **Curriculum tools**

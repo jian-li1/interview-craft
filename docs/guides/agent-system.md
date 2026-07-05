@@ -239,12 +239,13 @@ precisely or if the profile changed mid-run.
 - **`propose_task_plan`** (HITL gate) — `outline_markdown`, `tasks: [{id, title,
   description, module_ref, status}]`. Reads the existing plan (if any) to compute
   `next_version = existing.version + 1` and preserve accumulated `user_feedback`, writes
-  `curricula/{id}/plan/main`, sets curriculum `status="awaiting_approval"`, sets agent
-  state `phase="awaiting_approval"`, and returns an output dict carrying
-  `_ws_event: {"type": "plan_proposed", "plan": {...}}` and `_hitl_gate: True`. The
-  orchestrator strips those two underscored keys before building the client-visible
-  `tool_call_result` preview, and uses `_hitl_gate` to know to pause after this tool
-  executes.
+  `curricula/{id}/plan/main`, sets curriculum `status="awaiting_approval"` plus a
+  persisted `progress` blob (`phase`, `completed_tasks`, `total_tasks`, `detail`), sets
+  agent state `phase="awaiting_approval"`, and returns an output dict carrying
+  `_ws_events: [phase_change(awaiting_approval), progress(if any tasks), plan_proposed]`
+  and `_hitl_gate: True`. The orchestrator strips the underscored keys before building
+  the client-visible `tool_call_result` preview, forwards each queued WS event in order,
+  and uses `_hitl_gate` to know to pause after this tool executes.
 - **`get_task_plan`** — returns the whole plan doc verbatim, or `{"error": "no plan
   exists yet..."}`.
 
@@ -463,19 +464,24 @@ runs synchronously before the iteration loop starts:
   exist so re-approval after a crash doesn't duplicate), computes the not-yet-`done`
   task ids as the new `task_queue`, sets agent state `phase="writing"` with
   `current_task_id` = the first queued task, and sets curriculum `status="writing"`.
-  Finally appends a synthetic `role:"system"` message via `fs.append_message` stating the
-  plan was APPROVED (with its version number), that stubs are materialized and the phase
-  is now `writing`, and instructing the model to begin the first task immediately without
+  Also emits a live `phase_change{phase: "writing"}` WS event (plus a `progress` event
+  when the plan has tasks) via the `emit` callable now threaded into
+  `_apply_plan_decision` — previously this transition only appeared to a connected
+  client on the next reconnect snapshot, leaving the phase banner stuck. Finally appends
+  a synthetic `role:"system"` message via `fs.append_message` stating the plan was
+  APPROVED (with its version number), that stubs are materialized and the phase is now
+  `writing`, and instructing the model to begin the first task immediately without
   asking for confirmation again — this is what lets the very next iteration's model turn
   see that the approval already happened instead of re-asking the user.
 - **`modify`**: appends `feedback` (if given) to the plan's `user_feedback` list, sets
   `plan.status = "revising"`, sets agent state back to `phase="outline_planning"`, sets
-  curriculum `status="planning"`, then appends a synthetic `role:"system"` message
-  restating the user's feedback text and instructing the model to revise the outline and
-  re-propose via `propose_task_plan`. The next iteration's `outline_planning` prompt
-  (which includes the full accumulated `user_feedback` via working memory /
-  `get_task_plan`, plus this system message) guides the model to revise and call
-  `propose_task_plan` again (which auto-increments `version`).
+  curriculum `status="planning"`, emits a live `phase_change{phase: "outline_planning"}`
+  WS event, then appends a synthetic `role:"system"` message restating the user's
+  feedback text and instructing the model to revise the outline and re-propose via
+  `propose_task_plan`. The next iteration's `outline_planning` prompt (which includes the
+  full accumulated `user_feedback` via working memory / `get_task_plan`, plus this system
+  message) guides the model to revise and call `propose_task_plan` again (which
+  auto-increments `version`).
 
 Both branches take `conversation_id` (threaded through from `_run_turn_inner`) precisely
 so `_apply_plan_decision` can append these messages — the model has no other way to know
@@ -566,13 +572,14 @@ research and the user's goals warrant (no fixed module/section count) and person
 to the user's profile, then calls `propose_task_plan(outline_markdown,
 tasks=[...])` — **alone**, per prompt instruction. This writes
 `curricula/{curId}/plan/main` (`version: 1, status: "proposed"`), sets curriculum
-`status="awaiting_approval"`, sets state `phase="awaiting_approval"`, and the tool's
-output carries `_ws_event: {"type": "plan_proposed", "plan": {...}}` +
-`_hitl_gate: true`. The orchestrator emits `tool_call_result` then the `plan_proposed`
-event, marks `hit_hitl_gate = True`, persists the assistant message, emits
-`agent_done(status="paused")`. **The turn returns `PAUSED`.** The frontend renders the
-plan-approval card from the `plan_proposed` payload; the composer is disabled while
-awaiting a decision.
+`status="awaiting_approval"` plus a persisted `progress` blob, sets state
+`phase="awaiting_approval"`, and the tool's output carries `_ws_events:
+[phase_change(awaiting_approval), progress(if any tasks),
+{"type": "plan_proposed", "plan": {...}}]` + `_hitl_gate: true`. The orchestrator emits
+`tool_call_result` then each queued WS event in order, marks `hit_hitl_gate = True`,
+persists the assistant message, emits `agent_done(status="paused")`. **The turn returns
+`PAUSED`.** The frontend renders the plan-approval card from the `plan_proposed`
+payload; the composer is disabled while awaiting a decision.
 
 **6. User clicks "Approve & build."** Frontend sends `{"type": "plan_decision",
 "decision": "approve", "feedback": null}`. A new `run_turn` starts;
@@ -581,7 +588,9 @@ awaiting a decision.
 and section stub docs (`status: "planned"`, one per task) under
 `curricula/{curId}/modules/...`, computes `task_queue` from all non-`done` task ids,
 sets state `phase="writing"`, `current_task_id` = first task, sets curriculum
-`status="writing"`. *Then* the iteration loop starts fresh in the `writing` phase.
+`status="writing"`, and emits a live `phase_change{phase: "writing"}` WS event (plus a
+`progress` event when the plan has tasks) via the `emit` callable threaded into
+`_apply_plan_decision`. *Then* the iteration loop starts fresh in the `writing` phase.
 
 **7. `writing` phase runs one task at a time.** Per task: `search_research_notes` pulls
 relevant notes; occasionally a targeted top-up `web_search`+`save_research_note`; then
