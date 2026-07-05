@@ -139,6 +139,9 @@ curricula/{curriculumId}
   status: "researching"|"planning"|"awaiting_approval"|"writing"|"ready"|"error"
   overview: str                 # markdown overview of whole curriculum
   progress: { phase: str, completed_tasks: int, total_tasks: int, detail: str }
+                                 # persisted (not just streamed over WS) on plan approval,
+                                 # after every write_section, and on phase transitions —
+                                 # so REST readers (dashboard) see live progress too
   conversation_id: str
   module_count: int, section_count: int, tags: [str]
   created_at, updated_at

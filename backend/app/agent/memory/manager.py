@@ -71,7 +71,7 @@ _PHASE_PROMPT_FILES: dict[str, str] = {
     "outline_planning": "planning_phase.md",
     "awaiting_approval": "planning_phase.md",
     "writing": "writing_phase.md",
-    "review": "writing_phase.md",
+    "review": "review_phase.md",  # dedicated quality pass + publish, not a second writing phase
     "ready": "refinement_phase.md",
     "refinement": "refinement_phase.md",
 }

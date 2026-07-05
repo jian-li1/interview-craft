@@ -64,7 +64,7 @@ tool allowlist (§3) restricting what the LLM can even attempt to call.
 | `outline_planning` | `planning_phase.md` | `planning` | `search_research_notes`, `list_research_notes`, `propose_task_plan`, `get_task_plan` |
 | `awaiting_approval` | `planning_phase.md` | `awaiting_approval` | `get_task_plan` only (research/writing tools hidden) |
 | `writing` | `writing_phase.md` | `writing` | research tools + `list_curriculum_structure`, `write_section`, `write_curriculum_overview`, `set_module_status`, `get_task_plan` |
-| `review` | `writing_phase.md` | `writing` | `list_curriculum_structure`, `read_section`, `write_section`, `write_curriculum_overview`, `set_module_status`, `search_research_notes` |
+| `review` | `review_phase.md` | `writing` | `list_curriculum_structure`, `read_section`, `write_section`, `write_curriculum_overview`, `set_module_status`, `search_research_notes` |
 | `ready` | `refinement_phase.md` | `ready` | full refinement toolset (below) |
 | `refinement` | `refinement_phase.md` | `ready` | `list_curriculum_structure`, `read_section`, `update_section`, `write_section`, `search_research_notes`, `list_research_notes`, `web_search`, `fetch_url`, `save_research_note` |
 
@@ -490,7 +490,7 @@ own question text) for the model to understand what it's responding to.
 
 ## 8. Prompt files — what each does and how they compose
 
-All ten files live in `backend/app/agent/prompts/` and are treated as code (per the root
+All eleven files live in `backend/app/agent/prompts/` and are treated as code (per the root
 `CLAUDE.md`). Word/line counts below are approximate (from `wc -l`).
 
 | File | ~Lines | Used by | Purpose |
@@ -499,7 +499,8 @@ All ten files live in `backend/app/agent/prompts/` and are treated as code (per 
 | `intake_phase.md` | 57 | `intake` | What to figure out (interview type, scope, constraints) from the user's message + profile; strict guidance on when to ask a clarifying question vs. proceed (err toward proceeding); curriculum naming; exit via `complete_phase("deep_research")`. |
 | `research_phase.md` | ~115 | `deep_research` | The 6 query-diversification coverage areas (format/stages; foundational skills; real sample questions; sample answers/frameworks; prep roadmaps; company/domain specifics); source-quality heuristics; mandatory fetch-before-note rule (snippets are relevance triage only; a failed fetch means skip the source, never note-from-snippet); note-taking standards (long, comprehensive, multi-paragraph summaries — roughly 150-500+ words — written from the fetched full text, sufficient that `writing` never needs to re-fetch); qualitative stop criteria (all relevant areas covered with fetched-and-distilled notes, diminishing returns — no numeric note-count target); anti-patterns (no duplicate notes, don't retry dead ends, don't pad or artificially cap count). |
 | `planning_phase.md` | ~95 | `outline_planning`, `awaiting_approval` | The beginner→interview-ready module arc (foundations → core skills → question drills → mock/strategy); no fixed module/section count — scope driven by researched material and user goals, timeline respected via priority ordering rather than a count cap; every module needs a sample-Q&A section; task-plan field contract; how `propose_task_plan` behaves as a HITL gate; how to incorporate `modify` feedback on revision (read all feedback, targeted changes, top-up research if needed). |
-| `writing_phase.md` | 89 | `writing`, `review` | Per-task workflow (search notes → optional targeted top-up research → `write_section`); markdown/Mermaid/table/callout formatting standards; sample-Q&A authoring standard (personalize to the user's actual background); 800-2000 word/section length guidance; "ground everything in research first" mandate; resumability via `update_scratchpad`; exit via `complete_phase("review")` when the task queue is empty. |
+| `writing_phase.md` | 89 | `writing` | Per-task workflow (search notes → optional targeted top-up research → `write_section`); markdown/Mermaid/table/callout formatting standards; sample-Q&A authoring standard (personalize to the user's actual background); 800-2000 word/section length guidance; "ground everything in research first" mandate; resumability via `update_scratchpad`; exit via `complete_phase("review")` when the task queue is empty. |
+| `review_phase.md` | 54 | `review` | Structured quality pass over the whole draft: `list_curriculum_structure` then `read_section` module-by-module against a checklist (citations, diagrams, sample-Q&A coverage, 800-2000 word length, coherence, module status); fix failures directly via `write_section` overwrite (full corrected markdown + citations, never a fragment); `update_scratchpad` tracks which modules are already reviewed for resumability; `search_research_notes` only, no broad re-research; after all modules pass, `write_curriculum_overview`, then exit via `complete_phase("ready")`. |
 | `refinement_phase.md` | 67 | `ready`, `refinement` | Three request types and how to handle each: edits (read-before-write, minimal targeted changes, preserve citations, `change_note`), explanations (teach in chat, never silently modify content), additions/deep-dives (scoped targeted research, not a full re-run of `deep_research`). |
 | `citation_guidelines.md` | 79 | Every phase (always layer 3) | The exact `[^n]` marker mechanics, the `## Sources` footnote section format, the `citations` array contract (must mirror footnotes exactly), the hard "no fabricated URLs" rule, and a checklist of what does/doesn't need a citation. |
 | `visual_guidelines.md` | 84 | Every phase (always layer 4) | Mermaid syntax guardrails (always quote labels, avoid unquoted parens, cap ~25 nodes, short node IDs, one edge per line, always fence with `` ```mermaid ``); which diagram type for which content (flowchart default, sequenceDiagram for party interactions, mindmap for topic breakdowns); a worked correct example; `classDef`-based highlighting restrained to 2-3 accent classes; sparse, heading-only emoji usage. |
@@ -510,8 +511,8 @@ Composition per phase, concretely (from `_PHASE_PROMPT_FILES` in `memory/manager
 `intake`→`intake_phase.md`, `deep_research`→`research_phase.md`,
 `outline_planning`→`planning_phase.md`, `awaiting_approval`→`planning_phase.md` (same
 file — the plan file covers both drafting and the paused-approval state),
-`writing`→`writing_phase.md`, `review`→`writing_phase.md` (same file — review is really
-"finish writing plus a final pass"), `ready`→`refinement_phase.md`,
+`writing`→`writing_phase.md`, `review`→`review_phase.md` (a dedicated checklist-driven
+quality pass, not a second writing phase), `ready`→`refinement_phase.md`,
 `refinement`→`refinement_phase.md`. `profile_synthesis.md` and `compaction.md` are
 loaded directly by their respective call sites (`app/api/onboarding.py` and
 `app/agent/memory/compaction.py`) rather than through `MemoryManager`'s phase

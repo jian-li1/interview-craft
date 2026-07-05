@@ -144,7 +144,9 @@ class CompletePhaseTool(Tool):
         Note that `ctx.phase` reflects the phase as of the start of this orchestrator
         iteration (per `app/agent/CLAUDE.md`, the orchestrator re-reads phase fresh from
         Firestore every iteration, so a transition here takes effect starting next
-        iteration, not immediately within this one).
+        iteration, not immediately within this one). Also keeps the curriculum's
+        persisted `progress.phase` (and, on reaching "ready", `progress.detail`) in sync
+        so REST readers never see a stale phase.
 
         Args:
             input (CompletePhaseInput): The validated target phase and a reason string
@@ -190,7 +192,16 @@ class CompletePhaseTool(Tool):
         }
         new_status = status_map.get(input.next_phase)
         if new_status:
-            fs.update_curriculum(ctx.curriculum_id, {"status": new_status})
+            # Keep the persisted progress blob's phase in sync with the curriculum status so
+            # REST readers (dashboard) don't show a stale phase; full-object write because
+            # update_curriculum merges top-level fields only (a dotted "progress.phase" key
+            # would be stored literally, not merged into the nested dict).
+            curriculum = fs.get_curriculum(ctx.curriculum_id) or {}
+            progress = dict(curriculum.get("progress") or {})
+            progress["phase"] = input.next_phase
+            if input.next_phase == "ready":
+                progress["detail"] = "Curriculum complete"
+            fs.update_curriculum(ctx.curriculum_id, {"status": new_status, "progress": progress})
 
         return {
             "status": "transitioned",

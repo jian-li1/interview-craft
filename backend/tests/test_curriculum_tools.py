@@ -1,6 +1,7 @@
 """Curriculum tools: set_curriculum_title updates both curriculum + conversation;
 write_section/update_section auto-derive parent module status/estimated_minutes;
-set_module_status emits a curriculum_updated WS event.
+set_module_status emits a curriculum_updated WS event; write_section and
+complete_phase persist progress onto the curriculum doc for REST readers.
 """
 
 from __future__ import annotations
@@ -8,6 +9,7 @@ from __future__ import annotations
 import pytest
 
 from app.agent.tools.base import AgentContext
+from app.agent.tools.control import CompletePhaseInput, CompletePhaseTool
 from app.agent.tools.curriculum import (
     SetCurriculumTitleInput,
     SetCurriculumTitleTool,
@@ -181,3 +183,70 @@ async def test_set_module_status_emits_ws_event_and_persists(fake_fs):
 
     updated_module = fake_fs.fs.get_module(curriculum["id"], "mod1")
     assert updated_module["status"] == "writing"
+
+
+@pytest.mark.asyncio
+async def test_write_section_persists_progress_onto_curriculum_doc(fake_fs):
+    """write_section must persist completed/total task counts onto the curriculum doc's
+    `progress` field (not just emit the transient WS event) so REST readers (e.g. the
+    dashboard card) see live progress even without an open socket.
+    """
+    conv = fake_fs.fs.create_conversation("uid1", "New conversation", curriculum_id=None)
+    curriculum = fake_fs.fs.create_curriculum(
+        "uid1", "prep for a system design interview", "prep for a system design interview", conversation_id=conv["id"]
+    )
+    fake_fs.fs.update_conversation(conv["id"], {"curriculum_id": curriculum["id"]})
+    fake_fs.fs.create_module(curriculum["id"], "mod1", {"order": 0, "title": "Module 1", "status": "planned", "estimated_minutes": 0})
+    fake_fs.fs.create_section(curriculum["id"], "mod1", "sec1", {"order": 0, "title": "Section 1", "content_markdown": "", "citations": [], "status": "planned"})
+    # Plan with two tasks (one matching sec1's id) so _task_progress has something to count.
+    fake_fs.fs.set_plan(curriculum["id"], {"tasks": [{"id": "sec1", "status": "pending"}, {"id": "sec2", "status": "pending"}]})
+
+    tool = WriteSectionTool()
+    ctx = _make_ctx(curriculum["id"], conv["id"])
+    ctx.phase = "writing"  # simulate the orchestrator running write_section in the writing phase
+
+    await tool.execute(
+        WriteSectionInput(module_id="mod1", section_id="sec1", title="Section 1", content_markdown="Short content. " * 5, citations=[]),
+        ctx,
+    )
+
+    updated_curriculum = fake_fs.fs.get_curriculum(curriculum["id"])
+    # sec1's task flips to "done" as a write_section side effect, so 1 of 2 tasks complete.
+    assert updated_curriculum["progress"] == {
+        "phase": "writing",
+        "completed_tasks": 1,
+        "total_tasks": 2,
+        "detail": "Wrote section: Section 1",
+    }
+
+
+@pytest.mark.asyncio
+async def test_complete_phase_review_to_ready_sets_status_and_progress(fake_fs):
+    """complete_phase("ready") from "review" must set curriculum status to "ready" and
+    sync progress.phase/detail — this is the fix for the dashboard card stuck on
+    "writing" forever, since review previously had no path to "ready" at all.
+    """
+    conv = fake_fs.fs.create_conversation("uid1", "New conversation", curriculum_id=None)
+    curriculum = fake_fs.fs.create_curriculum(
+        "uid1", "prep for a system design interview", "prep for a system design interview", conversation_id=conv["id"]
+    )
+    fake_fs.fs.update_conversation(conv["id"], {"curriculum_id": curriculum["id"]})
+    fake_fs.fs.update_curriculum(curriculum["id"], {
+        "status": "writing",
+        "progress": {"phase": "review", "completed_tasks": 3, "total_tasks": 3, "detail": "Wrote section: X"},
+    })
+
+    tool = CompletePhaseTool()
+    ctx = _make_ctx(curriculum["id"], conv["id"])
+    ctx.phase = "review"  # transition validation requires the current phase to be "review"
+
+    result = await tool.execute(CompletePhaseInput(next_phase="ready", reason="all sections reviewed"), ctx)
+
+    assert result["status"] == "transitioned"
+    updated_curriculum = fake_fs.fs.get_curriculum(curriculum["id"])
+    assert updated_curriculum["status"] == "ready"
+    assert updated_curriculum["progress"]["phase"] == "ready"
+    assert updated_curriculum["progress"]["detail"] == "Curriculum complete"
+    # completed_tasks/total_tasks carry over untouched from the pre-existing progress blob.
+    assert updated_curriculum["progress"]["completed_tasks"] == 3
+    assert updated_curriculum["progress"]["total_tasks"] == 3

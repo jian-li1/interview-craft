@@ -204,7 +204,8 @@ async def test_run_turn_plain_text_answer_completes_done(monkeypatch, fake_fs, o
 @pytest.mark.asyncio
 async def test_run_turn_applies_plan_decision_approve_and_materializes(monkeypatch, fake_fs, orchestrator):
     """Verify approving a proposed plan transitions the curriculum/state to "writing",
-    materializes modules from the plan's tasks, and emits a `curriculum_updated` event.
+    materializes modules from the plan's tasks, emits a `curriculum_updated` event, and
+    seeds the curriculum doc's persisted `progress` counters from the plan's tasks.
     """
     conv, curriculum = _setup_conversation(fake_fs, phase="awaiting_approval")
     fake_fs.fs.set_plan(
@@ -242,6 +243,11 @@ async def test_run_turn_applies_plan_decision_approve_and_materializes(monkeypat
 
     updated_curriculum = fake_fs.fs.get_curriculum(curriculum["id"])
     assert updated_curriculum["status"] == "writing"
+    # Progress must be seeded immediately on approval (not left at 0 until the first
+    # write_section) — total_tasks counts ALL plan tasks, not just the pending queue.
+    assert updated_curriculum["progress"]["total_tasks"] == 2
+    assert updated_curriculum["progress"]["completed_tasks"] == 0
+    assert updated_curriculum["progress"]["phase"] == "writing"
 
     state = fake_fs.fs.get_agent_state(curriculum["id"])
     assert state["phase"] == "writing"

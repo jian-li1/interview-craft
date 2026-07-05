@@ -687,7 +687,20 @@ class Orchestrator:
                 curriculum_id,
                 {"phase": "writing", "task_queue": task_ids, "current_task_id": task_ids[0] if task_ids else None},
             )
-            fs.update_curriculum(curriculum_id, {"status": "writing"})
+            # Seed persisted progress counters here (not just via write_section later) so
+            # the dashboard progress bar shows the correct total immediately on approval,
+            # rather than staying at 0 until the first section is written.
+            tasks = plan.get("tasks", [])
+            done_count = sum(1 for t in tasks if t.get("status") == "done")
+            fs.update_curriculum(curriculum_id, {
+                "status": "writing",
+                "progress": {
+                    "phase": "writing",
+                    "completed_tasks": done_count,
+                    "total_tasks": len(tasks),
+                    "detail": "Plan approved — writing sections",
+                },
+            })
             plan_version = plan.get("version", 1)
             fs.append_message(
                 conversation_id,

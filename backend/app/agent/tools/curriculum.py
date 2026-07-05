@@ -118,8 +118,11 @@ class WriteSectionTool(Tool):
                 orchestrator pops and forwards to the client. As a side effect, also
                 refreshes the parent module's derived `status` (planned/writing/complete,
                 from its sections) and `estimated_minutes` (~200 wpm over written
-                content) via `_refresh_module_status`. On the citation-guard failure,
-                `{"error": "..."}` instead (no write performed).
+                content) via `_refresh_module_status`, and persists task progress onto
+                the curriculum doc's `progress` field via `_refresh_curriculum_progress`
+                (so REST readers like the dashboard see it, not just live WS clients).
+                On the citation-guard failure, `{"error": "..."}` instead (no write
+                performed).
         """
         if len(input.content_markdown.strip()) > 400 and not input.citations:
             return {
@@ -158,7 +161,11 @@ class WriteSectionTool(Tool):
         # Derive the parent module's status/estimated_minutes from its sections now
         # that this write may have changed the picture (e.g. last planned section done).
         _refresh_module_status(ctx.curriculum_id, input.module_id)
-        completed, total = _task_progress(ctx.curriculum_id)
+        # Persist progress onto the curriculum doc (not just the transient WS event) so
+        # REST readers like the dashboard card see live progress, not just live sockets.
+        completed, total = _refresh_curriculum_progress(
+            ctx.curriculum_id, ctx.phase, f"Wrote section: {input.title}"
+        )
 
         return {
             "status": "written",
@@ -510,6 +517,28 @@ def _task_progress(curriculum_id: str) -> tuple[int, int]:
     tasks = plan.get("tasks", [])
     completed = sum(1 for t in tasks if t.get("status") == "done")
     return completed, len(tasks)
+
+
+def _refresh_curriculum_progress(curriculum_id: str, phase: str, detail: str) -> tuple[int, int]:
+    """Recompute task progress and persist it onto the curriculum doc's `progress` field.
+
+    The WS `progress` event reaches only clients connected to the live socket; readers
+    that hit the REST layer instead (e.g. the dashboard curriculum cards) need the same
+    numbers persisted on the document itself, so this writes them there too.
+
+    Args:
+        curriculum_id (str): The curriculum whose plan/progress to recompute and persist.
+        phase (str): The current agent phase, stored verbatim as `progress.phase`.
+        detail (str): A short human-readable description of the triggering action.
+
+    Returns:
+        tuple[int, int]: `(completed, total)` task counts, same as `_task_progress`.
+    """
+    completed, total = _task_progress(curriculum_id)
+    fs.update_curriculum(curriculum_id, {
+        "progress": {"phase": phase, "completed_tasks": completed, "total_tasks": total, "detail": detail},
+    })
+    return completed, total
 
 
 def _refresh_curriculum_counts(curriculum_id: str) -> None:

@@ -200,6 +200,11 @@ detailed, high-quality instruction document (not a stub). Required files:
   (use their actual experience level/target roles); inline citation markers `[^n]`
   with a footnote list matching the citations array; length guidance (800–2000 words/section);
   ground every section in research notes retrieved first.
+- `review_phase.md` — Structured quality pass over the whole draft curriculum: a
+  per-section checklist (citations, diagrams, sample-Q&A coverage, 800-2000 word length,
+  coherence); fix failures directly via `write_section` overwrite (never a fragment);
+  `search_research_notes` against the existing note base only (no broad re-research);
+  after all modules pass, `write_curriculum_overview`; exit via `complete_phase("ready")`.
 - `refinement_phase.md` — How to handle edits (read before update, minimal targeted
   changes, preserve citations, describe what changed), explanations (teach in chat with
   analogies matched to user profile; don't modify content unless asked), additions
