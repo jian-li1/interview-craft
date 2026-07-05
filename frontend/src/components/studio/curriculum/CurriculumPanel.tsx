@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { BookOpen, Loader2, Workflow as WorkflowIcon } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/Tabs";
@@ -56,6 +56,7 @@ export function CurriculumPanel({ curriculumId, onExplain }: CurriculumPanelProp
 
   const activity = useChatStore((s) => s.activity);
   const phaseLabel = useChatStore((s) => s.phaseLabel);
+  const plan = useChatStore((s) => s.plan);
 
   const [view, setView] = useState<View>("workflow");
   const [activeSelection, setActiveSelection] = useState<ActiveSelection | null>(null);
@@ -69,14 +70,20 @@ export function CurriculumPanel({ curriculumId, onExplain }: CurriculumPanelProp
     if (curriculumId) void fetchCurriculum(curriculumId);
   }, [curriculumId, fetchCurriculum]);
 
-  function handleSelectModule(moduleId: string) {
-    const mod = curriculum?.modules.find((m) => m.id === moduleId);
-    const firstSection = mod
-      ? [...mod.sections].sort((a, b) => a.order - b.order)[0] ?? null
-      : null;
-    setActiveSelection({ moduleId, sectionId: firstSection?.id ?? null });
-    setView("reader");
-  }
+  // Memoized: prevents identity churn that rebuilds all React Flow nodes on every
+  // CurriculumPanel render (including unrelated chat-store updates), which caused
+  // max-update-depth errors.
+  const handleSelectModule = useCallback(
+    (moduleId: string) => {
+      const mod = curriculum?.modules.find((m) => m.id === moduleId);
+      const firstSection = mod
+        ? [...mod.sections].sort((a, b) => a.order - b.order)[0] ?? null
+        : null;
+      setActiveSelection({ moduleId, sectionId: firstSection?.id ?? null });
+      setView("reader");
+    },
+    [curriculum]
+  );
 
   const hasContent = Boolean(curriculum && curriculum.modules.length > 0);
 
@@ -129,7 +136,7 @@ export function CurriculumPanel({ curriculumId, onExplain }: CurriculumPanelProp
             transition={{ duration: 0.25 }}
             className="h-full"
           >
-            <ActivityFeed activity={activity} phaseLabel={phaseLabel} />
+            <ActivityFeed activity={activity} phaseLabel={phaseLabel} plan={plan} />
           </motion.div>
         ) : view === "workflow" ? (
           <WorkflowView curriculum={curriculum!} onSelectModule={handleSelectModule} />

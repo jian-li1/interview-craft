@@ -86,8 +86,12 @@ Key requirements:
   to put its planning/thinking in a `<thinking>...</thinking>` block at the start of each
   response; the stream parser routes text inside the block to `reasoning_delta` and the rest
   to `text_delta`. (Works identically for Gemini and llama.cpp — provider-agnostic.)
-- **Cancellation**: `stop` frame sets a cancel event checked between iterations and during
-  streaming; persist state before exiting so the run is resumable.
+- **Cancellation**: `stop` frame sets a cancel event checked between iterations, during
+  streaming, and between/during tool calls — the check is a race (via a small
+  `_wait_cancellable` helper) against whatever the loop is currently awaiting, so a
+  `stop` interrupts a stalled LLM stream read or an in-flight tool call (e.g. a slow
+  `fetch_url`) immediately rather than only at the next coarse checkpoint; persist
+  state before exiting so the run is resumable.
 - **Tool errors never crash the loop**: return `{"error": "..."}` as the observation so the
   agent can adapt (retry different query, skip source, etc.).
 - Concurrency guard: one active run per conversation (asyncio lock keyed by conv id).

@@ -24,6 +24,19 @@ _VALID_TRANSITIONS: dict[str, set[str]] = {
     "refinement": {"refinement"},
 }
 
+# Phase labels shown in phase_change events and replayed on reconnect (see app/ws/chat.py
+# session_ready resume snapshot).
+PHASE_LABELS: dict[str, str] = {
+    "intake": "Getting started",
+    "deep_research": "Researching",
+    "outline_planning": "Planning the curriculum",
+    "awaiting_approval": "Awaiting your approval",
+    "writing": "Writing curriculum content",
+    "review": "Reviewing",
+    "ready": "Ready",
+    "refinement": "Refining",
+}
+
 
 class RequestUserInputInput(BaseModel):
     """Input schema for `RequestUserInputTool`."""
@@ -179,17 +192,6 @@ class CompletePhaseTool(Tool):
         if new_status:
             fs.update_curriculum(ctx.curriculum_id, {"status": new_status})
 
-        label_map = {
-            "intake": "Getting started",
-            "deep_research": "Researching",
-            "outline_planning": "Planning the curriculum",
-            "awaiting_approval": "Awaiting your approval",
-            "writing": "Writing curriculum content",
-            "review": "Reviewing",
-            "ready": "Ready",
-            "refinement": "Refining",
-        }
-
         return {
             "status": "transitioned",
             "phase": input.next_phase,
@@ -197,6 +199,6 @@ class CompletePhaseTool(Tool):
             "_ws_event": {
                 "type": "phase_change",
                 "phase": input.next_phase,
-                "label": label_map.get(input.next_phase, input.next_phase),
+                "label": PHASE_LABELS.get(input.next_phase, input.next_phase),
             },
         }

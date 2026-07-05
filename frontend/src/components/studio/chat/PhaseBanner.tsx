@@ -67,7 +67,10 @@ export function PhaseBanner({ phase, label, progress }: PhaseBannerProps) {
         <p className="truncate text-sm font-medium">{label}</p>
         {progress && progress.total > 0 && (
           <p className="truncate text-xs text-muted-foreground">
-            {progress.completed}/{progress.total} tasks — {progress.detail}
+            {/* Resume snapshot sends detail: "" — only append "— {detail}" suffix
+                when detail is non-empty. */}
+            {progress.completed}/{progress.total} tasks
+            {progress.detail && ` — ${progress.detail}`}
           </p>
         )}
       </div>

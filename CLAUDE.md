@@ -55,8 +55,8 @@ specs silently.
 
 ## Code Documentation
 
-**Always add thorough inline comments to every piece of code you add or edit.** This is
-a strict requirement — not optional.
+**Always add inline comments to every piece of code you add or edit.** This is
+a strict requirement — not optional. Keep inline comments concise; do not write bloated inline comments.
 
 ### Editing existing code
 

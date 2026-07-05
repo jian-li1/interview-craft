@@ -41,6 +41,8 @@ export function useChatSocket(conversationId: string | null) {
       switch (event.type) {
         case "session_ready":
           setCurriculumId(event.curriculum_id);
+          // Show Stop button immediately on reconnect if a turn is still in flight.
+          setAgentRunning(event.agent_running);
           break;
         case "message_start":
           startMessage(event.message_id);

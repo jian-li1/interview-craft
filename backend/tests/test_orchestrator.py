@@ -376,3 +376,76 @@ async def test_run_turn_rejects_concurrent_run_on_same_conversation(monkeypatch,
         assert any(e["type"] == "error" for e in events)
     finally:
         lock.release()
+
+
+@pytest.mark.asyncio
+async def test_run_turn_cancels_mid_tool_call(monkeypatch, fake_fs, orchestrator):
+    """Verify a `stop` frame that arrives while a tool call is still in-flight (e.g. a
+    slow `fetch_url`) aborts the tool batch immediately rather than waiting for it to
+    finish, emits an error-status `tool_call_result` for the aborted call, and ends the
+    turn as CANCELLED — the `_wait_cancellable` race in `_run_turn_inner`'s tool-batch
+    loop (see orchestrator.py item B.3) is what's under test here.
+    """
+    import asyncio
+
+    from app.agent.orchestrator import _cancel_events
+
+    conv, curriculum = _setup_conversation(fake_fs, phase="deep_research")
+
+    # Script a single tool call (web_search) followed by Done — the fake registry
+    # execute() below never actually returns normally; it hangs until cancelled so we
+    # can deterministically simulate "cancellation arrives mid-tool-call".
+    scripted = ScriptedLLM(
+        [
+            TextDelta(text="<thinking>searching</thinking>Let me look that up."),
+            ToolCallDelta(id="call_1", name="web_search", arguments={"query": "system design interview"}),
+            Done(),
+        ]
+    )
+    monkeypatch.setattr("app.agent.orchestrator.get_llm_provider", lambda *a, **k: scripted)
+    monkeypatch.setattr("app.agent.orchestrator.get_search_provider", lambda *a, **k: StubSearch())
+
+    cancel_event = _cancel_events[conv["id"]]
+
+    async def slow_execute(tool_name, raw_input, ctx):
+        """Simulate a tool call that never completes on its own — only cancellation
+        (via the cancel_event, set by the `stop` frame) ends it, standing in for a
+        real slow tool such as `fetch_url` stalling on a slow remote server.
+        """
+        # Signal cancellation once we're confirmed to be "inside" tool execution, then
+        # hang until asyncio.wait's caller (_wait_cancellable) cancels this task.
+        cancel_event.set()
+        await asyncio.sleep(3600)
+        raise AssertionError("slow_execute should have been cancelled before waking up")
+
+    monkeypatch.setattr(orchestrator._registry, "execute", slow_execute)
+
+    events = []
+
+    async def emit(event):
+        events.append(event)
+
+    result = await orchestrator.run_turn(
+        conversation_id=conv["id"],
+        curriculum_id=curriculum["id"],
+        owner_uid="uid1",
+        user_input="find me some resources",
+        emit=emit,
+    )
+
+    assert result.outcome == TurnOutcome.CANCELLED
+
+    tool_results = [e for e in events if e["type"] == "tool_call_result"]
+    assert len(tool_results) == 1
+    assert tool_results[0]["status"] == "error"
+    assert tool_results[0]["tool_call_id"] == "call_1"
+    assert "cancelled" in tool_results[0]["output_preview"]
+
+    assert events[-1] == {"type": "agent_done", "status": "cancelled"}
+
+    # The aborted call's record was still persisted so the next turn's context reflects
+    # what actually happened this iteration.
+    messages = fake_fs.fs.list_messages(conv["id"])
+    assistant_msgs = [m for m in messages if m["role"] == "assistant"]
+    assert len(assistant_msgs) == 1
+    assert assistant_msgs[0]["tool_calls"][0]["status"] == "error"

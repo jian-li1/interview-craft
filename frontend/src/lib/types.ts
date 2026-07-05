@@ -242,6 +242,14 @@ export interface SessionReadyEvent {
   type: "session_ready";
   conversation_id: string;
   curriculum_id: string | null;
+  /**
+   * True if an agent turn for this conversation is still running (the
+   * per-conversation orchestrator lock is held) at the moment this socket
+   * connected — lets a freshly (re)connected client immediately show the
+   * Stop button / running state instead of waiting for the next streamed
+   * event to imply it.
+   */
+  agent_running: boolean;
 }
 
 export interface MessageStartEvent {

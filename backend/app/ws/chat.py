@@ -10,11 +10,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import dataclass
 from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from app.agent.orchestrator import Orchestrator, PlanDecision, request_stop
+from app.agent.orchestrator import Orchestrator, PlanDecision, get_conversation_lock, request_stop
+from app.agent.tools.control import PHASE_LABELS
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.core.security import SESSION_COOKIE_NAME, InvalidSessionTokenError, decode_session_jwt
@@ -26,6 +28,29 @@ router = APIRouter()
 # Codes chosen in the 4000-4999 (application-defined) range per RFC 6455.
 WS_CODE_UNAUTHORIZED = 4401
 WS_CODE_FORBIDDEN = 4403
+
+
+@dataclass
+class _LiveConnection:
+    """The currently "live" socket for one conversation, plus its send-serialization lock.
+
+    Attributes:
+        ws (WebSocket): The most recently accepted WebSocket connection for this
+            conversation. Only this connection receives emitted events — see
+            `_live_connections` below for the rationale.
+        send_lock (asyncio.Lock): Serializes writes to `ws` so concurrent emitters
+            (multiple background agent-turn tasks, or the main receive loop) never
+            interleave partial JSON frames on the wire.
+    """
+
+    ws: WebSocket
+    send_lock: asyncio.Lock
+
+
+# Registry of the single "live" socket per conversation. Background agent turns outlive
+# WS reconnects; emit() looks up the current live socket at send time so reconnects
+# keep receiving events. Latest connection wins.
+_live_connections: dict[str, _LiveConnection] = {}
 
 
 async def _authenticate_ws(ws: WebSocket) -> str | None:
@@ -100,13 +125,21 @@ async def ws_chat(ws: WebSocket, conversation_id: str) -> None:
     orchestrator = Orchestrator(settings)
     curriculum_id = conversation.get("curriculum_id")
 
-    # Multiple background tasks (agent turns) and the main loop can all call emit()
-    # concurrently; the lock serializes writes so JSON frames are never interleaved on
-    # the wire.
-    send_lock = asyncio.Lock()
+    # Register this connection as the "live" one for this conversation — any previous
+    # connection object for the same conversation_id is now superseded (latest wins).
+    # A fresh, connection-scoped lock is used for send serialization (see _LiveConnection).
+    live = _LiveConnection(ws=ws, send_lock=asyncio.Lock())
+    _live_connections[conversation_id] = live
 
     async def emit(event: dict[str, Any]) -> None:
-        """Serialize and send a single WS event frame, swallowing send failures.
+        """Serialize and send a single WS event frame to the CURRENT live connection.
+
+        Deliberately does not capture `ws`/`live` from the enclosing scope by identity
+        at call time beyond the initial lookup — it re-reads `_live_connections` on
+        every call so that a background agent turn started by this connection keeps
+        streaming correctly even if a newer connection has since replaced this one in
+        the registry (see the module-level `_live_connections` docstring above for why
+        this matters for reconnect-mid-run).
 
         Args:
             event (dict[str, Any]): The event payload to send; must be JSON-serializable
@@ -115,21 +148,62 @@ async def ws_chat(ws: WebSocket, conversation_id: str) -> None:
         Returns:
             None:
         """
-        async with send_lock:
+        current = _live_connections.get(conversation_id)
+        if current is None:
+            # No live connection; drop event silently (background task shouldn't raise).
+            logger.debug(
+                "dropping WS event: no live connection for conversation",
+                extra={"extra_fields": {"conversation_id": conversation_id, "event_type": event.get("type")}},
+            )
+            return
+        async with current.send_lock:
             try:
-                await ws.send_text(json.dumps(event, default=str))
+                await current.ws.send_text(json.dumps(event, default=str))
             except Exception:
                 # The client may have already disconnected; don't let a send failure
                 # crash the background task or the receive loop.
                 logger.warning("failed to send WS event; connection likely closed")
 
+    # agent_running flag lets client show Stop button immediately on reconnect if a turn
+    # is still in flight.
     await emit(
         {
             "type": "session_ready",
             "conversation_id": conversation_id,
             "curriculum_id": curriculum_id,
+            "agent_running": get_conversation_lock(conversation_id).locked(),
         }
     )
+
+    # Resume snapshot: replay persisted state right after session_ready so a
+    # (re)connected client can rebuild UI without waiting for new agent activity.
+    if curriculum_id:
+        state = fs.get_agent_state(curriculum_id)
+        phase = (state or {}).get("phase")
+        # Skip "intake" phase — nothing meaningful to show before progress starts.
+        if phase and phase != "intake":
+            await emit({"type": "phase_change", "phase": phase, "label": PHASE_LABELS.get(phase, phase)})
+
+        plan = fs.get_plan(curriculum_id)
+        if plan:
+            tasks = plan.get("tasks", [])
+            total = len(tasks)
+            completed = sum(1 for t in tasks if t.get("status") == "done")
+            if total > 0:
+                await emit({"type": "progress", "completed": completed, "total": total, "detail": ""})
+
+            # Only replay the approval card if plan status is "proposed" (awaiting decision).
+            if plan.get("status") == "proposed":
+                await emit(
+                    {
+                        "type": "plan_proposed",
+                        "plan": {
+                            "outline_markdown": plan.get("outline_markdown", ""),
+                            "tasks": plan.get("tasks", []),
+                            "version": plan.get("version", 1),
+                        },
+                    }
+                )
 
     try:
         while True:
@@ -205,6 +279,12 @@ async def ws_chat(ws: WebSocket, conversation_id: str) -> None:
 
     except WebSocketDisconnect:
         logger.info("ws client disconnected", extra={"extra_fields": {"conversation_id": conversation_id}})
+    finally:
+        # Only unregister if we're still the live connection; a newer socket may have
+        # replaced us, and unconditional unregister would break its event delivery.
+        current = _live_connections.get(conversation_id)
+        if current is not None and current.ws is ws:
+            del _live_connections[conversation_id]
 
 
 async def _run_turn_safely(orchestrator: Orchestrator, **kwargs: Any) -> None:

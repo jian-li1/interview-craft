@@ -42,12 +42,24 @@ export interface ProposedPlan {
  * from tool-call start/result WS events. Distinct from `ToolCallRecord`
  * (which lives per-message) — this is a flattened, most-recent-first stream
  * across the whole conversation, capped for bounded memory (see `activity`).
+ *
+ * Carries the full tool-call info (not just a label) so `ActivityFeed` can
+ * render the same expandable disclosure UI as `ToolCallCard` — raw input,
+ * server-truncated output preview, and elapsed time — rather than just a
+ * one-line summary.
  */
 export interface ActivityItem {
   id: string;
-  label: string;
+  /** Raw tool name as sent by the backend, e.g. "web_search" — mapped to a friendly label at render time (see ActivityFeed's tool-name map). */
+  name: string;
+  /** Collapsed subtitle summarizing the call's input (from `summarizeInput`), e.g. a search query or URL. */
   detail: string;
+  /** Full tool input, shown in the expandable "Input" panel. */
+  input: Record<string, unknown>;
+  /** Server-truncated output preview, filled in by `resolveToolCall` once the call finishes; empty while still running. */
+  output_preview: string;
   status: ToolCallStatus;
+  elapsed_ms?: number;
   timestamp: number;
 }
 
@@ -126,6 +138,29 @@ function toChatMessage(m: MessageOut & { role: Exclude<MessageRole, "system"> })
   };
 }
 
+/**
+ * Builds a brand-new, empty streaming assistant `ChatMessage` for the given id — the
+ * same shape `startMessage` normally creates on `message_start`. Factored out so
+ * `startToolCall`/`appendReasoningDelta`/`appendTextDelta` can all synthesize this stub
+ * on demand (see their doc comments) when a WS event arrives for a message id the store
+ * doesn't know about yet — which happens after a reconnect, since `message_start` for
+ * the in-flight turn was only ever sent to the *previous* socket (see the live-socket
+ * registry in `backend/app/ws/chat.py`), never to this one.
+ */
+function stubAssistantMessage(id: string, seq: number): ChatMessage {
+  return {
+    id,
+    role: "assistant",
+    content: "",
+    reasoning: null,
+    reasoningStreaming: false,
+    contentStreaming: true,
+    tool_calls: [],
+    created_at: new Date().toISOString(),
+    seq,
+  };
+}
+
 export const useChatStore = create<ChatState>((set, get) => ({
   conversationId: null,
   curriculumId: null,
@@ -142,20 +177,39 @@ export const useChatStore = create<ChatState>((set, get) => ({
   setConversationId: (id) => set({ conversationId: id }),
   setCurriculumId: (id) => set({ curriculumId: id }),
 
-  // Replaces the full message list with persisted history from
-  // `conversationsApi.messages`, e.g. on initial load of an existing
-  // conversation (as opposed to messages arriving live over the WebSocket).
+  // Hydrate full history from persisted messages; also rebuilds activity feed so
+  // the Live Activity panel isn't empty after a refresh.
   hydrateHistory: (messages) =>
-    set({
+    set(() => {
       // System-role messages are internal bookkeeping (auto-continue nudges,
       // plan-approval records) and must never be rendered in the chat UI.
-      messages: messages
+      const chatMessages = messages
         .filter(
           (m): m is MessageOut & { role: Exclude<MessageRole, "system"> } =>
             m.role !== "system"
         )
         .map(toChatMessage)
-        .sort((a, b) => a.seq - b.seq),
+        .sort((a, b) => a.seq - b.seq);
+
+      // Flatten tool_calls into ActivityItems (newest-first, capped at 30).
+      const flattened: ActivityItem[] = chatMessages.flatMap((m) =>
+        m.tool_calls.map((tc) => ({
+          id: tc.id,
+          name: tc.name,
+          detail: summarizeInput(tc.input),
+          input: tc.input,
+          output_preview: tc.output_preview,
+          // Persisted "running" means turn ended before call resolved; surface as error.
+          status: tc.status === "running" ? "error" : tc.status,
+          elapsed_ms: tc.elapsed_ms,
+          timestamp: Date.parse(m.created_at),
+        }))
+      );
+
+      return {
+        messages: chatMessages,
+        activity: flattened.reverse().slice(0, 30),
+      };
     }),
 
   reset: () =>
@@ -192,41 +246,37 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set((s) => {
       if (s.messages.some((m) => m.id === id)) return s;
       return {
-        messages: [
-          ...s.messages,
-          {
-            id,
-            role: "assistant",
-            content: "",
-            reasoning: null,
-            reasoningStreaming: false,
-            contentStreaming: true,
-            tool_calls: [],
-            created_at: new Date().toISOString(),
-            seq: s.messages.length,
-          },
-        ],
+        messages: [...s.messages, stubAssistantMessage(id, s.messages.length)],
         agentRunning: true,
       };
     }),
 
+  // Reconnect-resilient: synthesize stub message if id is unknown (message_start
+  // was only sent to the previous socket).
   appendReasoningDelta: (id, delta) =>
-    set((s) => ({
-      messages: s.messages.map((m) =>
-        m.id === id
-          ? { ...m, reasoning: (m.reasoning ?? "") + delta, reasoningStreaming: true }
-          : m
-      ),
-    })),
+    set((s) => {
+      const exists = s.messages.some((m) => m.id === id);
+      const base = exists ? s.messages : [...s.messages, stubAssistantMessage(id, s.messages.length)];
+      return {
+        messages: base.map((m) =>
+          m.id === id
+            ? { ...m, reasoning: (m.reasoning ?? "") + delta, reasoningStreaming: true }
+            : m
+        ),
+      };
+    }),
 
+  // Reconnect-resilient: same rationale as appendReasoningDelta.
   appendTextDelta: (id, delta) =>
-    set((s) => ({
-      messages: s.messages.map((m) =>
-        m.id === id
-          ? { ...m, content: m.content + delta, contentStreaming: true }
-          : m
-      ),
-    })),
+    set((s) => {
+      const exists = s.messages.some((m) => m.id === id);
+      const base = exists ? s.messages : [...s.messages, stubAssistantMessage(id, s.messages.length)];
+      return {
+        messages: base.map((m) =>
+          m.id === id ? { ...m, content: m.content + delta, contentStreaming: true } : m
+        ),
+      };
+    }),
 
   endMessage: (id) =>
     set((s) => ({
@@ -238,33 +288,40 @@ export const useChatStore = create<ChatState>((set, get) => ({
       agentRunning: false,
     })),
 
+  // Reconnect-resilient: synthesize stub if messageId is unknown.
   startToolCall: (messageId, toolCallId, name, input) =>
-    set((s) => ({
-      messages: s.messages.map((m) =>
-        m.id === messageId
-          ? {
-              ...m,
-              tool_calls: [
-                ...m.tool_calls,
-                { id: toolCallId, name, input, output_preview: "", status: "running" },
-              ],
-            }
-          : m
-      ),
-      // Prepend so the feed reads newest-first, and cap at 30 entries so a
-      // long-running agent session (potentially hundreds of tool calls)
-      // doesn't grow this array — and the DOM list rendering it — unbounded.
-      activity: [
-        {
-          id: toolCallId,
-          label: name,
-          detail: summarizeInput(input),
-          status: "running",
-          timestamp: Date.now(),
-        } satisfies ActivityItem,
-        ...s.activity,
-      ].slice(0, 30),
-    })),
+    set((s) => {
+      const exists = s.messages.some((m) => m.id === messageId);
+      const base = exists
+        ? s.messages
+        : [...s.messages, stubAssistantMessage(messageId, s.messages.length)];
+      return {
+        messages: base.map((m) =>
+          m.id === messageId
+            ? {
+                ...m,
+                tool_calls: [
+                  ...m.tool_calls,
+                  { id: toolCallId, name, input, output_preview: "", status: "running" },
+                ],
+              }
+            : m
+        ),
+        // Prepend (newest-first), capped at 30 to bound memory growth.
+        activity: [
+          {
+            id: toolCallId,
+            name,
+            detail: summarizeInput(input),
+            input,
+            output_preview: "",
+            status: "running",
+            timestamp: Date.now(),
+          } satisfies ActivityItem,
+          ...s.activity,
+        ].slice(0, 30),
+      };
+    }),
 
   resolveToolCall: (messageId, toolCallId, outputPreview, status, elapsedMs) =>
     set((s) => ({
@@ -280,8 +337,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
             }
           : m
       ),
+      // detail (subtitle) left untouched — only result fields updated, so subtitle
+      // keeps showing "what was asked" rather than the output preview.
       activity: s.activity.map((a) =>
-        a.id === toolCallId ? { ...a, status, detail: outputPreview } : a
+        a.id === toolCallId ? { ...a, status, output_preview: outputPreview, elapsed_ms: elapsedMs } : a
       ),
     })),
 

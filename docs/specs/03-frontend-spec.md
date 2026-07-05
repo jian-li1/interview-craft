@@ -73,8 +73,9 @@ nice-to-have; fixed split acceptable). Mobile: tabbed switcher.
   task checklist, textarea for change requests, [Approve & build] / [Request changes]
   buttons → send `plan_decision`. Disable input while awaiting.
 - Composer: auto-growing textarea, Enter=send Shift+Enter=newline, stop button while agent
-  is running (sends `stop`), disabled states, reconnect logic with exponential backoff and
-  "reconnecting…" toast.
+  is running (sends `stop`, which aborts promptly — see spec 01 §7 — rather than waiting
+  for the current LLM stream chunk or tool call to finish on its own), disabled states,
+  reconnect logic with exponential backoff and "reconnecting…" toast.
 - History hydration: on load fetch GET /api/conversations/{id}/messages and render
   (including persisted tool calls + reasoning as collapsed blocks). Messages with
   `role: "system"` (internal bookkeeping — auto-continue nudges, plan-approval records) are
@@ -116,8 +117,12 @@ Two views, toggle: **Workflow** and **Reader**.
   terms".
 - Panel live-updates: on `curriculum_updated` refetch curriculum (SWR-style with the api
   client) and animate new/changed nodes & sections.
-- While researching/planning (no content yet): show an animated activity feed panel
-  (recent tool activity mirrored: "Searching: …", "Reading: example.com") + skeletons.
+- While researching/planning (no content yet): show an animated activity feed panel with
+  the full live tool-activity list (friendly per-tool labels, e.g. "Searching the web" /
+  "Reading a web page", each row an expandable disclosure showing raw input/output;
+  scrolls independently, capped to half the viewport height) and a curriculum outline
+  card once a plan has been proposed (falls back to skeleton placeholders only before any
+  plan exists).
 
 ## 4. State & lib
 

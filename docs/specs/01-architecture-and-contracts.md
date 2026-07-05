@@ -232,13 +232,19 @@ All frames are JSON: `{ "type": string, ...payload }`.
 ```
 {type:"user_message", content: str}
 {type:"plan_decision", decision:"approve"|"modify", feedback: str|null}
-{type:"stop"}                      # graceful cancel of current agent run
+{type:"stop"}                      # cancel of current agent run — see below, takes effect promptly
 {type:"ping"}
 ```
 
+`stop` aborts promptly rather than only at the next iteration boundary: it interrupts
+both a pending LLM stream read (the wait on the next streamed chunk, including a long
+prefill stall) and any tool call already in flight (e.g. a slow `fetch_url`), not just
+the gaps between them. See §7's server-event replay note below for what a client sees
+immediately after reconnecting to a still-running turn.
+
 ### Server → Client (streaming event stream)
 ```
-{type:"session_ready", conversation_id, curriculum_id}
+{type:"session_ready", conversation_id, curriculum_id, agent_running: bool}
 {type:"message_start", message_id, role:"assistant"}
 {type:"reasoning_delta", message_id, delta: str}         # thinking-chain text
 {type:"text_delta", message_id, delta: str}              # user-facing answer text
@@ -258,6 +264,20 @@ All frames are JSON: `{ "type": string, ...payload }`.
 {type:"error", message: str, recoverable: bool}
 {type:"pong"}
 ```
+
+On connect, immediately after `session_ready` (whose `agent_running` flag reflects
+whether the per-conversation orchestrator lock is currently held), the server replays a
+state snapshot so a freshly (re)connected client can rebuild its UI without waiting for
+new agent activity: a `phase_change` for the current persisted phase (skipped if the
+phase is still `"intake"`, i.e. nothing has happened yet), a `progress` event derived
+from the plan's task counts (only if a plan exists and has at least one task), and a
+`plan_proposed` event replaying the current plan (only if the plan's `status` is still
+`"proposed"`, i.e. still awaiting a `plan_decision`) — this restores the HITL approval
+card after a page refresh or navigation away and back. Also note that only the most
+recently connected socket per conversation ("live-socket registry") receives streamed
+events; if a client reconnects while a turn is still running (e.g. the user navigated
+away and back), the in-flight run keeps streaming to the new connection rather than the
+old, now-dead one.
 
 Frontend behavior: on `plan_proposed`, render an interactive approval card in the chat and
 the plan in the right panel; agent run pauses until `plan_decision` arrives (HITL). On

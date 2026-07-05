@@ -211,7 +211,9 @@ export default function StudioPage({ params }: StudioPageProps) {
       <div className="h-full min-h-0 w-[40%] min-w-[380px] max-w-[560px] shrink-0 border-r border-border">
         {chatPanel}
       </div>
-      <div className="h-full min-h-0 flex-1">{curriculumPanel}</div>
+      {/* min-w-0 overrides flex default to prevent long-nowrap text from causing
+          horizontal overflow. */}
+      <div className="h-full min-h-0 min-w-0 flex-1">{curriculumPanel}</div>
     </div>
   );
 }

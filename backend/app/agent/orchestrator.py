@@ -130,6 +130,66 @@ def _clear_cancel(conversation_id: str) -> None:
     _cancel_events[conversation_id].clear()
 
 
+# Sentinel: converts StopAsyncIteration to a plain value so asyncio.wait() can
+# distinguish stream exhaustion from exceptions.
+_STREAM_END = object()
+
+
+async def _wait_cancellable(coro_task: asyncio.Task, cancel_event: asyncio.Event) -> tuple[bool, Any]:
+    """Race an in-flight task against a cancellation event, whichever finishes first.
+
+    This is the core primitive behind "immediate" `stop` handling: without it, a `stop`
+    WS frame only takes effect at coarse checkpoints (between loop iterations), leaving
+    two gaps — (a) nothing interrupts a long wait on the next LLM stream chunk (a slow
+    prefill on a local llama.cpp server can stall for many seconds), and (b) a
+    long-running tool call (e.g. `fetch_url`, which can take 10-30s) runs to completion
+    even after `stop` arrives. By racing the actual work against `cancel_event.wait()`,
+    a `stop` frame that arrives mid-await is noticed within one event-loop tick instead
+    of only at the next natural checkpoint.
+
+    Args:
+        coro_task (asyncio.Task): An already-scheduled task wrapping the awaitable to
+            race (e.g. a task wrapping `stream.__anext__()` or `registry.execute(...)`).
+            Must be a `Task` (not a bare coroutine) so it can be cancelled independently
+            of the waiter task below.
+        cancel_event (asyncio.Event): The per-conversation cancellation event; if this
+            is set before `coro_task` completes, `coro_task` is cancelled and this
+            function returns early.
+
+    Returns:
+        tuple[bool, Any]: `(cancelled, result)`. If `coro_task` finished first,
+            `cancelled` is False and `result` is `coro_task.result()` (any exception
+            raised by `coro_task` propagates to the caller here, exactly as a plain
+            `await coro_task` would — callers rely on this to keep their existing
+            `except Exception` handling around the LLM stream working unchanged). If
+            the cancel event fired first, `cancelled` is True, `result` is None,
+            `coro_task` is cancelled, and any exception it raises as a result of that
+            cancellation is suppressed (we don't care about it — the caller is
+            abandoning this operation).
+    """
+    # Wrap the cancel_event wait in its own task so asyncio.wait can race the two
+    # concurrently; a bare coroutine can't be cancelled independently the way a Task can.
+    waiter = asyncio.create_task(cancel_event.wait())
+    try:
+        done, _pending = await asyncio.wait({coro_task, waiter}, return_when=asyncio.FIRST_COMPLETED)
+
+        if coro_task in done:
+            # Work finished first — .result() lets any exception propagate to the caller.
+            return False, coro_task.result()
+
+        # Cancel event fired first: cancel the in-flight work and discard whatever it
+        # raises while unwinding — the caller is abandoning this result anyway.
+        coro_task.cancel()
+        with contextlib.suppress(BaseException):
+            await coro_task
+        return True, None
+    finally:
+        # Always reap the waiter so it can't log "exception never retrieved" at GC time.
+        waiter.cancel()
+        with contextlib.suppress(BaseException):
+            await waiter
+
+
 class Orchestrator:
     """Runs one agent turn (a bounded ReAct loop) for a given conversation/curriculum."""
 
@@ -349,12 +409,37 @@ class Orchestrator:
             tool_calls: list[ToolCallDelta] = []
 
             stream = llm.chat_stream(messages, tools=tool_specs)
+            it = stream.__aiter__()
+
+            async def _next() -> Any:
+                """Advance the stream by one event, converting exhaustion to a sentinel.
+
+                `asyncio.wait` (used by `_wait_cancellable`) needs a plain return value
+                to distinguish "the task completed" from "the task raised" via
+                `.result()`/`.exception()` — but `StopAsyncIteration` is how a normal,
+                successful end-of-stream is signaled by `__anext__`, and we don't want
+                `_wait_cancellable` to (mis)treat normal stream exhaustion as an error
+                propagating from `coro_task.result()`. Converting it to `_STREAM_END`
+                here lets the loop below just check for that sentinel like any other
+                event type.
+
+                Returns:
+                    Any: The next `LLMEvent` from the stream, or the `_STREAM_END`
+                        sentinel once the stream is exhausted.
+                """
+                try:
+                    return await it.__anext__()
+                except StopAsyncIteration:
+                    return _STREAM_END
+
             try:
-                async for event in stream:
-                    # Cooperative cancellation check #2: mid-stream, so a `stop` frame
-                    # that arrives while the model is still generating breaks out promptly
-                    # instead of waiting for the full response.
-                    if cancel_event.is_set():
+                while True:
+                    # Cooperative cancellation check #2: race the stream chunk against
+                    # cancel_event so a `stop` interrupts mid-wait (including prefill stalls).
+                    cancelled, event = await _wait_cancellable(asyncio.create_task(_next()), cancel_event)
+                    if cancelled:
+                        break
+                    if event is _STREAM_END:
                         break
                     if isinstance(event, TextDelta):
                         delta = splitter.feed(event.text)
@@ -371,6 +456,8 @@ class Orchestrator:
                     elif isinstance(event, Done):
                         pass
             except Exception as exc:
+                # _wait_cancellable re-raises stream errors via .result(), so this catches
+                # genuine LLM failures exactly as before.
                 logger.exception("LLM stream failed", extra={"extra_fields": {"conversation_id": conversation_id}})
                 await emit({"type": "error", "message": f"LLM error: {exc}", "recoverable": True})
                 await emit({"type": "message_end", "message_id": message_id})
@@ -420,8 +507,15 @@ class Orchestrator:
 
             tool_call_records: list[dict[str, Any]] = []
             hit_hitl_gate = False
+            tool_batch_cancelled = False
 
             for tc in tool_calls:
+                # Cancellation check: must stop the *rest* of batch from starting, else
+                # remaining tool calls (e.g. slow fetch_url) run to completion.
+                if cancel_event.is_set():
+                    tool_batch_cancelled = True
+                    break
+
                 await emit(
                     {
                         "type": "tool_call_start",
@@ -431,7 +525,39 @@ class Orchestrator:
                         "input": tc.arguments,
                     }
                 )
-                result = await self._registry.execute(tc.name, tc.arguments, ctx)
+
+                # Race tool execution against cancel_event to interrupt slow in-flight
+                # calls (e.g. fetch_url).
+                cancelled, result = await _wait_cancellable(
+                    asyncio.create_task(self._registry.execute(tc.name, tc.arguments, ctx)),
+                    cancel_event,
+                )
+                if cancelled:
+                    # Partial Firestore writes acceptable: tools are merge-based or
+                    # idempotent, so half-applied writes are not corrupt, just incomplete.
+                    await emit(
+                        {
+                            "type": "tool_call_result",
+                            "message_id": message_id,
+                            "tool_call_id": tc.id,
+                            "name": tc.name,
+                            "output_preview": '{"error": "cancelled by user"}',
+                            "status": "error",
+                            "elapsed_ms": 0,
+                        }
+                    )
+                    tool_call_records.append(
+                        {
+                            "id": tc.id,
+                            "name": tc.name,
+                            "input": tc.arguments,
+                            "output_preview": '{"error": "cancelled by user"}',
+                            "status": "error",
+                        }
+                    )
+                    tool_batch_cancelled = True
+                    break
+
                 output = dict(result.output)
                 # Pop the internal signaling keys before building the client-visible
                 # preview — `_ws_events`/`_ws_event` are extra WS events a tool wants
@@ -478,6 +604,22 @@ class Orchestrator:
                 # within the same turn, up to max_iterations.
                 if is_gate and result.status == "ok":
                     hit_hitl_gate = True
+
+            if tool_batch_cancelled:
+                # Persist what ran (including cancelled tool records) and end turn.
+                fs.append_message(
+                    conversation_id,
+                    {
+                        "role": "assistant",
+                        "content": text_acc,
+                        "reasoning": reasoning_acc or None,
+                        "tool_calls": tool_call_records,
+                    },
+                )
+                fs.set_agent_state(curriculum_id, {"iteration_count": iteration})
+                await emit({"type": "message_end", "message_id": message_id})
+                await emit({"type": "agent_done", "status": "cancelled"})
+                return RunResult(TurnOutcome.CANCELLED)
 
             fs.append_message(
                 conversation_id,
