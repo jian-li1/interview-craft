@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useEffect, useRef, useState } from "react";
+import { use, useCallback, useEffect, useRef, useState } from "react";
 import { MessageCircle, Workflow } from "lucide-react";
 import { toast } from "sonner";
 import { ChatPanel } from "@/components/studio/chat/ChatPanel";
@@ -66,7 +66,10 @@ export default function StudioPage({ params }: StudioPageProps) {
   const hydrateHistory = useChatStore((s) => s.hydrateHistory);
   const resetChat = useChatStore((s) => s.reset);
   const resetCurriculum = useCurriculumStore((s) => s.reset);
-  const messages = useChatStore((s) => s.messages);
+  // Boolean selector (not the raw array) so this page doesn't re-render on
+  // every streaming text delta — the messages array identity changes per
+  // delta, but this boolean only flips once (empty -> non-empty).
+  const hasMessages = useChatStore((s) => s.messages.length > 0);
   const connectionState = useChatStore((s) => s.connectionState);
   const addUserMessage = useChatStore((s) => s.addUserMessage);
   const setAgentRunning = useChatStore((s) => s.setAgentRunning);
@@ -87,7 +90,7 @@ export default function StudioPage({ params }: StudioPageProps) {
   useEffect(() => {
     if (initialPromptSent.current) return;
     if (historyLoading || connectionState !== "open") return;
-    if (messages.length > 0) return;
+    if (hasMessages) return;
 
     const key = `ic:pending-prompt:${conversationId}`;
     const pending = sessionStorage.getItem(key);
@@ -102,7 +105,7 @@ export default function StudioPage({ params }: StudioPageProps) {
     conversationId,
     historyLoading,
     connectionState,
-    messages.length,
+    hasMessages,
     addUserMessage,
     setAgentRunning,
     socketRef,
@@ -141,10 +144,12 @@ export default function StudioPage({ params }: StudioPageProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversationId]);
 
-  function handleExplain(prompt: string) {
+  // useCallback (no deps: only calls stable setters) so this stays a stable
+  // reference passed down to CurriculumPanel, letting its memo() actually work.
+  const handleExplain = useCallback((prompt: string) => {
     setPrefillText(prompt);
     setMobileTab("chat");
-  }
+  }, []);
 
   const isMobile = useIsMobile();
 

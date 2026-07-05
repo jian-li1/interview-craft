@@ -89,7 +89,11 @@ export function ChatPanel({
   // ScrollToBottomPill so they can opt back in.
   useEffect(() => {
     if (!userScrolledUp.current) {
-      bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+      // Instant (not smooth) scroll: a smooth scroll restarted on every
+      // streaming delta emits intermediate scroll events mid-animation, which
+      // handleScroll reads as "not at bottom" and spuriously sets
+      // userScrolledUp — disabling auto-scroll and popping the pill.
+      bottomRef.current?.scrollIntoView({ block: "end" });
       setShowScrollPill(false);
     } else {
       setShowScrollPill(true);

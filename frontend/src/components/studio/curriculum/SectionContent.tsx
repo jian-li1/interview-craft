@@ -1,5 +1,6 @@
 "use client";
 
+import { memo, useMemo } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
@@ -32,81 +33,89 @@ interface SectionContentProps {
  * `SourcesCard` is rendered below the markdown body and lists `section.citations`
  * — the same citations that the footnote chips link down to.
  */
-export function SectionContent({ section, onExplain }: SectionContentProps) {
-  const components: Components = {
-    code(props) {
-      const { className, children, ...rest } = props;
-      const match = /language-(\w+)/.exec(className ?? "");
-      const raw = String(children).replace(/\n$/, "");
+function SectionContentImpl({ section, onExplain }: SectionContentProps) {
+  // useMemo (not a fresh object literal per render): react-markdown treats these
+  // functions as React element TYPES, so a new object identity every render
+  // remounts the whole markdown subtree — including MermaidDiagram, which would
+  // reset its svg state to null and restart its async render (the "stuck
+  // spinner" bug). Only depends on onExplain, the sole external value closed over.
+  const components: Components = useMemo(
+    () => ({
+      code(props) {
+        const { className, children, ...rest } = props;
+        const match = /language-(\w+)/.exec(className ?? "");
+        const raw = String(children).replace(/\n$/, "");
 
-      // Fenced code blocks tagged ```mermaid are diagrams, not literal code —
-      // hand them off to MermaidDiagram (which itself defers the actual
-      // mermaid import to a client-side-only useEffect; see that file).
-      if (match?.[1] === "mermaid") {
-        return <MermaidDiagram chart={raw} />;
-      }
+        // Fenced code blocks tagged ```mermaid are diagrams, not literal code —
+        // hand them off to MermaidDiagram (which itself defers the actual
+        // mermaid import to a client-side-only useEffect; see that file).
+        if (match?.[1] === "mermaid") {
+          return <MermaidDiagram chart={raw} />;
+        }
 
-      // NOTE: both branches below render identically (`<code className rest>`)
-      // — `isBlock` is computed but doesn't currently change the output. Left
-      // as-is per doc-only-pass scope; flagged in the task report rather than
-      // "fixed" here.
-      const isBlock = Boolean(match) || raw.includes("\n");
-      if (!isBlock) {
+        // NOTE: both branches below render identically (`<code className rest>`)
+        // — `isBlock` is computed but doesn't currently change the output. Left
+        // as-is per doc-only-pass scope; flagged in the task report rather than
+        // "fixed" here.
+        const isBlock = Boolean(match) || raw.includes("\n");
+        if (!isBlock) {
+          return (
+            <code className={className} {...rest}>
+              {children}
+            </code>
+          );
+        }
+
         return (
           <code className={className} {...rest}>
             {children}
           </code>
         );
-      }
-
-      return (
-        <code className={className} {...rest}>
-          {children}
-        </code>
-      );
-    },
-    h2({ children, ...rest }) {
-      const text = String(children);
-      return (
-        <div className="group relative flex items-center gap-1.5">
-          <h2 {...rest}>{children}</h2>
-          <button
-            type="button"
-            onClick={() => onExplain(`Explain "${text}" in simpler terms`)}
-            aria-label={`Explain "${text}" in simpler terms`}
-            className="flex shrink-0 items-center justify-center rounded-full p-1 text-muted-foreground/50 transition-colors hover:bg-muted hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring group-hover:text-muted-foreground"
-          >
-            <MessageCircleQuestionMark className="h-4 w-4" aria-hidden="true" />
-          </button>
-        </div>
-      );
-    },
-    a({ children, href, ...rest }) {
-      // react-markdown (via remark-gfm) renders markdown footnote refs
-      // (e.g. `text[^3]`) as <a href="#fn-3"> or, with the
-      // remark-rehype "clobber prefix" option, `#user-content-fn-3` — check
-      // both forms so the `[^n]` citation markers described in root
-      // CLAUDE.md are reliably detected and styled as chips regardless of
-      // which prefix react-markdown's pipeline happens to produce.
-      const isFootnoteRef = href?.startsWith("#user-content-fn-") || href?.startsWith("#fn-");
-      if (isFootnoteRef) {
+      },
+      h2({ children, ...rest }) {
+        const text = String(children);
         return (
-          <a
-            href={href}
-            {...rest}
-            className="mx-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-accent-soft px-1 text-[10px] font-semibold text-accent no-underline align-super"
-          >
+          <div className="group relative flex items-center gap-1.5">
+            <h2 {...rest}>{children}</h2>
+            <button
+              type="button"
+              onClick={() => onExplain(`Explain "${text}" in simpler terms`)}
+              aria-label={`Explain "${text}" in simpler terms`}
+              className="flex shrink-0 items-center justify-center rounded-full p-1 text-muted-foreground/50 transition-colors hover:bg-muted hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring group-hover:text-muted-foreground"
+            >
+              <MessageCircleQuestionMark className="h-4 w-4" aria-hidden="true" />
+            </button>
+          </div>
+        );
+      },
+      a({ children, href, ...rest }) {
+        // react-markdown (via remark-gfm) renders markdown footnote refs
+        // (e.g. `text[^3]`) as <a href="#fn-3"> or, with the
+        // remark-rehype "clobber prefix" option, `#user-content-fn-3` — check
+        // both forms so the `[^n]` citation markers described in root
+        // CLAUDE.md are reliably detected and styled as chips regardless of
+        // which prefix react-markdown's pipeline happens to produce.
+        const isFootnoteRef = href?.startsWith("#user-content-fn-") || href?.startsWith("#fn-");
+        if (isFootnoteRef) {
+          return (
+            <a
+              href={href}
+              {...rest}
+              className="mx-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-accent-soft px-1 text-[10px] font-semibold text-accent no-underline align-super"
+            >
+              {children}
+            </a>
+          );
+        }
+        return (
+          <a href={href} target="_blank" rel="noopener noreferrer" {...rest}>
             {children}
           </a>
         );
-      }
-      return (
-        <a href={href} target="_blank" rel="noopener noreferrer" {...rest}>
-          {children}
-        </a>
-      );
-    },
-  };
+      },
+    }),
+    [onExplain]
+  );
 
   return (
     <div>
@@ -123,3 +132,9 @@ export function SectionContent({ section, onExplain }: SectionContentProps) {
     </div>
   );
 }
+
+// memo: props are `section` (stable object reference from the curriculum
+// store between refetches) and `onExplain` (now useCallback-stable up the
+// tree), so re-rendering this component on unrelated chat-store churn is
+// pure waste — and previously the actual bug source (see components useMemo above).
+export const SectionContent = memo(SectionContentImpl);

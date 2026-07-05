@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useCallback, useEffect, useState } from "react";
+import { memo, useCallback, useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { BookOpen, Loader2, Workflow as WorkflowIcon } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/Tabs";
@@ -48,7 +48,7 @@ export interface ActiveSelection {
   sectionId: string | null;
 }
 
-export function CurriculumPanel({ curriculumId, onExplain }: CurriculumPanelProps) {
+function CurriculumPanelImpl({ curriculumId, onExplain }: CurriculumPanelProps) {
   const curriculum = useCurriculumStore((s) => s.curriculum);
   const loading = useCurriculumStore((s) => s.loading);
   const error = useCurriculumStore((s) => s.error);
@@ -84,6 +84,12 @@ export function CurriculumPanel({ curriculumId, onExplain }: CurriculumPanelProp
     },
     [curriculum]
   );
+
+  // useCallback (no deps: only calls the local setter) keeps ReaderView's
+  // onSelectSection prop referentially stable across renders.
+  const handleSelectSection = useCallback((moduleId: string, sectionId: string | null) => {
+    setActiveSelection({ moduleId, sectionId });
+  }, []);
 
   const hasContent = Boolean(curriculum && curriculum.modules.length > 0);
 
@@ -144,7 +150,7 @@ export function CurriculumPanel({ curriculumId, onExplain }: CurriculumPanelProp
           <ReaderView
             curriculum={curriculum!}
             activeSelection={activeSelection}
-            onSelectSection={(moduleId, sectionId) => setActiveSelection({ moduleId, sectionId })}
+            onSelectSection={handleSelectSection}
             onExplain={onExplain}
           />
         )}
@@ -152,3 +158,8 @@ export function CurriculumPanel({ curriculumId, onExplain }: CurriculumPanelProp
     </div>
   );
 }
+
+// memo: blocks re-renders driven by parent (StudioPage) chat-store churn,
+// since this component's props (curriculumId string, onExplain now
+// useCallback-stable) don't actually change on every chat message/delta.
+export const CurriculumPanel = memo(CurriculumPanelImpl);

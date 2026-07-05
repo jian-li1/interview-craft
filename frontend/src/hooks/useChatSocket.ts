@@ -37,7 +37,39 @@ export function useChatSocket(conversationId: string | null) {
     const socket = new ChatSocket(conversationId);
     socketRef.current = socket;
 
+    // Per-message buffers of not-yet-applied streaming deltas, flushed at most
+    // once per animation frame so a fast token stream produces one store update
+    // per frame instead of one per token (which caused nested sync re-renders
+    // and React's "Maximum update depth exceeded").
+    const textBuf = new Map<string, string>();
+    const reasoningBuf = new Map<string, string>();
+    let rafId: number | null = null;
+
+    // Applies all buffered deltas in one store update apiece, then clears the buffers.
+    const flushDeltas = () => {
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+        rafId = null;
+      }
+      textBuf.forEach((delta, id) => appendTextDelta(id, delta));
+      textBuf.clear();
+      reasoningBuf.forEach((delta, id) => appendReasoningDelta(id, delta));
+      reasoningBuf.clear();
+    };
+
+    // Schedules a single flush on the next animation frame (idempotent — a
+    // pending rAF is reused rather than stacking more).
+    const scheduleFlush = () => {
+      if (rafId === null) rafId = requestAnimationFrame(flushDeltas);
+    };
+
     const offEvent = socket.onEvent((event: ServerEvent) => {
+      // Any non-delta event must see already-buffered deltas applied first,
+      // so ordering is preserved (e.g. message_end shouldn't clear the
+      // streaming flag before its own buffered text has landed).
+      if (event.type !== "text_delta" && event.type !== "reasoning_delta") {
+        flushDeltas();
+      }
       switch (event.type) {
         case "session_ready":
           setCurriculumId(event.curriculum_id);
@@ -48,10 +80,14 @@ export function useChatSocket(conversationId: string | null) {
           startMessage(event.message_id);
           break;
         case "reasoning_delta":
-          appendReasoningDelta(event.message_id, event.delta);
+          // Accumulate into the buffer rather than dispatching immediately;
+          // scheduleFlush coalesces this with any deltas arriving this frame.
+          reasoningBuf.set(event.message_id, (reasoningBuf.get(event.message_id) ?? "") + event.delta);
+          scheduleFlush();
           break;
         case "text_delta":
-          appendTextDelta(event.message_id, event.delta);
+          textBuf.set(event.message_id, (textBuf.get(event.message_id) ?? "") + event.delta);
+          scheduleFlush();
           break;
         case "tool_call_start":
           startToolCall(event.message_id, event.tool_call_id, event.name, event.input);
@@ -117,6 +153,9 @@ export function useChatSocket(conversationId: string | null) {
     socket.connect();
 
     return () => {
+      // Apply any still-buffered deltas (and cancel a pending rAF) before
+      // tearing down, so nothing streamed is lost on unmount.
+      flushDeltas();
       offEvent();
       offState();
       socket.close();

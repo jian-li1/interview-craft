@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useRef, useState } from "react";
+import { memo, useEffect, useId, useRef, useState } from "react";
 import { useTheme } from "next-themes";
 import { AlertTriangle, Loader2 } from "lucide-react";
 
@@ -25,7 +25,7 @@ interface MermaidDiagramProps {
  * bloat it for no benefit, since this component always needs a live browser
  * DOM to actually draw anything.
  */
-export function MermaidDiagram({ chart }: MermaidDiagramProps) {
+function MermaidDiagramImpl({ chart }: MermaidDiagramProps) {
   const { resolvedTheme } = useTheme();
   const id = useId().replace(/[:]/g, "-");
   const containerRef = useRef<HTMLDivElement>(null);
@@ -97,3 +97,7 @@ export function MermaidDiagram({ chart }: MermaidDiagramProps) {
     />
   );
 }
+
+// memo: re-rendering itself restarts nothing (the effect above is deps-guarded),
+// but this avoids pointless render work while the parent chat stream re-renders.
+export const MermaidDiagram = memo(MermaidDiagramImpl);
