@@ -2,7 +2,10 @@
 
 Translates the provider-neutral ChatMessage/ToolSpec shapes into Gemini's `contents` +
 `Tool(function_declarations=...)` format, and streams responses back as the same
-TextDelta/ToolCallDelta/Done events the OpenAI provider produces.
+ReasoningDelta/TextDelta/ToolCallDelta/Done events the OpenAI provider produces.
+`chat_stream` requests thought summaries (`ThinkingConfig(include_thoughts=True)`) so
+thinking-capable models (e.g. gemini-2.5-*) surface native reasoning as ReasoningDelta;
+non-thinking models reject the config, so that request is retried once without it.
 """
 
 from __future__ import annotations
@@ -18,6 +21,7 @@ from app.services.llm.base import (
     ChatMessage,
     Done,
     LLMEvent,
+    ReasoningDelta,
     TextDelta,
     ToolCallDelta,
     ToolSpec,
@@ -198,25 +202,47 @@ class GeminiProvider:
             small (bool): If True, use the small/cheap model instead of the main one.
 
         Yields:
-            LLMEvent: `TextDelta` for each streamed text part, `ToolCallDelta` for each
-                function call part (Gemini emits complete function calls per chunk, so
-                no fragment accumulation is needed, unlike the OpenAI provider; each is
-                assigned a synthetic sequential id since Gemini doesn't provide one),
-                and finally one `Done` carrying the stream's finish reason.
+            LLMEvent: `ReasoningDelta` for each streamed thought-summary part (`part.thought
+                == True`, only produced by thinking-capable models with
+                `include_thoughts` set), `TextDelta` for each streamed answer text part,
+                `ToolCallDelta` for each function call part (Gemini emits complete
+                function calls per chunk, so no fragment accumulation is needed, unlike
+                the OpenAI provider; each is assigned a synthetic sequential id since
+                Gemini doesn't provide one), and finally one `Done` carrying the stream's
+                finish reason.
         """
         model = self._model_for(small)
         system_instruction, contents = _split_system_and_contents(messages)
         gemini_tools = _to_gemini_tools(tools)
 
+        # Request thought summaries so thinking-capable models stream native reasoning
+        # as ReasoningDelta; non-thinking models reject this field (see the retry below).
         config = genai_types.GenerateContentConfig(
             system_instruction=system_instruction,
             tools=gemini_tools,
             max_output_tokens=self._max_output_tokens,
+            thinking_config=genai_types.ThinkingConfig(include_thoughts=True),
         )
 
-        stream = await self._client.aio.models.generate_content_stream(
-            model=model, contents=contents, config=config
-        )
+        try:
+            stream = await self._client.aio.models.generate_content_stream(
+                model=model, contents=contents, config=config
+            )
+        except Exception:
+            # Non-thinking models (e.g. gemini-2.0-*) reject thinking_config with an
+            # INVALID_ARGUMENT error — retry once without it so those models still work.
+            logger.warning(
+                "model rejected thinking_config; retrying without thought summaries",
+                extra={"extra_fields": {"model": model}},
+            )
+            fallback_config = genai_types.GenerateContentConfig(
+                system_instruction=system_instruction,
+                tools=gemini_tools,
+                max_output_tokens=self._max_output_tokens,
+            )
+            stream = await self._client.aio.models.generate_content_stream(
+                model=model, contents=contents, config=fallback_config
+            )
 
         finish_reason: str | None = None
         call_counter = 0
@@ -229,7 +255,11 @@ class GeminiProvider:
             if not candidate.content or not candidate.content.parts:
                 continue
             for part in candidate.content.parts:
-                if part.text:
+                # Thought-summary parts carry the model's native reasoning, not the
+                # user-visible answer — route them separately from plain text parts.
+                if part.thought and part.text:
+                    yield ReasoningDelta(text=part.text)
+                elif part.text:
                     yield TextDelta(text=part.text)
                 if part.function_call:
                     call_counter += 1

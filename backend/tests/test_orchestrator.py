@@ -8,7 +8,7 @@ from __future__ import annotations
 import pytest
 
 from app.agent.orchestrator import Orchestrator, PlanDecision, TurnOutcome
-from app.services.llm.base import Done, TextDelta, ToolCallDelta
+from app.services.llm.base import Done, ReasoningDelta, TextDelta, ToolCallDelta
 
 
 class ScriptedLLM:
@@ -18,8 +18,8 @@ class ScriptedLLM:
         """Store the fixed sequence of streaming events to replay.
 
         Args:
-            events (list): Sequence of `TextDelta`/`ToolCallDelta`/`Done` events that
-                `chat_stream` will yield, in order, on its single supported call.
+            events (list): Sequence of `ReasoningDelta`/`TextDelta`/`ToolCallDelta`/`Done`
+                events that `chat_stream` will yield, in order, on its single supported call.
         """
         self._events = events
 
@@ -112,7 +112,8 @@ async def test_run_turn_pauses_on_hitl_gate_tool_call(monkeypatch, fake_fs, orch
 
     scripted = ScriptedLLM(
         [
-            TextDelta(text="<thinking>proposing a plan</thinking>Here is my proposed outline."),
+            ReasoningDelta(text="proposing a plan"),
+            TextDelta(text="Here is my proposed outline."),
             ToolCallDelta(
                 id="call_1",
                 name="propose_task_plan",
@@ -183,13 +184,14 @@ async def test_run_turn_pauses_on_hitl_gate_tool_call(monkeypatch, fake_fs, orch
 @pytest.mark.asyncio
 async def test_run_turn_plain_text_answer_completes_done(monkeypatch, fake_fs, orchestrator):
     """Verify a plain-text LLM response (no tool calls) completes the turn as DONE,
-    splitting `<thinking>` reasoning from user-facing content in the saved message.
+    with provider-native reasoning and user-facing content saved separately in the message.
     """
     conv, curriculum = _setup_conversation(fake_fs, phase="refinement")
 
     scripted = ScriptedLLM(
         [
-            TextDelta(text="<thinking>just answer</thinking>Sure, here's an explanation."),
+            ReasoningDelta(text="just answer"),
+            TextDelta(text="Sure, here's an explanation."),
             Done(),
         ]
     )
@@ -439,7 +441,8 @@ async def test_run_turn_cancels_mid_tool_call(monkeypatch, fake_fs, orchestrator
     # can deterministically simulate "cancellation arrives mid-tool-call".
     scripted = ScriptedLLM(
         [
-            TextDelta(text="<thinking>searching</thinking>Let me look that up."),
+            ReasoningDelta(text="searching"),
+            TextDelta(text="Let me look that up."),
             ToolCallDelta(id="call_1", name="web_search", arguments={"query": "system design interview"}),
             Done(),
         ]

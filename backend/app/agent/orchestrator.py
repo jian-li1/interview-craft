@@ -15,14 +15,13 @@ from enum import Enum
 from typing import Any
 
 from app.agent.memory.manager import MemoryManager
-from app.agent.stream_split import ThinkingStreamSplitter
 from app.agent.tools.base import AgentContext
 from app.agent.tools.control import PHASE_LABELS
 from app.agent.tools.registry import ToolRegistry
 from app.core.config import Settings
 from app.core.logging import get_logger
 from app.services import firestore as fs
-from app.services.llm.base import ChatMessage, Done, TextDelta, ToolCallDelta
+from app.services.llm.base import ChatMessage, Done, ReasoningDelta, TextDelta, ToolCallDelta
 from app.services.llm.factory import get_llm_provider
 from app.services.search.factory import get_search_provider
 
@@ -302,8 +301,8 @@ class Orchestrator:
         """Run the actual ReAct loop body, already holding the per-conversation lock.
 
         Implements the per-iteration cycle documented in `app/agent/CLAUDE.md`:
-        `build_context -> chat_stream -> split thinking/text -> execute tool calls ->
-        check HITL gate -> loop or return`. Re-reads `phase` fresh from Firestore at the
+        `build_context -> chat_stream -> route reasoning/text deltas -> execute tool
+        calls -> check HITL gate -> loop or return`. Re-reads `phase` fresh from Firestore at the
         top of every iteration (a `complete_phase` call from a tool executed in a prior
         iteration only takes effect starting the next iteration).
 
@@ -404,7 +403,6 @@ class Orchestrator:
 
             tool_specs = self._registry.specs_for_phase(phase)
 
-            splitter = ThinkingStreamSplitter()
             reasoning_acc = ""
             text_acc = ""
             tool_calls: list[ToolCallDelta] = []
@@ -442,16 +440,15 @@ class Orchestrator:
                         break
                     if event is _STREAM_END:
                         break
-                    if isinstance(event, TextDelta):
-                        delta = splitter.feed(event.text)
-                        if delta.reasoning:
-                            reasoning_acc += delta.reasoning
-                            await emit(
-                                {"type": "reasoning_delta", "message_id": message_id, "delta": delta.reasoning}
-                            )
-                        if delta.text:
-                            text_acc += delta.text
-                            await emit({"type": "text_delta", "message_id": message_id, "delta": delta.text})
+                    if isinstance(event, ReasoningDelta):
+                        # Provider-native reasoning (OpenAI-compat reasoning_content/
+                        # reasoning field, or Gemini thought-summary parts) — forwarded
+                        # 1:1 to the client as reasoning_delta.
+                        reasoning_acc += event.text
+                        await emit({"type": "reasoning_delta", "message_id": message_id, "delta": event.text})
+                    elif isinstance(event, TextDelta):
+                        text_acc += event.text
+                        await emit({"type": "text_delta", "message_id": message_id, "delta": event.text})
                     elif isinstance(event, ToolCallDelta):
                         tool_calls.append(event)
                     elif isinstance(event, Done):
@@ -477,9 +474,6 @@ class Orchestrator:
             # partial text/reasoning was accumulated before the cancellation was noticed,
             # rather than silently discarding it.
             if cancel_event.is_set():
-                final_delta = splitter.flush()
-                text_acc += final_delta.text
-                reasoning_acc += final_delta.reasoning
                 fs.append_message(
                     conversation_id,
                     {"role": "assistant", "content": text_acc, "reasoning": reasoning_acc or None, "tool_calls": []},
@@ -488,10 +482,6 @@ class Orchestrator:
                 await emit({"type": "message_end", "message_id": message_id})
                 await emit({"type": "agent_done", "status": "cancelled"})
                 return RunResult(TurnOutcome.CANCELLED)
-
-            final_delta = splitter.flush()
-            text_acc += final_delta.text
-            reasoning_acc += final_delta.reasoning
 
             if not tool_calls:
                 # No tool calls this iteration means the model produced a final answer:

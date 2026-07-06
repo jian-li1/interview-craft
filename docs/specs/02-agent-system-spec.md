@@ -86,10 +86,14 @@ async def run_turn(ctx: AgentContext, user_message: str | PlanDecision):
 
 Key requirements:
 - **Streaming**: use the provider's native streaming; forward text deltas immediately.
-  For OpenAI, reasoning is simulated via a convention: the system prompt instructs the model
-  to put its planning/thinking in a `<thinking>...</thinking>` block at the start of each
-  response; the stream parser routes text inside the block to `reasoning_delta` and the rest
-  to `text_delta`. (Works identically for Gemini and llama.cpp — provider-agnostic.)
+  Reasoning comes from the provider's own native reasoning stream, not a prompt convention:
+  OpenAI-compatible endpoints expose a `reasoning_content` delta field on streaming chat
+  completions (the DeepSeek/llama.cpp/vLLM convention; `reasoning` is read as a fallback for
+  OpenRouter-style gateways; first-party OpenAI models expose neither field, so no reasoning
+  events are emitted for them), and Gemini exposes thought-summary parts (`part.thought ==
+  true`) when `thinking_config.include_thoughts` is set on the request. Providers emit these
+  as `ReasoningDelta` events (vs. `TextDelta` for answer text), which the orchestrator
+  forwards 1:1 as `reasoning_delta`/`text_delta` WS events.
 - **Cancellation**: `stop` frame sets a cancel event checked between iterations, during
   streaming, and between/during tool calls — the check is a race (via a small
   `_wait_cancellable` helper) against whatever the loop is currently awaiting, so a
@@ -179,8 +183,8 @@ These are loaded from disk (cached) and composed per phase. Each must be a genui
 detailed, high-quality instruction document (not a stub). Required files:
 
 - `base_system.md` — Identity ("InterviewCraft Agent"), mission, ReAct behavioral rules
-  (think in `<thinking>` block first: assess state → decide next action; one coherent
-  batch of tool calls per step; adapt on tool errors), tone, honesty about sources,
+  (reason internally first (native reasoning): assess state → decide next action; one
+  coherent batch of tool calls per step; adapt on tool errors), tone, honesty about sources,
   personalization mandate (always ground advice in the user profile), safety rules
   (no fabricated citations — every factual claim traceable to a research note).
 - `research_phase.md` — Deep-research methodology: query diversification strategy (the 6

@@ -30,8 +30,9 @@ specs silently.
 - Auth: Google Identity Services ID token → verified server-side (google-auth) → backend's
   own JWT in httpOnly SameSite=Lax cookie `ic_session`. Mutating routes require
   `X-Requested-With: XMLHttpRequest`.
-- Agent streaming: provider-agnostic `<thinking>…</thinking>` convention splits reasoning
-  from user-facing text; the WS layer emits `reasoning_delta` vs `text_delta`.
+- Agent streaming surfaces provider-native reasoning (OpenAI-compatible `reasoning_content`
+  stream field; Gemini thought-summary parts via `include_thoughts`); the WS layer emits
+  `reasoning_delta` vs `text_delta`.
 - HITL: `propose_task_plan` and `request_user_input` tools PAUSE the ReAct loop (state
   persisted to `curricula/{id}/state/main`); loop resumes on the next client WS frame.
   Runs are resumable/cancellable; one active run per conversation (asyncio lock).

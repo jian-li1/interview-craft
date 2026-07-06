@@ -40,8 +40,8 @@ class Message(ApiModel):
         id (str): Unique message id.
         role (Role): Author of the message ("user", "assistant", or "system").
         content (str): User-facing text content (reasoning is stored separately).
-        reasoning (str | None): Extracted `<thinking>...</thinking>` reasoning text for
-            assistant messages, split out from `content` by the streaming layer.
+        reasoning (str | None): Model-native reasoning/thinking text surfaced by the LLM
+            provider, streamed as reasoning_delta and stored for replay.
         tool_calls (list[ToolCallRecord]): Tool invocations made while producing this
             message, if any.
         created_at (dt.datetime): Timestamp the message was created.

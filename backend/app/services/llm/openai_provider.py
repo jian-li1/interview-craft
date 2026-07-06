@@ -20,6 +20,7 @@ from app.services.llm.base import (
     ChatMessage,
     Done,
     LLMEvent,
+    ReasoningDelta,
     TextDelta,
     ToolCallDelta,
     ToolSpec,
@@ -146,7 +147,10 @@ class OpenAIProvider:
             small (bool): If True, use the small/cheap model instead of the main one.
 
         Yields:
-            LLMEvent: `TextDelta` for each streamed text chunk, `ToolCallDelta` for each
+            LLMEvent: `ReasoningDelta` for each streamed native-reasoning chunk (only
+                emitted by OpenAI-compatible gateways that expose a `reasoning_content`/
+                `reasoning` delta field — first-party OpenAI models emit none), `TextDelta`
+                for each streamed answer text chunk, `ToolCallDelta` for each
                 fully-assembled tool call (tool call argument fragments are accumulated
                 across chunks and only emitted once complete), and finally one `Done`
                 carrying the stream's finish reason.
@@ -176,6 +180,15 @@ class OpenAIProvider:
             delta = choice.delta
             if choice.finish_reason:
                 finish_reason = choice.finish_reason
+
+            if delta:
+                # Not a typed SDK field: DeepSeek/llama.cpp/vLLM/SiliconFlow use
+                # `reasoning_content`, OpenRouter-style gateways use `reasoning` — pydantic
+                # allows extra fields so getattr works even though ChoiceDelta doesn't
+                # declare either.
+                reasoning = getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None)
+                if reasoning:
+                    yield ReasoningDelta(text=reasoning)
 
             if delta and delta.content:
                 yield TextDelta(text=delta.content)

@@ -54,7 +54,21 @@ class ToolCallDelta:
 
 @dataclass(slots=True)
 class TextDelta:
-    """A chunk of raw text as it streams from the model (before thinking/text split)."""
+    """A chunk of user-visible answer text as it streams from the model.
+
+    Reasoning arrives separately as `ReasoningDelta` — this is answer text only.
+    """
+
+    text: str
+
+
+@dataclass(slots=True)
+class ReasoningDelta:
+    """A chunk of the model's native reasoning/thinking text as it streams.
+
+    Surfaced by the provider (OpenAI-compatible `reasoning_content`/`reasoning` delta
+    fields, or Gemini thought-summary parts) and emitted to the client as `reasoning_delta`.
+    """
 
     text: str
 
@@ -68,7 +82,7 @@ class Done:
     finish_reason: str | None = None
 
 
-LLMEvent = TextDelta | ToolCallDelta | Done
+LLMEvent = TextDelta | ReasoningDelta | ToolCallDelta | Done
 
 
 @dataclass(slots=True)
@@ -107,9 +121,10 @@ class LLMProvider(Protocol):
                 instead of the main model.
 
         Yields:
-            LLMEvent: A sequence of `TextDelta` (streamed text chunks) and/or
-                `ToolCallDelta` (fully-assembled tool calls) events, terminated by
-                exactly one `Done` event carrying usage/finish-reason info.
+            LLMEvent: A sequence of `ReasoningDelta` (native reasoning/thinking text,
+                when the provider surfaces it), `TextDelta` (streamed answer text
+                chunks), and/or `ToolCallDelta` (fully-assembled tool calls) events,
+                terminated by exactly one `Done` event carrying usage/finish-reason info.
         """
         ...
 

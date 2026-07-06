@@ -19,7 +19,7 @@ import type { ChatMessage } from "@/stores/useChatStore";
  * highlighting) instead of plain text.
  *
  * Assistant-only sub-blocks, in display order:
- *  - `ReasoningBlock` — the `<thinking>...</thinking>` stream for this
+ *  - `ReasoningBlock` — the agent's native reasoning/thinking stream for this
  *    message, populated by `reasoning_delta` WS events.
  *  - `ToolCallGroup` — any tool calls the assistant made while composing
  *    this message.

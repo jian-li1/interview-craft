@@ -3,8 +3,8 @@
 This is the flagship document: a complete walkthrough of `backend/app/agent/` — the
 ReAct orchestrator, phase state machine, tool catalog, layered memory with
 auto-compaction, prompt files, and human-in-the-loop (HITL) mechanics. It traces real
-code (`orchestrator.py`, `memory/manager.py`, `memory/compaction.py`, `stream_split.py`,
-`tools/*.py`) against the binding contract in
+code (`orchestrator.py`, `memory/manager.py`, `memory/compaction.py`,
+`services/llm/{openai,gemini}_provider.py`, `tools/*.py`) against the binding contract in
 [docs/specs/02-agent-system-spec.md](../specs/02-agent-system-spec.md), and ends with a
 fully worked example tracing actual events and Firestore writes for one curriculum run.
 
@@ -18,8 +18,8 @@ turn:
    (`curricula/{id}/state/main`).
 2. Loops up to `AGENT_MAX_ITERATIONS` (default 60) times:
    - Assembles the full LLM context (`MemoryManager.build_context`, §5).
-   - Streams a completion from the active `LLMProvider`, splitting `<thinking>` from
-     answer text as it arrives (`ThinkingStreamSplitter`, §4).
+   - Streams a completion from the active `LLMProvider`, which itself separates native
+     reasoning from answer text as it arrives (`ReasoningDelta`/`TextDelta`, §4).
    - If the model requested tool calls, executes each via `ToolRegistry`, streaming
      `tool_call_start`/`tool_call_result` events, and checks whether a HITL gate tool
      fired.
@@ -119,16 +119,17 @@ suggest — `review`'s status is still `"writing"` (from `CompletePhaseTool`'s
    - Generates a fresh `message_id`, emits `message_start`.
    - Fetches `tool_specs = registry.specs_for_phase(phase)` and opens
      `llm.chat_stream(messages, tools=tool_specs)`.
-   - **Streams**: for each `TextDelta`, feeds it through a per-iteration
-     `ThinkingStreamSplitter` (§4), emitting `reasoning_delta`/`text_delta` as text
-     arrives; checks the cancel event between chunks too (not just at loop top) so a
-     `stop` mid-generation is responsive. `ToolCallDelta`s accumulate into a list;
+   - **Streams**: for each `ReasoningDelta` event, appends to `reasoning_acc` and emits
+     `reasoning_delta`; for each `TextDelta`, appends to `text_acc` and emits
+     `text_delta` (§4 — the provider itself separates these, no orchestrator-side
+     parsing needed); checks the cancel event between chunks too (not just at loop top)
+     so a `stop` mid-generation is responsive. `ToolCallDelta`s accumulate into a list;
      `Done` is a no-op marker.
    - On LLM stream exception: logs, emits `error` + `message_end`, returns `ERROR`
      immediately (no retry).
-   - On cancellation mid-stream: flushes the splitter, still persists the partial
-     assistant message (with whatever reasoning/text arrived) to Firestore before
-     returning `CANCELLED` — cancellation never discards partial output.
+   - On cancellation mid-stream: still persists the partial assistant message (with
+     whatever reasoning/text accumulated so far) to Firestore before returning
+     `CANCELLED` — cancellation never discards partial output.
    - **No tool calls** → persist the assistant message, emit `message_end`, bump
      `iteration_count`, emit `agent_done(status="ok")`, return `DONE`.
    - **Tool calls present** → for each tool call (in order): emit `tool_call_start`,
@@ -171,40 +172,34 @@ actually constructed per WS connection in `app/ws/chat.py`, but the locks/events
 keyed globally by conversation id regardless of which orchestrator instance touches
 them).
 
-## 4. `<thinking>` stream-splitting — `stream_split.py`
+## 4. Native reasoning streaming (`services/llm/{openai,gemini}_provider.py`)
 
-The system prompt (`base_system.md`) instructs the model to always open its response
-with a `<thinking>...</thinking>` block containing its private reasoning, then write the
-user-facing reply after the closing tag. Because this is just a textual convention
-inside the ordinary completion stream, it works identically for OpenAI, Gemini, and
-llama.cpp — the orchestrator never has to know which provider produced the text.
+Reasoning is no longer a prompt convention parsed out of the text stream — each provider
+surfaces the model's own native reasoning/thinking output, and emits it as a distinct
+`ReasoningDelta` event (vs. `TextDelta` for the user-visible answer). The orchestrator
+doesn't parse anything; it just forwards `ReasoningDelta`/`TextDelta` 1:1 to the
+`reasoning_delta`/`text_delta` WS events as they arrive (`orchestrator.py`'s stream loop).
 
-`ThinkingStreamSplitter` is a small incremental state machine (`_buffer`, `_in_thinking`,
-`_seen_thinking`, `_finished_thinking_phase`) that can be fed arbitrarily-sized chunks
-(a streaming API can split `<thinking>` or `</thinking>` across chunk boundaries, even
-character-by-character) and always emits the correct reasoning/text split without
-buffering the whole response:
+**OpenAI-compatible provider** (`openai_provider.py`): the streamed `ChoiceDelta` object
+has no typed `reasoning_content` field in the OpenAI SDK — it's a de-facto convention used
+by DeepSeek, llama.cpp server, vLLM, and SiliconFlow on OpenAI-compatible chat-completions
+endpoints. Since the SDK's pydantic models allow extra fields, `chat_stream` reads
+`getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None)` every
+chunk (the `reasoning` fallback covers OpenRouter-style gateways) and yields
+`ReasoningDelta` when truthy, before the ordinary `delta.content` → `TextDelta` handling.
+First-party OpenAI models don't populate either field on chat completions, so no
+`ReasoningDelta` events are emitted for them — this is expected, not a bug.
 
-- While not yet decided whether the response opens with `<thinking>`: it strips leading
-  whitespace and checks if the buffered-so-far text is a *prefix* of `<thinking>`. If it
-  might still become the open tag with more characters, it waits (`return out` with
-  nothing emitted yet) rather than guessing wrong.
-- Once inside a thinking block, it hunts for `</thinking>`, holding back only the
-  suffix of the buffer that could still be a partial close tag (`_safe_emit_length`) so
-  reasoning text streams out live rather than only at block-close.
-- The instant the model has definitively **not** opened with `<thinking>` (buffer
-  diverges from the tag), or the close tag is found, `_finished_thinking_phase` latches
-  `True` and everything from then on — even a stray literal `<thinking>`-looking
-  substring later in the answer — is treated as plain text. The model is only expected
-  to open the block at the very start of a response.
-- `flush()` (called once at stream end) emits any trailing buffered content: as
-  `reasoning` if a thinking block was left unclosed (defensive — still surfaces to the
-  user as visible "thinking" rather than being silently dropped), otherwise as `text`.
-
-This is unit-tested exhaustively in `backend/tests/test_stream_split.py`, including
-tag-split-across-many-tiny-chunks (character-by-character feeding) and "text starting
-with an angle bracket that isn't `<thinking>`" (e.g. `<b>bold</b>` is correctly treated
-as plain text, not a false-positive thinking block).
+**Gemini provider** (`gemini_provider.py`): `chat_stream` sets
+`thinking_config=genai_types.ThinkingConfig(include_thoughts=True)` on the
+`GenerateContentConfig` (only for streaming — `complete()`, used for cheap one-shot
+generations, leaves it unset). Thinking-capable models (the configured defaults,
+gemini-2.5-pro/flash) then stream thought-summary parts with `part.thought == True`; the
+part loop yields `ReasoningDelta(text=part.text)` for those and `TextDelta` for ordinary
+parts. Non-thinking models (e.g. gemini-2.0-*) reject `thinking_config` with an
+INVALID_ARGUMENT error, so `chat_stream` wraps the initial
+`generate_content_stream(...)` call and retries once with a config that omits
+`thinking_config` if it raises — keeping those models working with no reasoning events.
 
 ## 5. Tool catalog (`app/agent/tools/`)
 
@@ -508,7 +503,7 @@ All eleven files live in `backend/app/agent/prompts/` and are treated as code (p
 
 | File | ~Lines | Used by | Purpose |
 |---|---|---|---|
-| `base_system.md` | 131 | Every phase (always layer 1) | Identity, the `<thinking>` ReAct convention, tool-error adaptation rules, tone, the "no fabricated citations" hard rule, the personalization mandate, phase discipline, HITL gate etiquette, scratchpad hygiene, tool-call efficiency guidance. |
+| `base_system.md` | 131 | Every phase (always layer 1) | Identity, the internal-reasoning ReAct convention, tool-error adaptation rules, tone, the "no fabricated citations" hard rule, the personalization mandate, phase discipline, HITL gate etiquette, scratchpad hygiene, tool-call efficiency guidance. |
 | `intake_phase.md` | 57 | `intake` | What to figure out (interview type, scope, constraints) from the user's message + profile; strict guidance on when to ask a clarifying question vs. proceed (err toward proceeding); curriculum naming; exit via `complete_phase("deep_research")`. |
 | `research_phase.md` | ~115 | `deep_research` | The 6 query-diversification coverage areas (format/stages; foundational skills; real sample questions; sample answers/frameworks; prep roadmaps; company/domain specifics); source-quality heuristics; mandatory fetch-before-note rule (snippets are relevance triage only; a failed fetch means skip the source, never note-from-snippet); note-taking standards (long, comprehensive, multi-paragraph summaries — roughly 150-500+ words — written from the fetched full text, sufficient that `writing` never needs to re-fetch); qualitative stop criteria (all relevant areas covered with fetched-and-distilled notes, diminishing returns — no numeric note-count target); anti-patterns (no duplicate notes, don't retry dead ends, don't pad or artificially cap count). |
 | `planning_phase.md` | ~95 | `outline_planning`, `awaiting_approval` | The beginner→interview-ready module arc (foundations → core skills → question drills → mock/strategy); no fixed module/section count — scope driven by researched material and user goals, timeline respected via priority ordering rather than a count cap; every module needs a sample-Q&A section; task-plan field contract; how `propose_task_plan` behaves as a HITL gate; how to incorporate `modify` feedback on revision (read all feedback, targeted changes, top-up research if needed). |
@@ -551,7 +546,7 @@ ordinary chat turn).
 **3. `intake` phase runs** (one orchestrator iteration): `build_context` composes
 `base_system.md + intake_phase.md + citation_guidelines.md + visual_guidelines.md` as
 layer 1, the user's synthesized profile as layer 2, the fresh state doc as layer 3. The
-model's `<thinking>` reasons about scope; since "Google SWE system design" is
+model's native reasoning reasons about scope; since "Google SWE system design" is
 unambiguous, it proceeds without `request_user_input`, calls `complete_phase(
 "deep_research", reason="scope is clear")`. This tool call: validates the transition,
 sets state `phase="deep_research"`, sets curriculum `status="researching"` (unchanged),

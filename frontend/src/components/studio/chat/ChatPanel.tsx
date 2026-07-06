@@ -29,7 +29,7 @@ interface ChatPanelProps {
  * up the transcript:
  *  - `PhaseBanner` — sticky header showing the current agent phase/label/progress.
  *  - `MessageBubble` (one per message) — which itself nests `ReasoningBlock`
- *    (the `<thinking>` stream) and `ToolCallGroup`/`ToolCallCard`.
+ *    (the native reasoning stream) and `ToolCallGroup`/`ToolCallCard`.
  *  - `PlanApprovalCard` — rendered inline in the transcript when a HITL plan
  *    is awaiting approve/modify.
  *  - `ScrollToBottomPill` — floating affordance shown once the user has

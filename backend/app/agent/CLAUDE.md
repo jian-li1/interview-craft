@@ -9,7 +9,7 @@ See `/CLAUDE.md` and `backend/CLAUDE.md` first. Deep scoped context for
 `Orchestrator.run_turn(...)` — one call per WS frame. Acquires a per-conversation
 `asyncio.Lock` (one active run per conversation; concurrent calls get a recoverable
 `error`). Loops up to `AGENT_MAX_ITERATIONS` times:
-`build_context → chat_stream → split thinking/text → execute tool calls → check HITL
+`build_context → chat_stream → route reasoning/text deltas → execute tool calls → check HITL
 gate → loop or return`. Returns `DONE` (plain text), `PAUSED` (HITL gate fired),
 `CANCELLED` (`stop` frame), or `ERROR`. Re-reads `phase` fresh from Firestore every
 iteration — a `complete_phase` call takes effect next iteration, not next turn.

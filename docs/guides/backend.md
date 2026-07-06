@@ -301,9 +301,11 @@ class LLMProvider(Protocol):
     async def complete(self, messages: list[ChatMessage], small: bool = False) -> str: ...
 ```
 
-`LLMEvent = TextDelta | ToolCallDelta | Done`. Providers stream raw text as `TextDelta`
-chunks (before any `<thinking>` splitting — that happens one layer up in the
-orchestrator, see agent-system.md) and only emit a `ToolCallDelta` once a tool call's
+`LLMEvent = TextDelta | ReasoningDelta | ToolCallDelta | Done`. Providers themselves split
+reasoning (`ReasoningDelta`) from answer text (`TextDelta`) using each API's native
+reasoning fields — OpenAI-compatible `reasoning_content`/`reasoning` delta fields, Gemini
+thought-summary parts — so the orchestrator just forwards events, it does no parsing
+itself (see agent-system.md §4). Providers only emit a `ToolCallDelta` once a tool call's
 name+arguments are **fully assembled** — the orchestrator never sees partial tool-call
 JSON fragments, regardless of provider.
 
@@ -338,10 +340,11 @@ JSON fragments, regardless of provider.
 ### How streaming events flow to the client
 
 `OpenAIProvider`/`GeminiProvider` → `LLMEvent` stream → `Orchestrator._run_turn_inner`
-(`backend/app/agent/orchestrator.py`) feeds each `TextDelta.text` through
-`ThinkingStreamSplitter.feed()` (`app/agent/stream_split.py`), which incrementally
-routes characters into `reasoning` (inside `<thinking>...</thinking>`) or `text`
-(everything else), emitting WS `reasoning_delta`/`text_delta` events as they arrive.
+(`backend/app/agent/orchestrator.py`) routes each event by type as it arrives:
+`ReasoningDelta` → WS `reasoning_delta`, `TextDelta` → WS `text_delta` — no
+orchestrator-side parsing, since the provider already separated native reasoning from
+answer text (`reasoning_content`/`reasoning` fields for OpenAI-compatible endpoints,
+thought-summary parts for Gemini; see agent-system.md §4).
 `ToolCallDelta`s are buffered until the stream ends, then executed one at a time via
 `ToolRegistry.execute`, each producing `tool_call_start`/`tool_call_result` WS events.
 Full detail (including the phase state machine driving which tools are visible) is in
@@ -453,7 +456,7 @@ Two central fixtures:
 
 92 tests currently pass (`python -m pytest -q` → `92 passed`), covering: app boot/smoke
 (`test_app_smoke.py`), auth+CSRF (`test_auth_and_csrf.py`), the SSRF guard
-(`test_ssrf_guard.py`), the thinking/text stream splitter (`test_stream_split.py`),
+(`test_ssrf_guard.py`),
 memory assembly + compaction thresholds (`test_memory.py`,
 `test_memory_manager_context.py`), the tool registry's phase filtering and
 error-safety (`test_tool_registry.py`), the orchestrator's HITL pause/resume/cancel/
