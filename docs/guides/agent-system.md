@@ -64,16 +64,13 @@ tool allowlist (§3) restricting what the LLM can even attempt to call.
 | `outline_planning` | `planning_phase.md` | `planning` | `search_research_notes`, `list_research_notes`, `propose_task_plan`, `get_task_plan` |
 | `awaiting_approval` | `planning_phase.md` | `awaiting_approval` | `get_task_plan` only (research/writing tools hidden) |
 | `writing` | `writing_phase.md` | `writing` | research tools + `list_curriculum_structure`, `write_section`, `write_curriculum_overview`, `set_module_status`, `get_task_plan` |
-| `review` | `review_phase.md` | `writing` | `list_curriculum_structure`, `read_section`, `write_section`, `write_curriculum_overview`, `set_module_status`, `search_research_notes` |
+| `review` | `review_phase.md` | `reviewing` | `list_curriculum_structure`, `read_section`, `write_section`, `write_curriculum_overview`, `set_module_status`, `search_research_notes` |
 | `ready` | `refinement_phase.md` | `ready` | full refinement toolset (below) |
 | `refinement` | `refinement_phase.md` | `ready` | `list_curriculum_structure`, `read_section`, `update_section`, `write_section`, `search_research_notes`, `list_research_notes`, `web_search`, `fetch_url`, `save_research_note` |
 
 `_ALWAYS_AVAILABLE = ["get_user_profile", "update_scratchpad", "complete_phase",
 "request_user_input"]` is unioned into every phase's list in
-`backend/app/agent/tools/registry.py`'s `_PHASE_TOOLS` map. Note `review` and `ready`
-both map their curriculum `status` differently than their tool-availability role might
-suggest — `review`'s status is still `"writing"` (from `CompletePhaseTool`'s
-`status_map`), and `ready`'s prompt file is actually `refinement_phase.md` (the
+`backend/app/agent/tools/registry.py`'s `_PHASE_TOOLS` map. Note `ready`'s prompt file is actually `refinement_phase.md` (the
 `_PHASE_PROMPT_FILES` map in `memory/manager.py` reuses it for both `ready` and
 `refinement`) — `ready` is really just the entry moment into steady-state refinement.
 

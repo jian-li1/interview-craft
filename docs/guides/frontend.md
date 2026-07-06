@@ -176,7 +176,7 @@ light mode.
   mechanism from the WS-driven live updates used inside Studio, since the dashboard has
   no open WS connection of its own). `CurriculumCard` maps `CurriculumStatus` to a
   label/Badge-variant via a `STATUS_META` dict, shows a progress bar for
-  `researching|planning|writing`, and wraps delete in a `ConfirmDialog`.
+  `researching|planning|writing|reviewing`, and wraps delete in a `ConfirmDialog`.
 - **Settings (`app/(app)/settings/page.tsx`)** — a custom (non-Radix) `Tabs` component
   with four tabs: `ProfileTab` (read-only profile display, "Edit background" links to
   `/onboarding`), `PreferencesTab` (LLM provider select and search provider select —

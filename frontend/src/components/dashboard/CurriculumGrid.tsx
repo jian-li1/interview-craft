@@ -15,7 +15,7 @@ import type { CurriculumSummary } from "@/lib/types";
  * while the initial `curriculaApi.list()` call is in flight, an
  * `EmptyState` if the call fails (and no cached data exists yet) or if the
  * list is empty. While loaded, it polls `curriculaApi.list()` every 8s so
- * in-progress curricula (researching/planning/writing) pick up status and
+ * in-progress curricula (researching/planning/writing/reviewing) pick up status and
  * progress updates without a manual refresh; deletions are applied
  * optimistically via the `onDeleted` callback passed to each card.
  */

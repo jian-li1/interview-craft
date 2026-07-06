@@ -198,14 +198,14 @@ class CompletePhaseTool(Tool):
         fs.set_agent_state(ctx.curriculum_id, {"phase": input.next_phase})
 
         # Curriculum-facing status differs from the internal phase name in a few cases
-        # (e.g. both "writing" and "review" phases map to the "writing" status shown to
-        # the user; "ready" and "refinement" both map to "ready").
+        # (e.g. "review" maps to the "reviewing" status shown to the user; "ready" and
+        # "refinement" both map to "ready").
         status_map = {
             "deep_research": "researching",
             "outline_planning": "planning",
             "awaiting_approval": "awaiting_approval",
             "writing": "writing",
-            "review": "writing",
+            "review": "reviewing",
             "ready": "ready",
             "refinement": "ready",
         }

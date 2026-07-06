@@ -20,6 +20,7 @@ const STATUS_META: Record<
   planning: { label: "Planning", variant: "info" },
   awaiting_approval: { label: "Awaiting approval", variant: "warning" },
   writing: { label: "Writing", variant: "warning" },
+  reviewing: { label: "Reviewing", variant: "info" },
   ready: { label: "Ready", variant: "success" },
   error: { label: "Error", variant: "destructive" },
 };
@@ -33,7 +34,7 @@ interface CurriculumCardProps {
  * A single curriculum tile in the dashboard grid. Renders the title, the
  * originating user prompt, a status badge (mapped from `CurriculumSummary["status"]`
  * via `STATUS_META`), and — while the agent is still generating
- * (researching/planning/writing) — an animated progress bar driven by
+ * (researching/planning/writing/reviewing) — an animated progress bar driven by
  * `curriculum.progress`. Clicking the card navigates to the studio for its
  * conversation; the trash icon opens a `ConfirmDialog` and, on confirm,
  * calls `curriculaApi.remove` then notifies the parent via `onDeleted` so
@@ -45,7 +46,8 @@ export function CurriculumCard({ curriculum, onDeleted }: CurriculumCardProps) {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const status = STATUS_META[curriculum.status];
-  const isGenerating = ["researching", "planning", "writing"].includes(curriculum.status);
+  // "reviewing" counts as generating too — the agent is still actively editing sections.
+  const isGenerating = ["researching", "planning", "writing", "reviewing"].includes(curriculum.status);
   const progressPct =
     curriculum.progress.total_tasks > 0
       ? Math.round((curriculum.progress.completed_tasks / curriculum.progress.total_tasks) * 100)

@@ -21,6 +21,7 @@ export type CurriculumStatus =
   | "planning"
   | "awaiting_approval"
   | "writing"
+  | "reviewing"
   | "ready"
   | "error";
 

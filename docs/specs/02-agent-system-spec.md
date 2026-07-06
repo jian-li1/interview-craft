@@ -62,8 +62,9 @@ intake ──► deep_research ──► outline_planning ──► awaiting_app
   Persist task status so a crashed/resumed run continues where it left off.
   `complete_phase("review")` is rejected while any plan task is still pending or any
   section doc is still `"planned"`.
-- **review**: Verify every section has citations, diagrams where valuable, sample Q&A
-  coverage; write the curriculum `overview`; status=ready. `complete_phase("ready")` is
+- **review**: Curriculum status=reviewing. Verify every section has citations, diagrams
+  where valuable, sample Q&A coverage; write the curriculum `overview`; then
+  status=ready. `complete_phase("ready")` is
   rejected server-side if any section isn't `"complete"` or the overview is still empty.
 - **refinement**: Steady conversational state. User asks for modifications
   (`update_section`), explanations ("explain X from module 2" → read section, explain in

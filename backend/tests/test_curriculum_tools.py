@@ -616,6 +616,8 @@ async def test_complete_phase_writing_to_review_allowed_when_all_done(fake_fs):
 
     result = await tool.execute(CompletePhaseInput(next_phase="review", reason="done"), ctx)
     assert result["status"] == "transitioned"
+    # Dashboard-facing status must be the distinct "reviewing" (not lumped into "writing").
+    assert fake_fs.fs.get_curriculum(curriculum["id"])["status"] == "reviewing"
 
 
 @pytest.mark.asyncio

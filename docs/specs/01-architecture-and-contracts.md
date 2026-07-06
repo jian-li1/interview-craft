@@ -136,7 +136,7 @@ users/{uid}/profile/main
 
 curricula/{curriculumId}
   owner_uid, title, user_prompt, emoji: str|null
-  status: "researching"|"planning"|"awaiting_approval"|"writing"|"ready"|"error"
+  status: "researching"|"planning"|"awaiting_approval"|"writing"|"reviewing"|"ready"|"error"
   overview: str                 # markdown overview of whole curriculum
   progress: { phase: str, completed_tasks: int, total_tasks: int, detail: str }
                                  # persisted (not just streamed over WS) on plan approval,

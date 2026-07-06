@@ -19,7 +19,7 @@ from pydantic import Field
 from app.models.common import ApiModel
 
 CurriculumStatus = Literal[
-    "researching", "planning", "awaiting_approval", "writing", "ready", "error"
+    "researching", "planning", "awaiting_approval", "writing", "reviewing", "ready", "error"
 ]
 ModuleStatus = Literal["planned", "writing", "complete"]
 SectionStatus = Literal["planned", "writing", "complete"]
