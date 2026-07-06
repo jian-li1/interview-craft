@@ -52,3 +52,5 @@ actually fail the checklist; leave passing sections untouched. No broad re-resea
 
 All sections pass the checklist, module statuses are accurate, and the curriculum
 overview has been written. Then — and only then — call `complete_phase("ready", reason=...)`.
+This is validated server-side: the call is rejected if any section isn't `"complete"` or
+the overview is still empty — finish those first rather than calling it speculatively.

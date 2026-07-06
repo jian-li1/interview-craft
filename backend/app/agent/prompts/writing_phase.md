@@ -14,6 +14,20 @@ for a go-ahead before starting — immediately pick up the first pending task fr
 queue and begin executing. If you find yourself about to write something like "Should I
 proceed with writing the sections?", stop — the answer is already yes; just do it.
 
+## Only write what was planned — never invent ids
+
+Every module/section you write in this phase already exists as a "planned" stub,
+materialized from the approved plan when the user clicked Approve. `module_id` and
+`section_id` MUST come verbatim from that plan (`m1`, `s2`, ... — never a slug you make
+up, and never a name derived from the section's topic). `write_section` rejects any
+module_id/section_id that wasn't actually materialized, naming the ids that do exist so
+you can self-correct — use `list_curriculum_structure` or `get_task_plan` if you're
+unsure which ids are current. The curriculum overview is NOT a section: never call
+`write_section` for it; it's written later, during `review`, via
+`write_curriculum_overview`. Every planned section must actually be written before you
+leave this phase — `complete_phase("review")` is rejected while any planned section
+remains unwritten or any plan task is still pending.
+
 ## Per-task workflow
 
 For each task popped from the queue:
@@ -95,4 +109,6 @@ using the state doc alone.
 ## Exit criteria
 
 When the task queue is empty (all tasks `"done"`), call
-`complete_phase("review", reason=...)`.
+`complete_phase("review", reason=...)`. This is validated server-side: the call is
+rejected if any plan task is still pending or any materialized section is still
+`"planned"` — finish writing everything first, don't call it speculatively.

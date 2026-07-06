@@ -134,7 +134,12 @@ class CompletePhaseTool(Tool):
         "-> outline_planning -> awaiting_approval -> writing -> review -> ready -> refinement). "
         "Validates the transition is allowed, updates the state doc and curriculum status, and "
         "emits a phase_change event. Only call this once your current phase's exit criteria "
-        "(defined in its instruction file) are actually met."
+        "(defined in its instruction file) are actually met. Two transitions are additionally "
+        "gated server-side and rejected with an error observation listing the blockers if not "
+        "met: writing->review requires every planned task done and no section left 'planned' "
+        "(finish writing every planned section via write_section first); review->ready requires "
+        "every section 'complete' and the curriculum overview written (via "
+        "write_curriculum_overview)."
     )
     input_model = CompletePhaseInput
 
@@ -160,8 +165,10 @@ class CompletePhaseTool(Tool):
             dict[str, Any]: On success, `{"status": "transitioned", "phase", "reason",
                 "_ws_event": {...}}` with a `phase_change` event for the orchestrator to
                 forward. On failure, `{"error": "..."}` if `next_phase` is not a known
-                `AgentPhase` value, or not an allowed transition from the current phase
-                per `_VALID_TRANSITIONS`.
+                `AgentPhase` value, not an allowed transition from the current phase per
+                `_VALID_TRANSITIONS`, or (writing->review / review->ready specifically)
+                the completeness gate in `_writing_exit_blockers`/`_review_exit_blockers`
+                finds unfinished work.
         """
         if input.next_phase not in _VALID_PHASES:
             return {"error": f"unknown phase: {input.next_phase!r}"}
@@ -175,6 +182,18 @@ class CompletePhaseTool(Tool):
                     f"allowed next phases from here: {sorted(allowed)}"
                 )
             }
+
+        # Completeness gates: block the two transitions most prone to premature exit
+        # (leaving planned sections unwritten, or publishing before review is done).
+        # Phrased to steer the model back to finishing the work, not just to reject.
+        if current == "writing" and input.next_phase == "review":
+            blocker = _writing_exit_blockers(ctx.curriculum_id)
+            if blocker:
+                return {"error": blocker}
+        if current == "review" and input.next_phase == "ready":
+            blocker = _review_exit_blockers(ctx.curriculum_id)
+            if blocker:
+                return {"error": blocker}
 
         fs.set_agent_state(ctx.curriculum_id, {"phase": input.next_phase})
 
@@ -213,3 +232,86 @@ class CompletePhaseTool(Tool):
                 "label": PHASE_LABELS.get(input.next_phase, input.next_phase),
             },
         }
+
+
+def _writing_exit_blockers(curriculum_id: str) -> str | None:
+    """Check whether the writing phase may exit to review, listing blockers if not.
+
+    Blocks the transition if any real (module_ref-bearing) plan task isn't yet "done",
+    or any materialized section doc is still "planned" — either signals content the
+    model believes is finished but never actually wrote via write_section.
+
+    Args:
+        curriculum_id (str): The curriculum whose plan/sections to check.
+
+    Returns:
+        str | None: An error message listing the specific unfinished tasks/sections,
+            phrased to steer the model back to writing them; None if writing is
+            actually complete and the transition may proceed.
+    """
+    plan = fs.get_plan(curriculum_id) or {}
+    # Only tasks bound to a real module count — module_ref is required by
+    # _validate_plan, so a truthy check here is just defensive against legacy data.
+    pending_tasks = [
+        t for t in plan.get("tasks", []) if t.get("module_ref") and t.get("status") != "done"
+    ]
+
+    planned_sections: list[str] = []
+    for module in fs.list_modules(curriculum_id):
+        for section in fs.list_sections(curriculum_id, module["id"]):
+            if section.get("status") == "planned":
+                planned_sections.append(f"{module['id']}/{section['id']}")
+
+    if not pending_tasks and not planned_sections:
+        return None
+
+    parts = []
+    if pending_tasks:
+        ids = [f"{t.get('id')} ({t.get('title', '')})" for t in pending_tasks]
+        parts.append(f"pending plan tasks: {ids}")
+    if planned_sections:
+        parts.append(f"sections still 'planned' (never written): {planned_sections}")
+    return (
+        "Cannot leave the writing phase yet — " + "; ".join(parts) + ". "
+        "Finish writing every planned section via write_section before calling "
+        "complete_phase(\"review\")."
+    )
+
+
+def _review_exit_blockers(curriculum_id: str) -> str | None:
+    """Check whether the review phase may exit to ready, listing blockers if not.
+
+    Blocks the transition if any section doc isn't "complete", or the curriculum's
+    `overview` field is empty/missing — publishing either case would leave the
+    curriculum incomplete for the reader.
+
+    Args:
+        curriculum_id (str): The curriculum whose sections/overview to check.
+
+    Returns:
+        str | None: An error message listing the incomplete sections and/or the
+            missing overview, phrased to steer the model back to finishing review;
+            None if the curriculum is actually ready to publish.
+    """
+    incomplete_sections: list[str] = []
+    for module in fs.list_modules(curriculum_id):
+        for section in fs.list_sections(curriculum_id, module["id"]):
+            if section.get("status") != "complete":
+                incomplete_sections.append(f"{module['id']}/{section['id']} ({section.get('status')})")
+
+    curriculum = fs.get_curriculum(curriculum_id) or {}
+    overview_missing = not (curriculum.get("overview") or "").strip()
+
+    if not incomplete_sections and not overview_missing:
+        return None
+
+    parts = []
+    if incomplete_sections:
+        parts.append(f"sections not yet 'complete': {incomplete_sections}")
+    if overview_missing:
+        parts.append("the curriculum overview has not been written yet")
+    return (
+        "Cannot leave the review phase yet — " + "; ".join(parts) + ". "
+        "Fix remaining sections via write_section and call write_curriculum_overview "
+        "before calling complete_phase(\"ready\")."
+    )

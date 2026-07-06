@@ -40,9 +40,16 @@ Handle each request type deliberately and don't over-reach.
 2. If the topic requires evidence you don't have yet, do targeted research first
    (`web_search` + `save_research_note`) — treat this like the writing-phase top-up
    research, not a full re-run of `deep_research`.
-3. Write the new content with `write_section` (creating the new module/section entry as
-   needed) following the same standards as `writing_phase.md` (citations, diagrams where
-   useful, personalization, length guidance).
+3. Write the new content with `write_section` following the same standards as
+   `writing_phase.md` (citations, diagrams where useful, personalization, length
+   guidance). New ids are constrained and validated server-side: a new section must use
+   the next sequential id within its module (`s{K+1}`, where K is the current highest
+   section number in that module — e.g. `s4` if `s1..s3` already exist); a brand-new
+   module must be `m{N+1}` (where N is the current highest module number) —
+   `write_section` auto-creates the module doc for you when given that exact id.
+   Arbitrary slugs or gapped numbers (e.g. `s6` when only `s1..s3` exist) are rejected
+   with an error naming the expected id — use `list_curriculum_structure` first if
+   you're unsure of the current max.
 4. Update `list_curriculum_structure`-visible metadata (module/section counts) implicitly
    through the tool; mention the addition briefly in chat once done.
 

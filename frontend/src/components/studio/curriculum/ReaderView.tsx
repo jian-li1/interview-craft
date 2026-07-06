@@ -201,7 +201,9 @@ export function ReaderView({
                   .sort((a, b) => a.order - b.order)
                   .map((sec) => {
                     const SecIcon = STATUS_ICON[sec.status];
-                    const isActive = current?.section?.id === sec.id;
+                    // Section ids are only unique per module ("s1" exists in every
+                    // module), so the active check must also match the module.
+                    const isActive = isActiveModule && current?.section?.id === sec.id;
                     return (
                       <li key={sec.id}>
                         <button

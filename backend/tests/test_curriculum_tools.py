@@ -2,7 +2,10 @@
 write_section/update_section auto-derive parent module status/estimated_minutes;
 set_module_status emits a curriculum_updated WS event; write_section and
 complete_phase persist progress onto the curriculum doc for REST readers;
-write_section/update_section reject broken Mermaid diagrams at write time.
+write_section/update_section reject broken Mermaid diagrams at write time;
+write_section's target guard rejects invented module/section ids in writing/review and
+enforces next-sequential-id creation in refinement; complete_phase's writing->review and
+review->ready completeness gates block premature phase exits.
 """
 
 from __future__ import annotations
@@ -236,6 +239,7 @@ async def test_complete_phase_review_to_ready_sets_status_and_progress(fake_fs):
     fake_fs.fs.update_conversation(conv["id"], {"curriculum_id": curriculum["id"]})
     fake_fs.fs.update_curriculum(curriculum["id"], {
         "status": "writing",
+        "overview": "A complete overview of the curriculum.",  # required by the review->ready exit gate
         "progress": {"phase": "review", "completed_tasks": 3, "total_tasks": 3, "detail": "Wrote section: X"},
     })
 
@@ -265,19 +269,22 @@ async def test_write_section_rejects_broken_mermaid_and_does_not_write(fake_fs):
         "uid1", "prep for a system design interview", "prep for a system design interview", conversation_id=conv["id"]
     )
     fake_fs.fs.update_conversation(conv["id"], {"curriculum_id": curriculum["id"]})
-    fake_fs.fs.create_module(curriculum["id"], "mod1", {"order": 0, "title": "Module 1", "status": "planned", "estimated_minutes": 0})
+    fake_fs.fs.create_module(curriculum["id"], "m1", {"order": 0, "title": "Module 1", "status": "planned", "estimated_minutes": 0})
 
     tool = WriteSectionTool()
     ctx = _make_ctx(curriculum["id"], conv["id"])
+    # refinement allows creating a new section at the next sequential id (s1, since
+    # none exist yet) — this exercises the mermaid guard rather than the target guard.
+    ctx.phase = "refinement"
     broken_content = "Intro text.\n\n```mermaid\nflowchart TD\n    A[Review (Optional)] --> B\n```\n"
 
     result = await tool.execute(
-        WriteSectionInput(module_id="mod1", section_id="sec1", title="Section 1", content_markdown=broken_content, citations=[]),
+        WriteSectionInput(module_id="m1", section_id="s1", title="Section 1", content_markdown=broken_content, citations=[]),
         ctx,
     )
 
     assert "error" in result
-    assert fake_fs.fs.get_section(curriculum["id"], "mod1", "sec1") is None
+    assert fake_fs.fs.get_section(curriculum["id"], "m1", "s1") is None
 
 
 @pytest.mark.asyncio
@@ -288,19 +295,21 @@ async def test_write_section_accepts_valid_mermaid(fake_fs):
         "uid1", "prep for a system design interview", "prep for a system design interview", conversation_id=conv["id"]
     )
     fake_fs.fs.update_conversation(conv["id"], {"curriculum_id": curriculum["id"]})
-    fake_fs.fs.create_module(curriculum["id"], "mod1", {"order": 0, "title": "Module 1", "status": "planned", "estimated_minutes": 0})
+    fake_fs.fs.create_module(curriculum["id"], "m1", {"order": 0, "title": "Module 1", "status": "planned", "estimated_minutes": 0})
 
     tool = WriteSectionTool()
     ctx = _make_ctx(curriculum["id"], conv["id"])
+    # refinement allows creating a new section at the next sequential id (s1).
+    ctx.phase = "refinement"
     valid_content = 'Intro text.\n\n```mermaid\nflowchart TD\n    A["Screen"] --> B["Onsite"]\n```\n'
 
     result = await tool.execute(
-        WriteSectionInput(module_id="mod1", section_id="sec1", title="Section 1", content_markdown=valid_content, citations=[]),
+        WriteSectionInput(module_id="m1", section_id="s1", title="Section 1", content_markdown=valid_content, citations=[]),
         ctx,
     )
 
     assert result["status"] == "written"
-    written = fake_fs.fs.get_section(curriculum["id"], "mod1", "sec1")
+    written = fake_fs.fs.get_section(curriculum["id"], "m1", "s1")
     assert written["content_markdown"] == valid_content
 
 
@@ -333,3 +342,332 @@ async def test_update_section_rejects_broken_mermaid_and_leaves_content_untouche
     assert "error" in result
     unchanged = fake_fs.fs.get_section(curriculum["id"], "mod1", "sec1")
     assert unchanged["content_markdown"] == original_content
+
+
+async def _setup_curriculum_for_write_section(fake_fs):
+    """Create a bare conversation + curriculum, wired together, for write_section target-guard tests.
+
+    Returns:
+        tuple: (curriculum dict, conversation dict).
+    """
+    conv = fake_fs.fs.create_conversation("uid1", "New conversation", curriculum_id=None)
+    curriculum = fake_fs.fs.create_curriculum(
+        "uid1", "prep for a system design interview", "prep for a system design interview", conversation_id=conv["id"]
+    )
+    fake_fs.fs.update_conversation(conv["id"], {"curriculum_id": curriculum["id"]})
+    return curriculum, conv
+
+
+@pytest.mark.asyncio
+async def test_write_section_writing_phase_rejects_unknown_module(fake_fs):
+    """In the writing phase, write_section on a module id that was never materialized
+    from the approved plan is rejected, listing the existing module ids.
+    """
+    curriculum, conv = await _setup_curriculum_for_write_section(fake_fs)
+    fake_fs.fs.create_module(curriculum["id"], "m1", {"order": 0, "title": "Module 1", "status": "planned", "estimated_minutes": 0})
+
+    tool = WriteSectionTool()
+    ctx = _make_ctx(curriculum["id"], conv["id"])
+    ctx.phase = "writing"
+
+    result = await tool.execute(
+        WriteSectionInput(module_id="overview_mod", section_id="s1", title="Phantom", content_markdown="short", citations=[]),
+        ctx,
+    )
+    assert "error" in result
+    assert "m1" in result["error"]  # existing module ids listed for orientation
+    assert fake_fs.fs.get_section(curriculum["id"], "overview_mod", "s1") is None
+
+
+@pytest.mark.asyncio
+async def test_write_section_writing_phase_rejects_unplanned_section(fake_fs):
+    """In the writing phase, write_section on a section id that wasn't materialized as a
+    planned stub is rejected, listing the module's existing section ids/titles/statuses.
+    """
+    curriculum, conv = await _setup_curriculum_for_write_section(fake_fs)
+    fake_fs.fs.create_module(curriculum["id"], "m1", {"order": 0, "title": "Module 1", "status": "planned", "estimated_minutes": 0})
+    fake_fs.fs.create_section(curriculum["id"], "m1", "s1", {"order": 0, "title": "Section 1", "content_markdown": "", "citations": [], "status": "planned"})
+
+    tool = WriteSectionTool()
+    ctx = _make_ctx(curriculum["id"], conv["id"])
+    ctx.phase = "writing"
+
+    result = await tool.execute(
+        WriteSectionInput(module_id="m1", section_id="beyond-star", title="Phantom", content_markdown="short", citations=[]),
+        ctx,
+    )
+    assert "error" in result
+    assert "s1" in result["error"]  # existing section ids listed for orientation
+    assert fake_fs.fs.get_section(curriculum["id"], "m1", "beyond-star") is None
+
+
+@pytest.mark.asyncio
+async def test_write_section_writing_phase_success_marks_composite_task_done(fake_fs):
+    """Writing a planned stub (module m1, section s1) in the writing phase succeeds and
+    marks the matching plan task "m1-s1" done via composite-id matching.
+    """
+    curriculum, conv = await _setup_curriculum_for_write_section(fake_fs)
+    fake_fs.fs.create_module(curriculum["id"], "m1", {"order": 0, "title": "Module 1", "status": "planned", "estimated_minutes": 0})
+    fake_fs.fs.create_section(curriculum["id"], "m1", "s1", {"order": 0, "title": "Section 1", "content_markdown": "", "citations": [], "status": "planned"})
+    fake_fs.fs.set_plan(curriculum["id"], {"tasks": [{"id": "m1-s1", "title": "Section 1", "module_ref": "m1", "status": "pending"}]})
+
+    tool = WriteSectionTool()
+    ctx = _make_ctx(curriculum["id"], conv["id"])
+    ctx.phase = "writing"
+
+    result = await tool.execute(
+        WriteSectionInput(module_id="m1", section_id="s1", title="Section 1", content_markdown="Short content. " * 5, citations=[]),
+        ctx,
+    )
+    assert result["status"] == "written"
+    plan = fake_fs.fs.get_plan(curriculum["id"])
+    assert plan["tasks"][0]["status"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_write_section_legacy_full_task_id_section_still_marks_done(fake_fs):
+    """When a section doc id equals the full legacy task id (pre-dating the m{X}-s{Y}
+    convention), _mark_task_done's fallback (`t["id"] == section_id`) still matches.
+    """
+    curriculum, conv = await _setup_curriculum_for_write_section(fake_fs)
+    fake_fs.fs.create_module(curriculum["id"], "m1", {"order": 0, "title": "Module 1", "status": "planned", "estimated_minutes": 0})
+    # Legacy materialization: the section doc id IS the full task id, not a stripped suffix.
+    fake_fs.fs.create_section(curriculum["id"], "m1", "m1-s1", {"order": 0, "title": "Section 1", "content_markdown": "", "citations": [], "status": "planned"})
+    fake_fs.fs.set_plan(curriculum["id"], {"tasks": [{"id": "m1-s1", "title": "Section 1", "module_ref": "m1", "status": "pending"}]})
+
+    tool = WriteSectionTool()
+    ctx = _make_ctx(curriculum["id"], conv["id"])
+    ctx.phase = "writing"
+
+    result = await tool.execute(
+        WriteSectionInput(module_id="m1", section_id="m1-s1", title="Section 1", content_markdown="Short content. " * 5, citations=[]),
+        ctx,
+    )
+    assert result["status"] == "written"
+    plan = fake_fs.fs.get_plan(curriculum["id"])
+    assert plan["tasks"][0]["status"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_write_section_refinement_creates_next_sequential_section(fake_fs):
+    """In refinement, write_section may create a new section, but only at the next
+    sequential id (s2, since s1 already exists).
+    """
+    curriculum, conv = await _setup_curriculum_for_write_section(fake_fs)
+    fake_fs.fs.create_module(curriculum["id"], "m1", {"order": 0, "title": "Module 1", "status": "complete", "estimated_minutes": 5})
+    fake_fs.fs.create_section(curriculum["id"], "m1", "s1", {"order": 0, "title": "Section 1", "content_markdown": "x", "citations": [], "status": "complete"})
+
+    tool = WriteSectionTool()
+    ctx = _make_ctx(curriculum["id"], conv["id"])
+    ctx.phase = "refinement"
+
+    result = await tool.execute(
+        WriteSectionInput(module_id="m1", section_id="s2", title="Section 2", content_markdown="Short content. " * 5, citations=[]),
+        ctx,
+    )
+    assert result["status"] == "written"
+    assert fake_fs.fs.get_section(curriculum["id"], "m1", "s2") is not None
+
+
+@pytest.mark.asyncio
+async def test_write_section_refinement_rejects_slug_id(fake_fs):
+    """In refinement, a new section using a free-form slug (not 's{K+1}') is rejected."""
+    curriculum, conv = await _setup_curriculum_for_write_section(fake_fs)
+    fake_fs.fs.create_module(curriculum["id"], "m1", {"order": 0, "title": "Module 1", "status": "complete", "estimated_minutes": 5})
+    fake_fs.fs.create_section(curriculum["id"], "m1", "s1", {"order": 0, "title": "Section 1", "content_markdown": "x", "citations": [], "status": "complete"})
+
+    tool = WriteSectionTool()
+    ctx = _make_ctx(curriculum["id"], conv["id"])
+    ctx.phase = "refinement"
+
+    result = await tool.execute(
+        WriteSectionInput(module_id="m1", section_id="beyond-star", title="Section 2", content_markdown="short", citations=[]),
+        ctx,
+    )
+    assert "error" in result
+    assert fake_fs.fs.get_section(curriculum["id"], "m1", "beyond-star") is None
+
+
+@pytest.mark.asyncio
+async def test_write_section_refinement_rejects_gapped_section_id(fake_fs):
+    """In refinement, a new section id that skips ahead (s5 when only s1 exists) is
+    rejected — only the immediate next sequential id is allowed.
+    """
+    curriculum, conv = await _setup_curriculum_for_write_section(fake_fs)
+    fake_fs.fs.create_module(curriculum["id"], "m1", {"order": 0, "title": "Module 1", "status": "complete", "estimated_minutes": 5})
+    fake_fs.fs.create_section(curriculum["id"], "m1", "s1", {"order": 0, "title": "Section 1", "content_markdown": "x", "citations": [], "status": "complete"})
+
+    tool = WriteSectionTool()
+    ctx = _make_ctx(curriculum["id"], conv["id"])
+    ctx.phase = "refinement"
+
+    result = await tool.execute(
+        WriteSectionInput(module_id="m1", section_id="s5", title="Section 5", content_markdown="short", citations=[]),
+        ctx,
+    )
+    assert "error" in result
+    assert fake_fs.fs.get_section(curriculum["id"], "m1", "s5") is None
+
+
+@pytest.mark.asyncio
+async def test_write_section_refinement_auto_creates_next_sequential_module(fake_fs):
+    """In refinement, write_section may create a brand-new module, but only at the next
+    sequential id (m2, since only m1 exists) — the module doc is auto-created as a
+    planned stub (write_section is the only module-creation path in refinement).
+    """
+    curriculum, conv = await _setup_curriculum_for_write_section(fake_fs)
+    fake_fs.fs.create_module(curriculum["id"], "m1", {"order": 0, "title": "Module 1", "status": "complete", "estimated_minutes": 5})
+
+    tool = WriteSectionTool()
+    ctx = _make_ctx(curriculum["id"], conv["id"])
+    ctx.phase = "refinement"
+
+    result = await tool.execute(
+        WriteSectionInput(module_id="m2", section_id="s1", title="New Module: Extra Practice", content_markdown="Short content. " * 5, citations=[]),
+        ctx,
+    )
+    assert result["status"] == "written"
+    new_module = fake_fs.fs.get_module(curriculum["id"], "m2")
+    assert new_module is not None
+    assert new_module["title"] == "New Module"  # split(":")[0] applied to the section title
+    # Auto-created as "planned", but _refresh_module_status (which runs right after,
+    # same as any write_section call) immediately derives "complete" from its one
+    # now-complete section — so by the time the write returns it's already "complete".
+    assert new_module["status"] == "complete"
+
+
+@pytest.mark.asyncio
+async def test_write_section_refinement_rejects_non_sequential_new_module(fake_fs):
+    """In refinement, a brand-new module id that isn't the next sequential one (m3 when
+    only m1 exists, skipping m2) is rejected.
+    """
+    curriculum, conv = await _setup_curriculum_for_write_section(fake_fs)
+    fake_fs.fs.create_module(curriculum["id"], "m1", {"order": 0, "title": "Module 1", "status": "complete", "estimated_minutes": 5})
+
+    tool = WriteSectionTool()
+    ctx = _make_ctx(curriculum["id"], conv["id"])
+    ctx.phase = "refinement"
+
+    result = await tool.execute(
+        WriteSectionInput(module_id="m3", section_id="s1", title="Skip Ahead", content_markdown="short", citations=[]),
+        ctx,
+    )
+    assert "error" in result
+    assert fake_fs.fs.get_module(curriculum["id"], "m3") is None
+
+
+@pytest.mark.asyncio
+async def test_complete_phase_writing_to_review_blocked_by_pending_task(fake_fs):
+    """writing->review is blocked when a plan task with a module_ref is still pending,
+    even if every materialized section happens to be complete.
+    """
+    conv = fake_fs.fs.create_conversation("uid1", "New conversation", curriculum_id=None)
+    curriculum = fake_fs.fs.create_curriculum("uid1", "prep", "prep", conversation_id=conv["id"])
+    fake_fs.fs.update_conversation(conv["id"], {"curriculum_id": curriculum["id"]})
+    fake_fs.fs.set_plan(curriculum["id"], {"tasks": [
+        {"id": "m1-s1", "title": "Intro", "module_ref": "m1", "status": "pending"},
+    ]})
+
+    tool = CompletePhaseTool()
+    ctx = _make_ctx(curriculum["id"], conv["id"])
+    ctx.phase = "writing"
+
+    result = await tool.execute(CompletePhaseInput(next_phase="review", reason="done"), ctx)
+    assert "error" in result
+    assert fake_fs.fs.get_agent_state(curriculum["id"]) is None  # no transition applied
+
+
+@pytest.mark.asyncio
+async def test_complete_phase_writing_to_review_blocked_by_planned_section(fake_fs):
+    """writing->review is blocked when a materialized section doc is still "planned",
+    even if the plan's tasks all say "done" (a write_section call that never happened)."""
+    conv = fake_fs.fs.create_conversation("uid1", "New conversation", curriculum_id=None)
+    curriculum = fake_fs.fs.create_curriculum("uid1", "prep", "prep", conversation_id=conv["id"])
+    fake_fs.fs.update_conversation(conv["id"], {"curriculum_id": curriculum["id"]})
+    fake_fs.fs.set_plan(curriculum["id"], {"tasks": [
+        {"id": "m1-s1", "title": "Intro", "module_ref": "m1", "status": "done"},
+    ]})
+    fake_fs.fs.create_module(curriculum["id"], "m1", {"order": 0, "title": "Module 1", "status": "planned", "estimated_minutes": 0})
+    fake_fs.fs.create_section(curriculum["id"], "m1", "s1", {"order": 0, "title": "Intro", "content_markdown": "", "citations": [], "status": "planned"})
+
+    tool = CompletePhaseTool()
+    ctx = _make_ctx(curriculum["id"], conv["id"])
+    ctx.phase = "writing"
+
+    result = await tool.execute(CompletePhaseInput(next_phase="review", reason="done"), ctx)
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_complete_phase_writing_to_review_allowed_when_all_done(fake_fs):
+    """writing->review succeeds once every task is done and no section is "planned"."""
+    conv = fake_fs.fs.create_conversation("uid1", "New conversation", curriculum_id=None)
+    curriculum = fake_fs.fs.create_curriculum("uid1", "prep", "prep", conversation_id=conv["id"])
+    fake_fs.fs.update_conversation(conv["id"], {"curriculum_id": curriculum["id"]})
+    fake_fs.fs.set_plan(curriculum["id"], {"tasks": [
+        {"id": "m1-s1", "title": "Intro", "module_ref": "m1", "status": "done"},
+    ]})
+    fake_fs.fs.create_module(curriculum["id"], "m1", {"order": 0, "title": "Module 1", "status": "complete", "estimated_minutes": 5})
+    fake_fs.fs.create_section(curriculum["id"], "m1", "s1", {"order": 0, "title": "Intro", "content_markdown": "x", "citations": [], "status": "complete"})
+
+    tool = CompletePhaseTool()
+    ctx = _make_ctx(curriculum["id"], conv["id"])
+    ctx.phase = "writing"
+
+    result = await tool.execute(CompletePhaseInput(next_phase="review", reason="done"), ctx)
+    assert result["status"] == "transitioned"
+
+
+@pytest.mark.asyncio
+async def test_complete_phase_review_to_ready_blocked_by_incomplete_section(fake_fs):
+    """review->ready is blocked when a section doc isn't "complete", even if the
+    overview has been written."""
+    conv = fake_fs.fs.create_conversation("uid1", "New conversation", curriculum_id=None)
+    curriculum = fake_fs.fs.create_curriculum("uid1", "prep", "prep", conversation_id=conv["id"])
+    fake_fs.fs.update_conversation(conv["id"], {"curriculum_id": curriculum["id"]})
+    fake_fs.fs.update_curriculum(curriculum["id"], {"overview": "A full overview."})
+    fake_fs.fs.create_module(curriculum["id"], "m1", {"order": 0, "title": "Module 1", "status": "writing", "estimated_minutes": 5})
+    fake_fs.fs.create_section(curriculum["id"], "m1", "s1", {"order": 0, "title": "Intro", "content_markdown": "x", "citations": [], "status": "writing"})
+
+    tool = CompletePhaseTool()
+    ctx = _make_ctx(curriculum["id"], conv["id"])
+    ctx.phase = "review"
+
+    result = await tool.execute(CompletePhaseInput(next_phase="ready", reason="done"), ctx)
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_complete_phase_review_to_ready_blocked_by_missing_overview(fake_fs):
+    """review->ready is blocked when the curriculum overview is empty, even if every
+    section is complete."""
+    conv = fake_fs.fs.create_conversation("uid1", "New conversation", curriculum_id=None)
+    curriculum = fake_fs.fs.create_curriculum("uid1", "prep", "prep", conversation_id=conv["id"])
+    fake_fs.fs.update_conversation(conv["id"], {"curriculum_id": curriculum["id"]})
+    fake_fs.fs.create_module(curriculum["id"], "m1", {"order": 0, "title": "Module 1", "status": "complete", "estimated_minutes": 5})
+    fake_fs.fs.create_section(curriculum["id"], "m1", "s1", {"order": 0, "title": "Intro", "content_markdown": "x", "citations": [], "status": "complete"})
+
+    tool = CompletePhaseTool()
+    ctx = _make_ctx(curriculum["id"], conv["id"])
+    ctx.phase = "review"
+
+    result = await tool.execute(CompletePhaseInput(next_phase="ready", reason="done"), ctx)
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_complete_phase_review_to_ready_allowed_when_complete(fake_fs):
+    """review->ready succeeds once every section is complete and the overview is set."""
+    conv = fake_fs.fs.create_conversation("uid1", "New conversation", curriculum_id=None)
+    curriculum = fake_fs.fs.create_curriculum("uid1", "prep", "prep", conversation_id=conv["id"])
+    fake_fs.fs.update_conversation(conv["id"], {"curriculum_id": curriculum["id"]})
+    fake_fs.fs.update_curriculum(curriculum["id"], {"overview": "A full overview."})
+    fake_fs.fs.create_module(curriculum["id"], "m1", {"order": 0, "title": "Module 1", "status": "complete", "estimated_minutes": 5})
+    fake_fs.fs.create_section(curriculum["id"], "m1", "s1", {"order": 0, "title": "Intro", "content_markdown": "x", "citations": [], "status": "complete"})
+
+    tool = CompletePhaseTool()
+    ctx = _make_ctx(curriculum["id"], conv["id"])
+    ctx.phase = "review"
+
+    result = await tool.execute(CompletePhaseInput(next_phase="ready", reason="done"), ctx)
+    assert result["status"] == "transitioned"

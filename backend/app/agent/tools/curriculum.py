@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import re
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -10,6 +11,11 @@ from pydantic import BaseModel, Field
 from app.agent.mermaid_lint import lint_markdown_mermaid
 from app.agent.tools.base import AgentContext, Tool
 from app.services import firestore as fs
+
+# Matches numbered module/section doc ids ("m1", "s12", ...) so write_section's
+# refinement-only auto-creation path can compute the next sequential id.
+_NUMBERED_MODULE_ID_RE = re.compile(r"^m(\d+)$")
+_NUMBERED_SECTION_ID_RE = re.compile(r"^s(\d+)$")
 
 
 class ListCurriculumStructureInput(BaseModel):
@@ -89,11 +95,17 @@ class WriteSectionInput(BaseModel):
 class WriteSectionTool(Tool):
     name = "write_section"
     description = (
-        "Write (create or overwrite) a curriculum section's full content. Validates that "
-        "citations are non-empty for research-based content (raises an error observation if "
-        "you submit substantial content with zero citations — add citations or explicitly "
-        "keep the section citation-free only when it truly makes no factual claims). Also "
-        "syntax-checks any ```mermaid blocks and rejects the write with an error observation "
+        "Write (create or overwrite) a curriculum section's full content. During writing/review, "
+        "this ONLY accepts module_id/section_id already materialized from the approved plan "
+        "(e.g. 'm1'/'s1') and rejects any other id with an error observation naming the "
+        "existing ids — never invent a new module or section here; the curriculum overview is "
+        "never a section, use write_curriculum_overview. New sections/modules can only be "
+        "created during refinement, and only using the next sequential id ('s{K+1}' in an "
+        "existing module, or a new module 'm{N+1}') — arbitrary slugs are rejected there too. "
+        "Validates that citations are non-empty for research-based content (raises an error "
+        "observation if you submit substantial content with zero citations — add citations or "
+        "explicitly keep the section citation-free only when it truly makes no factual claims). "
+        "Also syntax-checks any ```mermaid blocks and rejects the write with an error observation "
         "if a diagram is broken (unknown type, unbalanced brackets, unquoted risky labels, "
         "unclosed fence) — fix the diagram per visual_guidelines.md and resubmit. Marks "
         "the corresponding task done if one exists, marks the section/module status, and "
@@ -127,8 +139,16 @@ class WriteSectionTool(Tool):
                 the curriculum doc's `progress` field via `_refresh_curriculum_progress`
                 (so REST readers like the dashboard see it, not just live WS clients).
                 On the citation-guard failure or a Mermaid lint failure, `{"error":
-                "..."}` instead (no write performed).
+                "..."}` instead (no write performed). Also `{"error": "..."}` if the
+                target guard rejects module_id/section_id (see `_validate_write_target`)
+                — a wrong target is checked first since it invalidates everything else.
         """
+        # Target guard: catch invented/phantom module or section ids before any other
+        # check, since writing to the wrong target invalidates citations/mermaid work too.
+        target_error = _validate_write_target(ctx.curriculum_id, ctx.phase, input.module_id, input.section_id, input.title)
+        if target_error:
+            return {"error": target_error}
+
         if len(input.content_markdown.strip()) > 400 and not input.citations:
             return {
                 "error": (
@@ -174,7 +194,7 @@ class WriteSectionTool(Tool):
         else:
             fs.create_section(ctx.curriculum_id, input.module_id, input.section_id, fields)
 
-        _mark_task_done(ctx.curriculum_id, input.section_id)
+        _mark_task_done(ctx.curriculum_id, input.module_id, input.section_id)
         _refresh_curriculum_counts(ctx.curriculum_id)
         # Derive the parent module's status/estimated_minutes from its sections now
         # that this write may have changed the picture (e.g. last planned section done).
@@ -491,6 +511,108 @@ class SetModuleStatusTool(Tool):
 # --------------------------------------------------------------------------------------
 
 
+def _validate_write_target(
+    curriculum_id: str, phase: str, module_id: str, section_id: str, title: str
+) -> str | None:
+    """Guard write_section's target against invented module/section ids.
+
+    During "writing"/"review" the plan is already approved and materialized, so
+    module_id/section_id must already exist as planned stubs — nothing new may be
+    created here (that would be a phantom doc invented by the model instead of a
+    planned one). During "ready"/"refinement" (the only other phases write_section is
+    registered in), a *new* module or section may be created, but only using the next
+    sequential id so ids stay contiguous — never an arbitrary slug.
+
+    Args:
+        curriculum_id (str): The curriculum being written to.
+        phase (str): The current agent phase (`ctx.phase`).
+        module_id (str): The module id from the write_section call.
+        section_id (str): The section id from the write_section call.
+        title (str): The section title, used to derive an auto-created module's title.
+
+    Returns:
+        str | None: An error message if the target is invalid for this phase, or None
+            if the write may proceed (existing section overwrite, or a
+            refinement-phase creation that will be handled by the caller as normal).
+    """
+    module = fs.get_module(curriculum_id, module_id)
+
+    if phase in ("writing", "review"):
+        # No new modules/sections may be invented once the plan is materialized —
+        # every id here must already exist from propose_task_plan + materialization.
+        if not module:
+            existing_ids = sorted(m["id"] for m in fs.list_modules(curriculum_id))
+            return (
+                f"module {module_id!r} does not exist. During {phase}, write_section only "
+                f"accepts modules already materialized from the approved plan. Existing module "
+                f"ids: {existing_ids}. Call list_curriculum_structure to see the full planned "
+                f"tree and only write sections that were actually planned."
+            )
+        section = fs.get_section(curriculum_id, module_id, section_id)
+        if not section:
+            existing_sections = fs.list_sections(curriculum_id, module_id)
+            listing = [
+                {"id": s["id"], "title": s.get("title"), "status": s.get("status")}
+                for s in existing_sections
+            ]
+            return (
+                f"section {section_id!r} was not in the approved plan for module {module_id!r} "
+                f"(existing sections: {listing}). New sections may only be added during "
+                f"refinement, not {phase}. The curriculum overview is never a section — use "
+                f"write_curriculum_overview instead of write_section for it."
+            )
+        return None
+
+    # phase in ("ready", "refinement"): creation is allowed, but only at the next
+    # sequential id — arbitrary slugs are rejected so numbering stays contiguous.
+    if not module:
+        existing_modules = fs.list_modules(curriculum_id)
+        max_n = 0
+        for m in existing_modules:
+            match = _NUMBERED_MODULE_ID_RE.match(m["id"])
+            if match:
+                max_n = max(max_n, int(match.group(1)))
+        expected = f"m{max_n + 1}"
+        if module_id != expected:
+            return (
+                f"module {module_id!r} does not exist and is not the next sequential module id. "
+                f"To create a new module, use exactly {expected!r} (write_section auto-creates "
+                f"it) — arbitrary module ids are rejected."
+            )
+        # Auto-create the module doc — write_section is the only module-creation path
+        # available during refinement (there is no dedicated create_module tool).
+        fs.create_module(
+            curriculum_id,
+            module_id,
+            {
+                "order": len(existing_modules),
+                "title": title.split(":")[0][:80],
+                "summary": "",
+                "objectives": [],
+                "status": "planned",
+                "estimated_minutes": 0,
+            },
+        )
+        return None
+
+    section = fs.get_section(curriculum_id, module_id, section_id)
+    if not section:
+        existing_sections = fs.list_sections(curriculum_id, module_id)
+        max_k = 0
+        for s in existing_sections:
+            match = _NUMBERED_SECTION_ID_RE.match(s["id"])
+            if match:
+                max_k = max(max_k, int(match.group(1)))
+        expected = f"s{max_k + 1}"
+        if section_id != expected:
+            return (
+                f"section {section_id!r} does not exist in module {module_id!r} and is not the "
+                f"next sequential section id. To add a new section, use exactly {expected!r} — "
+                f"arbitrary slugs are rejected."
+            )
+    return None
+
+
 def _next_section_order(curriculum_id: str, module_id: str) -> int:
     """Compute the next append-order index for a new section within a module.
 
@@ -506,33 +628,40 @@ def _next_section_order(curriculum_id: str, module_id: str) -> int:
     return len(sections)
 
 
-def _mark_task_done(curriculum_id: str, task_id: str) -> None:
-    """Mark the plan task matching `task_id` as done and remove it from the working task_queue.
+def _mark_task_done(curriculum_id: str, module_id: str, section_id: str) -> None:
+    """Mark the plan task for (module_id, section_id) as done and pop it from task_queue.
 
-    No-ops silently if there is no plan yet, or if no task in the plan matches
-    `task_id` (e.g. a section written outside the normal plan-driven flow).
+    Matches a task by either of two id forms so both new and legacy curricula work:
+    the canonical composite id `f"{module_id}-{section_id}"` (e.g. writing module `m1`
+    section `s1` matches task id `m1-s1`), or the legacy form where the section doc id
+    IS the full task id (`t["id"] == section_id`, from curricula materialized before the
+    `m{X}-s{Y}` convention). No-ops silently if there is no plan yet, or if no task
+    matches either form (e.g. a section written outside the normal plan-driven flow).
 
     Args:
         curriculum_id (str): The curriculum whose plan/state to update.
-        task_id (str): The task id to mark done — by convention this equals the
-            section_id, since each planned task maps 1:1 to a section stub.
+        module_id (str): The module id the written section belongs to.
+        section_id (str): The section id that was just written.
     """
+    composite_id = f"{module_id}-{section_id}"
     plan = fs.get_plan(curriculum_id)
     if not plan:
         return
     tasks = plan.get("tasks", [])
     changed = False
     for t in tasks:
-        if t.get("id") == task_id and t.get("status") != "done":
+        # New convention: task id == "{module_id}-{section_id}". Legacy fallback: task
+        # id == section_id verbatim (pre-dates the composite id convention).
+        if t.get("id") in (composite_id, section_id) and t.get("status") != "done":
             t["status"] = "done"
             changed = True
     if changed:
         fs.set_plan(curriculum_id, {"tasks": tasks})
 
-    # Advance the working-memory task queue: drop the now-done task and point
-    # current_task_id at whatever is next (or None if the queue is now empty).
+    # Advance the working-memory task queue: drop the now-done task (either id form)
+    # and point current_task_id at whatever is next (or None if the queue is now empty).
     state = fs.get_agent_state(curriculum_id) or {}
-    queue = [t for t in state.get("task_queue", []) if t != task_id]
+    queue = [t for t in state.get("task_queue", []) if t not in (composite_id, section_id)]
     fs.set_agent_state(curriculum_id, {"task_queue": queue, "current_task_id": queue[0] if queue else None})
 
 

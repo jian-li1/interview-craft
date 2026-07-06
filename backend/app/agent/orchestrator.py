@@ -749,10 +749,15 @@ class Orchestrator:
 
         Groups tasks by `module_ref`; each distinct module_ref becomes a module doc (title
         derived from the first task referencing it, refined later by the agent if needed),
-        and each task becomes a "planned" section stub the writing phase will fill in.
-        Idempotent with respect to already-materialized modules/sections (skips ids that
-        already exist), so re-running this after a partial failure or a second approval
-        of the same plan version does not duplicate stubs.
+        and each task becomes a "planned" section stub the writing phase will fill in. The
+        section doc id is derived from the task id: under the binding `m{X}-s{Y}` id
+        contract (see `tools/planning.py`'s `_validate_plan`), stripping the `m{X}-`
+        prefix yields the section doc id (e.g. task `m1-s2` -> module doc `m1`, section
+        doc `s2`); legacy plans whose task ids don't carry that prefix fall back to using
+        the full task id verbatim as the section doc id. Idempotent with respect to
+        already-materialized modules/sections (skips ids that already exist), so
+        re-running this after a partial failure or a second approval of the same plan
+        version does not duplicate stubs.
 
         Args:
             curriculum_id (str): The curriculum to create module/section stubs under.
@@ -804,7 +809,12 @@ class Orchestrator:
             module_ref = t.get("module_ref")
             if not module_ref:
                 continue
-            section_id = t["id"]
+            # Derive the section doc id by stripping the "m{X}-" prefix from the task id
+            # (new convention); fall back to the full task id for legacy plans that
+            # don't carry that prefix, so old curricula stay readable.
+            task_id = t["id"]
+            prefix = f"{module_ref}-"
+            section_id = task_id[len(prefix):] if task_id.startswith(prefix) else task_id
             existing = fs.get_section(curriculum_id, module_ref, section_id)
             if existing:
                 continue

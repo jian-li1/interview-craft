@@ -49,21 +49,33 @@ Estimate `estimated_minutes` per module realistically (how long a focused learne
 spend), typically 30-90 minutes per module depending on depth. Use this to sanity-check
 scope against the user's stated timeline.
 
-## Task plan format
+## Task plan format — a strict, binding id contract
 
-Each task in `propose_task_plan`'s `tasks` list should map to roughly one section (or,
-for the initial overview, one task for `write_curriculum_overview`). Fields:
-- `id`: short stable slug (e.g. `m1-s2`), unique within the plan.
+Each task in `propose_task_plan`'s `tasks` list maps to EXACTLY one section — never
+more, never fewer, and never a task for the curriculum overview (the overview is
+written later, during `review`, via `write_curriculum_overview` — it is NOT a task
+here). `propose_task_plan` validates this contract server-side and rejects the whole
+plan (no partial save) with a specific error if you violate it, so get it right:
+- `id`: MUST be exactly `m{X}-s{Y}` (e.g. `m1-s2` — module 1, section 2), 1-based.
+  Never a free-form slug, never a description-derived name. Module numbering starts at
+  `m1` and is contiguous (no skipping `m2` to jump to `m3`); section numbering starts at
+  `s1` and is contiguous within each module, in the order tasks appear in the list.
 - `title`: matches the section title.
 - `description`: 1-2 sentences telling future-you (the writing phase) what this task
   needs to cover — specific enough that picking it up cold is easy.
-- `module_ref`: the module id/slug this task belongs to (null for whole-curriculum tasks
-  like the overview).
+- `module_ref`: REQUIRED on every task — the module id in the form `m{X}`, matching the
+  `id`'s `m{X}-` prefix exactly (e.g. `module_ref: "m1"` for `id: "m1-s2"`). Never null.
 - `status`: `"pending"` for all tasks at proposal time.
 
 The `outline_markdown` should be a clean, human-readable rendering of the same structure
 (module titles + summaries + section titles) — this is what's shown to the user in the
-approval card, so make it scannable and inviting, not just a dry list.
+approval card, so make it scannable and inviting, not just a dry list. It is ALSO
+cross-checked programmatically against `tasks`: every section line must be labeled
+`Section X.Y: <title>` (X = module number, Y = section number, matching the task ids),
+so `propose_task_plan` can verify the outline and the task list describe exactly the
+same set of sections. If a section appears in the outline without a matching task (or
+vice versa), the call is rejected with an error naming the mismatch — don't let the
+outline promise more sections than `tasks` actually covers.
 
 ## Calling propose_task_plan
 

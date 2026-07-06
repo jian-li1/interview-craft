@@ -118,7 +118,9 @@ async def test_run_turn_pauses_on_hitl_gate_tool_call(monkeypatch, fake_fs, orch
                 id="call_1",
                 name="propose_task_plan",
                 arguments={
-                    "outline_markdown": "# Outline\n\n## Module 1",
+                    # "Section 1.1" label is required so propose_task_plan's outline<->tasks
+                    # cross-check matches this against task id "m1-s1".
+                    "outline_markdown": "# Outline\n\n## Module 1\n\nSection 1.1: Intro",
                     "tasks": [{"id": "m1-s1", "title": "Intro", "module_ref": "m1"}],
                 },
             ),
@@ -295,6 +297,45 @@ async def test_run_turn_applies_plan_decision_approve_and_materializes(monkeypat
     assert len(progress_events) == 1
     assert progress_events[0]["completed"] == 0
     assert progress_events[0]["total"] == 2
+
+
+@pytest.mark.asyncio
+async def test_materialize_modules_and_sections_derives_section_ids_from_task_ids(fake_fs, orchestrator):
+    """Approved tasks m1-s1, m1-s2, m2-s1 must materialize module docs m1/m2 and, under
+    each, section docs whose ids are the task id's suffix after stripping "m{X}-"
+    (s1/s2 under m1, s1 under m2) — not the full task id. Also verifies idempotency:
+    calling materialization twice does not duplicate or reset anything.
+    """
+    plan = {
+        "version": 1,
+        "outline_markdown": "# Outline",
+        "tasks": [
+            {"id": "m1-s1", "title": "Intro", "module_ref": "m1", "status": "pending"},
+            {"id": "m1-s2", "title": "Basics", "module_ref": "m1", "status": "pending"},
+            {"id": "m2-s1", "title": "Practice", "module_ref": "m2", "status": "pending"},
+        ],
+        "status": "approved",
+    }
+    curriculum = fake_fs.fs.create_curriculum("uid1", "Test", "prep me", conversation_id="conv1")
+
+    await orchestrator._materialize_modules_and_sections(curriculum["id"], plan)
+
+    modules = {m["id"] for m in fake_fs.fs.list_modules(curriculum["id"])}
+    assert modules == {"m1", "m2"}
+
+    m1_sections = {s["id"] for s in fake_fs.fs.list_sections(curriculum["id"], "m1")}
+    assert m1_sections == {"s1", "s2"}
+    m2_sections = {s["id"] for s in fake_fs.fs.list_sections(curriculum["id"], "m2")}
+    assert m2_sections == {"s1"}
+
+    # Every stub starts "planned" with empty content, matching the writing phase's expectations.
+    assert fake_fs.fs.get_section(curriculum["id"], "m1", "s1")["status"] == "planned"
+
+    # Re-running (e.g. a second approval of the same plan version) must not duplicate.
+    await orchestrator._materialize_modules_and_sections(curriculum["id"], plan)
+    assert len(fake_fs.fs.list_modules(curriculum["id"])) == 2
+    assert len(fake_fs.fs.list_sections(curriculum["id"], "m1")) == 2
+    assert len(fake_fs.fs.list_sections(curriculum["id"], "m2")) == 1
 
 
 @pytest.mark.asyncio

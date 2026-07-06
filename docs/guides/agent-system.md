@@ -232,13 +232,22 @@ precisely or if the profile changed mid-run.
 ### Planning tools (`tools/planning.py`)
 
 - **`propose_task_plan`** (HITL gate) — `outline_markdown`, `tasks: [{id, title,
-  description, module_ref, status}]`. Reads the existing plan (if any) to compute
-  `next_version = existing.version + 1` and preserve accumulated `user_feedback`, writes
-  `curricula/{id}/plan/main`, sets curriculum `status="awaiting_approval"` plus a
-  persisted `progress` blob (`phase`, `completed_tasks`, `total_tasks`, `detail`), sets
-  agent state `phase="awaiting_approval"`, and returns an output dict carrying
-  `_ws_events: [phase_change(awaiting_approval), progress(if any tasks), plan_proposed]`
-  and `_hitl_gate: True`. The orchestrator strips the underscored keys before building
+  description, module_ref, status}]`. **Validates first** (`_validate_plan` in
+  `tools/planning.py`, called before any write): every task's `id` must match
+  `m{X}-s{Y}` and `module_ref` must match `m{X}` with the same prefix (module_ref is
+  required — never null; there is no overview task); task ids must be unique; module
+  numbering contiguous from `m1` in first-appearance order; section numbering
+  contiguous from `s1` per module in task-list order; and `outline_markdown`'s
+  `Section X.Y: <title>` labels (extracted via regex) must exactly match the derived
+  `m{X}-s{Y}` task id set, reporting any ids missing from either side. Any violation
+  returns `{"error": "..."}` with **no plan saved at all**. On success: reads the
+  existing plan (if any) to compute `next_version = existing.version + 1` and preserve
+  accumulated `user_feedback`, writes `curricula/{id}/plan/main`, sets curriculum
+  `status="awaiting_approval"` plus a persisted `progress` blob (`phase`,
+  `completed_tasks`, `total_tasks`, `detail`), sets agent state
+  `phase="awaiting_approval"`, and returns an output dict carrying `_ws_events:
+  [phase_change(awaiting_approval), progress(if any tasks), plan_proposed]` and
+  `_hitl_gate: True`. The orchestrator strips the underscored keys before building
   the client-visible `tool_call_result` preview, forwards each queued WS event in order,
   and uses `_hitl_gate` to know to pause after this tool executes.
 - **`get_task_plan`** — returns the whole plan doc verbatim, or `{"error": "no plan
@@ -249,22 +258,37 @@ precisely or if the profile changed mid-run.
 - **`list_curriculum_structure`** — nested `{modules: [{id, order, title, status,
   sections: [{id, order, title, status}]}]}`, no content bodies — cheap orientation.
 - **`write_section`** — `module_id, section_id, title, content_markdown, citations[]`.
-  **Validates**: if `content_markdown` is over 400 stripped characters and `citations`
-  is empty, returns an error observation instructing the model to add citations or
-  shorten the section — this is the concrete enforcement of the "citations are
-  non-negotiable" rule. Also runs `mermaid_lint.lint_markdown_mermaid` over
-  `content_markdown` and, if any ```mermaid block fails the heuristic syntax check
+  **Target guard runs first** (`_validate_write_target`, before the citation/mermaid
+  checks — a wrong target invalidates everything else): in `writing`/`review`,
+  `module_id` must already exist (else error listing existing module ids from
+  `list_modules`) and `section_id` must already exist under it (else error listing that
+  module's existing section ids/titles/statuses, and noting the overview must go
+  through `write_curriculum_overview`, never `write_section`) — no new module/section
+  may be invented once the plan is materialized. In `ready`/`refinement`, a *new*
+  module/section may be created, but only at the next sequential id: a missing module
+  must be exactly `m{N+1}` (N = max existing numbered module id), auto-created inline
+  (`order`, `title` from `title.split(':')[0][:80]`, empty `summary`/`objectives`,
+  `status="planned"`, `estimated_minutes=0`) since `write_section` is the only
+  module-creation path in refinement; a missing section must be exactly `s{K+1}` (K =
+  max existing numbered section id in that module) — any other id in either phase group
+  is rejected with the exact expected id. Existing sections are always overwritten
+  regardless of phase. **Then validates**: if `content_markdown` is over 400 stripped
+  characters and `citations` is empty, returns an error observation instructing the
+  model to add citations or shorten the section — this is the concrete enforcement of
+  the "citations are non-negotiable" rule. Also runs `mermaid_lint.lint_markdown_mermaid`
+  over `content_markdown` and, if any ```mermaid block fails the heuristic syntax check
   (unknown diagram type, unbalanced brackets, unquoted risky labels, unclosed fence),
   returns an error observation naming each broken block with **no write performed** —
   the model fixes the diagram per `visual_guidelines.md` and resubmits the full
   content. On success: stamps `accessed_at` (server `utcnow()`) onto every
   citation, creates or updates the section doc (preserving `order` if the section
   already existed), marks the matching plan task `"done"` and pops it from the agent
-  state's `task_queue` (via the internal `_mark_task_done` helper — also updates
-  `current_task_id` to the new head of the queue), refreshes the curriculum's
-  `module_count`/`section_count` (`_refresh_curriculum_counts`), and returns two WS
-  events: `curriculum_updated(scope="section", module_id, section_id)` and
-  `progress(completed, total, detail="Wrote section: {title}")` where
+  state's `task_queue` (via the internal `_mark_task_done` helper, matching either the
+  composite id `f"{module_id}-{section_id}"` or, for legacy docs, `section_id` alone —
+  also updates `current_task_id` to the new head of the queue), refreshes the
+  curriculum's `module_count`/`section_count` (`_refresh_curriculum_counts`), and
+  returns two WS events: `curriculum_updated(scope="section", module_id, section_id)`
+  and `progress(completed, total, detail="Wrote section: {title}")` where
   `completed/total` come from counting `status=="done"` tasks in the plan.
 - **`read_section`** — full section doc or `{"error": "...not found..."}`. The
   refinement prompt mandates calling this before any `update_section`.
@@ -288,9 +312,9 @@ precisely or if the profile changed mid-run.
 - **`set_module_status`** — bookkeeping helper to flip a module's `planned/writing/
   complete` status independent of any specific section write.
 
-Internal helpers at the bottom of `curriculum.py` (`_next_section_order`,
-`_mark_task_done`, `_task_progress`, `_refresh_curriculum_counts`) are not tools
-themselves — they're plain functions the tools above call.
+Internal helpers at the bottom of `curriculum.py` (`_validate_write_target`,
+`_next_section_order`, `_mark_task_done`, `_task_progress`, `_refresh_curriculum_counts`)
+are not tools themselves — they're plain functions the tools above call.
 
 ### Control tools (`tools/control.py`)
 
@@ -305,8 +329,14 @@ themselves — they're plain functions the tools above call.
   worth keeping, not just a delta).
 - **`complete_phase`** — `next_phase`, `reason`. Validates `next_phase` is a real
   `AgentPhase` literal and that the transition from `ctx.phase` is in
-  `_VALID_TRANSITIONS` (§2); on success sets the state doc's `phase`, maps to a
-  curriculum `status` via `status_map`, and returns a `_ws_event:
+  `_VALID_TRANSITIONS` (§2). Two transitions carry an additional completeness gate,
+  checked after transition validity but before any state mutation, returning
+  `{"error": "..."}` (no transition applied) listing the specific blockers:
+  `writing`→`review` (`_writing_exit_blockers`) is blocked if any `module_ref`-bearing
+  plan task isn't `"done"` or any section doc is still `"planned"`; `review`→`ready`
+  (`_review_exit_blockers`) is blocked if any section doc isn't `"complete"` or the
+  curriculum's `overview` field is empty. On success sets the state doc's `phase`, maps
+  to a curriculum `status` via `status_map`, and returns a `_ws_event:
   {"type": "phase_change", "phase", "label"}` using a friendly `label_map` (e.g.
   `deep_research` → `"Researching"`, `awaiting_approval` → `"Awaiting your approval"`).
 
@@ -463,7 +493,10 @@ runs synchronously before the iteration loop starts:
   grouped by each task's `module_ref` — title derived from the first task's title up to
   its first `:`, truncated to 80 chars — and `curricula/{id}/modules/{mid}/sections/
   {sectionId}` stub docs, one per task, `status="planned"`, skipping any that already
-  exist so re-approval after a crash doesn't duplicate), computes the not-yet-`done`
+  exist so re-approval after a crash doesn't duplicate; `sectionId` is derived by
+  stripping the task id's `m{X}-` module prefix, e.g. task `m1-s2` → section doc `s2`
+  under module doc `m1` — legacy task ids that don't carry that prefix fall back to
+  using the full task id verbatim), computes the not-yet-`done`
   task ids as the new `task_queue`, sets agent state `phase="writing"` with
   `current_task_id` = the first queued task, and sets curriculum `status="writing"`.
   Also emits a live `phase_change{phase: "writing"}` WS event (plus a `progress` event
@@ -506,10 +539,10 @@ All eleven files live in `backend/app/agent/prompts/` and are treated as code (p
 | `base_system.md` | 131 | Every phase (always layer 1) | Identity, the internal-reasoning ReAct convention, tool-error adaptation rules, tone, the "no fabricated citations" hard rule, the personalization mandate, phase discipline, HITL gate etiquette, scratchpad hygiene, tool-call efficiency guidance. |
 | `intake_phase.md` | 57 | `intake` | What to figure out (interview type, scope, constraints) from the user's message + profile; strict guidance on when to ask a clarifying question vs. proceed (err toward proceeding); curriculum naming; exit via `complete_phase("deep_research")`. |
 | `research_phase.md` | ~115 | `deep_research` | The 6 query-diversification coverage areas (format/stages; foundational skills; real sample questions; sample answers/frameworks; prep roadmaps; company/domain specifics); source-quality heuristics; mandatory fetch-before-note rule (snippets are relevance triage only; a failed fetch means skip the source, never note-from-snippet); note-taking standards (long, comprehensive, multi-paragraph summaries — roughly 150-500+ words — written from the fetched full text, sufficient that `writing` never needs to re-fetch); qualitative stop criteria (all relevant areas covered with fetched-and-distilled notes, diminishing returns — no numeric note-count target); anti-patterns (no duplicate notes, don't retry dead ends, don't pad or artificially cap count). |
-| `planning_phase.md` | ~95 | `outline_planning`, `awaiting_approval` | The beginner→interview-ready module arc (foundations → core skills → question drills → mock/strategy); no fixed module/section count — scope driven by researched material and user goals, timeline respected via priority ordering rather than a count cap; every module needs a sample-Q&A section; task-plan field contract; how `propose_task_plan` behaves as a HITL gate; how to incorporate `modify` feedback on revision (read all feedback, targeted changes, top-up research if needed). |
-| `writing_phase.md` | 89 | `writing` | Per-task workflow (search notes → optional targeted top-up research → `write_section`); markdown/Mermaid/table/callout formatting standards; sample-Q&A authoring standard (personalize to the user's actual background); 800-2000 word/section length guidance; "ground everything in research first" mandate; resumability via `update_scratchpad`; exit via `complete_phase("review")` when the task queue is empty. |
-| `review_phase.md` | 54 | `review` | Structured quality pass over the whole draft: `list_curriculum_structure` then `read_section` module-by-module against a checklist (citations, diagrams, sample-Q&A coverage, 800-2000 word length, coherence, module status); fix failures directly via `write_section` overwrite (full corrected markdown + citations, never a fragment); `update_scratchpad` tracks which modules are already reviewed for resumability; `search_research_notes` only, no broad re-research; after all modules pass, `write_curriculum_overview`, then exit via `complete_phase("ready")`. |
-| `refinement_phase.md` | 67 | `ready`, `refinement` | Three request types and how to handle each: edits (read-before-write, minimal targeted changes, preserve citations, `change_note`), explanations (teach in chat, never silently modify content), additions/deep-dives (scoped targeted research, not a full re-run of `deep_research`). |
+| `planning_phase.md` | 109 | `outline_planning`, `awaiting_approval` | The beginner→interview-ready module arc (foundations → core skills → question drills → mock/strategy); no fixed module/section count — scope driven by researched material and user goals, timeline respected via priority ordering rather than a count cap; every module needs a sample-Q&A section; the binding task-plan id contract (`m{X}-s{Y}` ids, required `module_ref`, exactly one task per section, no overview task, `outline_markdown` must label every section `Section X.Y` for the server-side cross-check); how `propose_task_plan` behaves as a HITL gate (and rejects the whole plan on any contract violation); how to incorporate `modify` feedback on revision (read all feedback, targeted changes, top-up research if needed). |
+| `writing_phase.md` | 114 | `writing` | A strongly-worded "only write what was planned" subsection (module_id/section_id come verbatim from the approved plan, never invented; the overview is never a section); per-task workflow (search notes → optional targeted top-up research → `write_section`); markdown/Mermaid/table/callout formatting standards; sample-Q&A authoring standard (personalize to the user's actual background); 800-2000 word/section length guidance; "ground everything in research first" mandate; resumability via `update_scratchpad`; exit via `complete_phase("review")` when the task queue is empty — validated server-side against pending tasks/planned sections. |
+| `review_phase.md` | 56 | `review` | Structured quality pass over the whole draft: `list_curriculum_structure` then `read_section` module-by-module against a checklist (citations, diagrams, sample-Q&A coverage, 800-2000 word length, coherence, module status); fix failures directly via `write_section` overwrite (full corrected markdown + citations, never a fragment); `update_scratchpad` tracks which modules are already reviewed for resumability; `search_research_notes` only, no broad re-research; after all modules pass, `write_curriculum_overview`, then exit via `complete_phase("ready")` — validated server-side (all sections complete + overview written). |
+| `refinement_phase.md` | 74 | `ready`, `refinement` | Three request types and how to handle each: edits (read-before-write, minimal targeted changes, preserve citations, `change_note`), explanations (teach in chat, never silently modify content), additions/deep-dives (scoped targeted research, not a full re-run of `deep_research`; new sections/modules must use the next sequential id — `s{K+1}`/`m{N+1}` — arbitrary slugs are rejected server-side). |
 | `citation_guidelines.md` | 79 | Every phase (always layer 3) | The exact `[^n]` marker mechanics, the `## Sources` footnote section format, the `citations` array contract (must mirror footnotes exactly), the hard "no fabricated URLs" rule, and a checklist of what does/doesn't need a citation. |
 | `visual_guidelines.md` | 92 | Every phase (always layer 4) | Mermaid syntax guardrails (always quote labels, avoid unquoted parens, cap ~25 nodes, short node IDs, one edge per line, always fence with `` ```mermaid ``); a note that `write_section`/`update_section` run an automatic syntax lint and reject broken diagrams (fix and resubmit); which diagram type for which content (flowchart default, sequenceDiagram for party interactions, mindmap for topic breakdowns); a worked correct example; `classDef`-based highlighting restrained to 2-3 accent classes; sparse, heading-only emoji usage. |
 | `profile_synthesis.md` | 63 | Onboarding `/api/onboarding/synthesize` endpoint only (small model, no tools) | Transforms raw onboarding fields + resume text into a 200-350 word third-person profile covering background, strengths, gaps vs. target roles, learning style translated into content-design guidance, and 2-4 concrete personalization hooks. Explicitly: no fabrication, no meta-commentary, plain prose only. |
@@ -571,8 +604,12 @@ note-count target), it calls `complete_phase("outline_planning",
 **5. `outline_planning` phase**: the model calls `search_research_notes`/
 `list_research_notes` to review its evidence base, drafts an outline sized to what the
 research and the user's goals warrant (no fixed module/section count) and personalized
-to the user's profile, then calls `propose_task_plan(outline_markdown,
-tasks=[...])` — **alone**, per prompt instruction. This writes
+to the user's profile — one task per section, ids `m{X}-s{Y}`, `outline_markdown`
+labeling every section `Section X.Y: <title>` — then calls
+`propose_task_plan(outline_markdown, tasks=[...])` — **alone**, per prompt instruction.
+`_validate_plan` checks the id/module_ref format, numbering contiguity, and the
+outline↔tasks cross-check first; a violation returns `{"error": ...}` with nothing
+persisted. On success this writes
 `curricula/{curId}/plan/main` (`version: 1, status: "proposed"`), sets curriculum
 `status="awaiting_approval"` plus a persisted `progress` blob, sets state
 `phase="awaiting_approval"`, and the tool's output carries `_ws_events:
@@ -587,7 +624,8 @@ payload; the composer is disabled while awaiting a decision.
 "decision": "approve", "feedback": null}`. A new `run_turn` starts;
 `_apply_plan_decision` runs before any LLM call: `plan.status = "approved"`,
 `_materialize_modules_and_sections` creates the module docs (grouped by `module_ref`)
-and section stub docs (`status: "planned"`, one per task) under
+and section stub docs (`status: "planned"`, one per task, doc id = task id with its
+`m{X}-` module prefix stripped, e.g. task `m1-s2` → section doc `s2`) under
 `curricula/{curId}/modules/...`, computes `task_queue` from all non-`done` task ids,
 sets state `phase="writing"`, `current_task_id` = first task, sets curriculum
 `status="writing"`, and emits a live `phase_change{phase: "writing"}` WS event (plus a
@@ -597,23 +635,30 @@ sets state `phase="writing"`, `current_task_id` = first task, sets curriculum
 **7. `writing` phase runs one task at a time.** Per task: `search_research_notes` pulls
 relevant notes; occasionally a targeted top-up `web_search`+`save_research_note`; then
 `write_section(module_id, section_id, title, content_markdown, citations)`. Each
-successful `write_section` call: validates non-empty citations for substantial content,
-syntax-lints any ```mermaid blocks (rejecting the write with an error observation if a
-diagram is broken — see `mermaid_lint.py`), writes/overwrites the section doc, marks
-the task `done` in the plan and pops it from
+`write_section` call first runs the target guard (`_validate_write_target`): in
+`writing`, `module_id`/`section_id` must already exist as a materialized stub, else an
+error listing the existing ids (no invented ids like the `beyond-star`/`overview_mod`
+phantoms this guard exists to catch). Then it validates non-empty citations for
+substantial content, syntax-lints any ```mermaid blocks (rejecting the write with an
+error observation if a diagram is broken — see `mermaid_lint.py`), writes/overwrites the
+section doc, marks the task `done` in the plan (matching `module_id-section_id` or, for
+legacy docs, `section_id` alone) and pops it from
 `task_queue` (updating `current_task_id`), refreshes `module_count`/`section_count` on
 the curriculum, and emits both `curriculum_updated{scope:"section", module_id,
 section_id}` and `progress{completed, total, detail}`. The frontend's Workflow view
 animates the corresponding module/section node on `curriculum_updated`; the phase
 banner and any progress bar update on `progress`. This repeats autonomously — no HITL
 pause — until `task_queue` is empty, at which point the model calls
-`complete_phase("review", ...)`.
+`complete_phase("review", ...)` — rejected server-side if any plan task is still
+pending or any section doc is still `"planned"`.
 
 **8. `review` phase**: the model calls `list_curriculum_structure` to confirm every
 section is `complete`, spot-checks a few sections for citation coverage
 (`read_section`), calls `write_curriculum_overview(overview_markdown, emoji, tags)`
-(emits `curriculum_updated{scope:"overview"}`), then `complete_phase("ready", ...)` →
-state `phase="ready"`, curriculum `status="ready"`, WS `phase_change{label: "Ready"}`.
+(emits `curriculum_updated{scope:"overview"}`), then `complete_phase("ready", ...)` —
+rejected server-side if any section isn't `complete` or the overview is still empty —
+which on success sets state `phase="ready"`, curriculum `status="ready"`, WS
+`phase_change{label: "Ready"}`.
 
 **9. Steady state.** The turn ends `DONE` (plain text, e.g. "Your curriculum is ready!
 Take a look, and let me know if you'd like anything explained or adjusted."), emits

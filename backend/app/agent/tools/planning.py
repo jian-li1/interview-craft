@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -10,14 +11,39 @@ from app.agent.tools.base import AgentContext, Tool
 from app.agent.tools.control import PHASE_LABELS
 from app.services import firestore as fs
 
+# Binding ID contract (see CLAUDE.md / spec 02): a task id is "m{X}-s{Y}" (X,Y >= 1),
+# module_ref is "m{X}" matching the id's prefix. These anchor the format checks in
+# `_validate_plan` below.
+_MODULE_REF_RE = re.compile(r"^m[1-9]\d*$")
+_TASK_ID_RE = re.compile(r"^(m[1-9]\d*)-s([1-9]\d*)$")
+# Cross-checks outline_markdown against tasks: every planned section must be labeled
+# "Section X.Y: <title>" so propose_task_plan can verify 1:1 coverage against tasks.
+_OUTLINE_SECTION_RE = re.compile(r"[Ss]ection\s+(\d+)\.(\d+)")
+
 
 class PlanTaskInput(BaseModel):
     """A single task within a proposed task plan, corresponding to one section stub."""
 
-    id: str = Field(..., description="Short stable slug, unique within the plan, e.g. 'm1-s2'.")
-    title: str = Field(..., description="Task title, matching the section/overview title.")
+    id: str = Field(
+        ...,
+        description=(
+            "Task id in the form 'm{X}-s{Y}' (e.g. 'm1-s2'), unique within the plan. X/Y are "
+            "1-based and must match this task's position: module numbering starts at m1 and is "
+            "contiguous, section numbering starts at s1 and is contiguous within each module. "
+            "There is exactly one task per planned section — never a slug, and never a task for "
+            "the curriculum overview (that is written later via write_curriculum_overview)."
+        ),
+    )
+    title: str = Field(..., description="Task title, matching the section title.")
     description: str = Field("", description="1-2 sentences describing what this task covers.")
-    module_ref: str | None = Field(None, description="The module id/slug this task belongs to, or null.")
+    module_ref: str = Field(
+        ...,
+        description=(
+            "The module id this task belongs to, in the form 'm{X}' matching the id's 'm{X}-' "
+            "prefix (e.g. module_ref 'm1' for id 'm1-s2'). Required — every task maps to exactly "
+            "one section, so this is never null."
+        ),
+    )
     status: Literal["pending", "in_progress", "done"] = "pending"
 
 
@@ -25,16 +51,131 @@ class ProposeTaskPlanInput(BaseModel):
     """Input schema for `ProposeTaskPlanTool`."""
 
     outline_markdown: str = Field(
-        ..., description="Human-readable outline (module titles + summaries + section titles)."
+        ...,
+        description=(
+            "Human-readable outline (module titles + summaries + section titles). Every section "
+            "line MUST be labeled 'Section X.Y: <title>' (X = module number, Y = section number "
+            "within that module) — propose_task_plan cross-checks these labels against `tasks` "
+            "and rejects the plan if they don't match 1:1."
+        ),
     )
     tasks: list[PlanTaskInput] = Field(..., description="The full task list for this plan version.")
+
+
+def _validate_plan(input: ProposeTaskPlanInput) -> str | None:
+    """Validate a proposed plan against the binding module/section id contract.
+
+    Checks (in order, first failure wins): tasks non-empty; every task's `id`/
+    `module_ref` match the `m{X}-s{Y}`/`m{X}` format with a consistent prefix; task ids
+    are unique; module numbering is contiguous from m1 in first-appearance order;
+    section numbering is contiguous from s1 per module in task-list order; and the
+    `outline_markdown`'s `Section X.Y` labels exactly match the task id set. Designed to
+    catch the failure modes seen in practice: invented ids, missing module_ref, and an
+    outline that describes more sections than the task list actually covers.
+
+    Args:
+        input (ProposeTaskPlanInput): The plan input as submitted to `propose_task_plan`.
+
+    Returns:
+        str | None: A human/LLM-readable error message describing the first violation
+            found, or None if the plan passes every check.
+    """
+    if not input.tasks:
+        return "tasks must be non-empty — propose_task_plan requires at least one planned section."
+
+    # Per-task format check: id/module_ref shape and their prefix must agree.
+    for t in input.tasks:
+        if not _MODULE_REF_RE.match(t.module_ref or ""):
+            return (
+                f"task {t.id!r} has invalid module_ref {t.module_ref!r} — module_ref must match "
+                f"'m{{X}}' (e.g. 'm1'), and every task must set it (the overview is not a task)."
+            )
+        match = _TASK_ID_RE.match(t.id)
+        if not match:
+            return (
+                f"task id {t.id!r} is invalid — ids must match 'm{{X}}-s{{Y}}' (e.g. 'm1-s2'), "
+                f"never a free-form slug."
+            )
+        if match.group(1) != t.module_ref:
+            return (
+                f"task {t.id!r} has module_ref {t.module_ref!r}, but its id prefix implies module "
+                f"{match.group(1)!r} — the 'm{{X}}-' prefix of id must equal module_ref exactly."
+            )
+
+    # Uniqueness of task ids.
+    ids = [t.id for t in input.tasks]
+    if len(ids) != len(set(ids)):
+        dupes = sorted({i for i in ids if ids.count(i) > 1})
+        return f"duplicate task ids found: {dupes} — every task id must be unique within the plan."
+
+    # Module numbering: contiguous from m1, in ascending first-appearance order (i.e.
+    # m1's tasks must all be introduced before m2 first appears, etc.).
+    module_first_seen: list[str] = []
+    for t in input.tasks:
+        if t.module_ref not in module_first_seen:
+            module_first_seen.append(t.module_ref)
+    expected_modules = [f"m{i}" for i in range(1, len(module_first_seen) + 1)]
+    if module_first_seen != expected_modules:
+        return (
+            f"module numbering must be contiguous starting at m1 with modules introduced in "
+            f"ascending order; got modules in first-appearance order {module_first_seen}, "
+            f"expected {expected_modules}."
+        )
+
+    # Section numbering: contiguous from s1 per module, in task-list order within that module.
+    sections_by_module: dict[str, list[int]] = {}
+    for t in input.tasks:
+        section_num = int(_TASK_ID_RE.match(t.id).group(2))
+        sections_by_module.setdefault(t.module_ref, []).append(section_num)
+    for module_ref, section_nums in sections_by_module.items():
+        expected = list(range(1, len(section_nums) + 1))
+        if section_nums != expected:
+            return (
+                f"module {module_ref!r} section numbering must be contiguous starting at s1 in "
+                f"task-list order; got {section_nums}, expected {expected}."
+            )
+
+    # Outline <-> tasks cross-check: every "Section X.Y" label in outline_markdown must
+    # have exactly one corresponding m{X}-s{Y} task, and vice versa.
+    outline_pairs = _OUTLINE_SECTION_RE.findall(input.outline_markdown)
+    if not outline_pairs:
+        return (
+            "outline_markdown has no 'Section X.Y: <title>' labels — every section line in the "
+            "outline must be labeled this way (X = module number, Y = section number) so it can "
+            "be cross-checked against tasks."
+        )
+    outline_ids = {f"m{x}-s{y}" for x, y in outline_pairs}
+    task_ids = set(ids)
+    missing_from_tasks = sorted(outline_ids - task_ids)
+    missing_from_outline = sorted(task_ids - outline_ids)
+    if missing_from_tasks or missing_from_outline:
+        parts = []
+        if missing_from_tasks:
+            parts.append(
+                f"outline mentions {missing_from_tasks} but tasks has no matching entry"
+            )
+        if missing_from_outline:
+            parts.append(
+                f"tasks has {missing_from_outline} but outline_markdown never labels it "
+                f"'Section X.Y'"
+            )
+        return (
+            "outline_markdown and tasks disagree on which sections exist: "
+            + "; ".join(parts)
+            + " — every section in the outline needs exactly one task, and vice versa."
+        )
+
+    return None
 
 
 class ProposeTaskPlanTool(Tool):
     name = "propose_task_plan"
     description = (
         "HITL GATE — propose the curriculum outline and task plan to the user for approval. "
-        "Saves the plan, sets curriculum status to 'awaiting_approval', emits phase_change, "
+        "Validates the plan first (task id format 'm{X}-s{Y}', module_ref prefix match, "
+        "contiguous module/section numbering, and that outline_markdown's 'Section X.Y' labels "
+        "match tasks 1:1) — returns an error observation and saves nothing if the plan fails any "
+        "check. Saves the plan, sets curriculum status to 'awaiting_approval', emits phase_change, "
         "progress, and plan_proposed events to the client, and PAUSES your loop until the user "
         "responds with approve or modify. Call this alone, with no other tool calls in the same "
         "step. Use this both for the initial proposal and for re-proposing after incorporating "
@@ -62,7 +203,17 @@ class ProposeTaskPlanTool(Tool):
                 order, a `phase_change` (awaiting_approval), a `progress` event (task
                 counts, only when there are tasks), and the `plan_proposed` event (with
                 the full outline/tasks/version) for the client to render an approval card.
+                `{"error": "..."}` instead, with no writes performed at all, if
+                `_validate_plan` finds the plan violates the id/module_ref/outline
+                contract (invented ids, non-contiguous numbering, outline/tasks mismatch).
         """
+        # Reject a malformed plan before any write — an invented id or an outline that
+        # over-promises relative to tasks corrupts materialization downstream, so this
+        # must be caught here rather than left for the writing phase to discover.
+        validation_error = _validate_plan(input)
+        if validation_error:
+            return {"error": validation_error}
+
         existing = fs.get_plan(ctx.curriculum_id)
         # Plan versions increment monotonically across proposals (initial + any
         # re-proposals after "modify" feedback); user_feedback accumulates across

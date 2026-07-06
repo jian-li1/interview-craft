@@ -36,23 +36,35 @@ intake ──► deep_research ──► outline_planning ──► awaiting_app
   fetched-and-distilled notes and new searches hit diminishing returns. Every note keeps
   its source URL — this feeds citations later.
 - **outline_planning**: Synthesize research notes into a curriculum outline (modules →
-  sections) + a task plan (one task ≈ one section or overview). Personalize using the
-  synthesized user profile. Call `propose_task_plan` → emits `phase_change`
+  sections) + a task plan — EXACTLY one task per planned section (never an overview
+  task; the overview is written later in `review` via `write_curriculum_overview`).
+  Personalize using the synthesized user profile. Call `propose_task_plan` → the tool
+  first validates the plan server-side (task id format `m{X}-s{Y}`, `module_ref`
+  prefix match, contiguous module/section numbering, and that `outline_markdown`'s
+  `Section X.Y` labels match `tasks` 1:1) and returns an error observation with no
+  writes performed on any violation. On success it emits `phase_change`
   (awaiting_approval), `progress` (task counts, if any tasks), and `plan_proposed` WS
   events (in that order), sets curriculum status=awaiting_approval and persists the
   progress blob, and **pauses the loop**.
 - **awaiting_approval (HITL)**: Resumes on `plan_decision`. approve → materialize modules/
-  sections stubs in Firestore, status=writing, go to writing, emit live `phase_change`
-  (writing) + `progress` WS events. modify → feedback appended, return to
-  outline_planning to revise (increment plan version), emit a live `phase_change`
-  (outline_planning) WS event.
+  sections stubs in Firestore (section doc id = task id minus its `m{X}-` module
+  prefix, e.g. task `m1-s2` → section doc `s2` under module doc `m1`; legacy task ids
+  without that prefix fall back to using the full id verbatim), status=writing, go to
+  writing, emit live `phase_change` (writing) + `progress` WS events. modify → feedback
+  appended, return to outline_planning to revise (increment plan version), emit a live
+  `phase_change` (outline_planning) WS event.
 - **writing**: Pop tasks from the queue one at a time. For each: search research notes for
   relevant material (`search_research_notes`), optionally do 1–2 targeted extra searches if
-  a gap exists, then `write_section` with full rich markdown. Update progress after each
-  task (WS `progress` + `curriculum_updated`). Persist task status so a crashed/resumed run
-  continues where it left off.
+  a gap exists, then `write_section` with full rich markdown. `write_section` enforces a
+  target guard first: in `writing`/`review` it only accepts module/section ids already
+  materialized from the approved plan, rejecting any invented id with an error listing the
+  existing ids. Update progress after each task (WS `progress` + `curriculum_updated`).
+  Persist task status so a crashed/resumed run continues where it left off.
+  `complete_phase("review")` is rejected while any plan task is still pending or any
+  section doc is still `"planned"`.
 - **review**: Verify every section has citations, diagrams where valuable, sample Q&A
-  coverage; write the curriculum `overview`; status=ready.
+  coverage; write the curriculum `overview`; status=ready. `complete_phase("ready")` is
+  rejected server-side if any section isn't `"complete"` or the overview is still empty.
 - **refinement**: Steady conversational state. User asks for modifications
   (`update_section`), explanations ("explain X from module 2" → read section, explain in
   chat, do NOT modify unless asked), additions, or new deep-dives (may trigger targeted
@@ -131,12 +143,12 @@ during writing-only refinements, etc. — keep filtering simple: a phase→allow
 - `get_user_profile()` → synthesized_profile + structured fields (target roles, experience level, learning style, timeline).
 
 **Planning tools**
-- `propose_task_plan(outline_markdown, tasks[])` → HITL GATE: saves plan, sets status awaiting_approval, emits `phase_change` + `progress` + `plan_proposed`, pauses loop.
+- `propose_task_plan(outline_markdown, tasks[])` → HITL GATE: validates the plan first (task id `m{X}-s{Y}`, `module_ref` prefix match, contiguous module/section numbering, `outline_markdown`'s `Section X.Y` labels matching `tasks` 1:1) — error observation, no writes, if invalid; on success saves plan, sets status awaiting_approval, emits `phase_change` + `progress` + `plan_proposed`, pauses loop.
 - `get_task_plan()` → current plan + task statuses.
 
 **Curriculum tools**
 - `list_curriculum_structure()` → modules/sections tree with statuses (compact).
-- `write_section(module_id, section_id, title, content_markdown, citations[])` → writes content; validates citations non-empty for research-based content; syntax-lints any ```mermaid blocks and rejects the write with an error observation (no write performed) if a diagram is broken; marks task done; emits `curriculum_updated` + `progress`; also refreshes the parent module's derived status (planned→writing→complete, from its sections) and estimated_minutes (~200 wpm from written content).
+- `write_section(module_id, section_id, title, content_markdown, citations[])` → target guard first: in `writing`/`review`, module_id/section_id must already exist (materialized from the approved plan) or the write is rejected with an error listing existing ids; in `ready`/`refinement`, a new module/section may be created but only at the next sequential id (`m{N+1}`/`s{K+1}`, auto-creating the module doc when applicable), otherwise rejected. Then validates citations non-empty for research-based content; syntax-lints any ```mermaid blocks and rejects the write with an error observation (no write performed) if a diagram is broken; marks task done (matching `module_id-section_id` or, for legacy docs, the section id alone); emits `curriculum_updated` + `progress`; also refreshes the parent module's derived status (planned→writing→complete, from its sections) and estimated_minutes (~200 wpm from written content).
 - `read_section(module_id, section_id)` → full content (for explanation/refinement).
 - `update_section(module_id, section_id, content_markdown, citations[], change_note)` → for refinement phase; also syntax-lints ```mermaid blocks and rejects with an error observation (no write) if broken; also refreshes the parent module's derived status/estimated_minutes.
 - `write_curriculum_overview(overview_markdown, emoji, tags[])` → sets curriculum overview/metadata.
@@ -151,7 +163,7 @@ during writing-only refinements, etc. — keep filtering simple: a phase→allow
 **Control tools**
 - `request_user_input(question, options[]?)` → HITL gate for clarifying questions (pauses loop, question rendered as chat card).
 - `update_scratchpad(content)` → overwrite agent scratchpad in state doc (agent's own working notes: what's done, what's next, open questions).
-- `complete_phase(next_phase, reason)` → validated transition; updates state + curriculum status; emits `phase_change`.
+- `complete_phase(next_phase, reason)` → validated transition; updates state + curriculum status; emits `phase_change`. Two transitions carry an additional completeness gate (error observation, no transition applied, if unmet): `writing`→`review` requires every module_ref-bearing plan task `"done"` and no section doc left `"planned"`; `review`→`ready` requires every section `"complete"` and the curriculum `overview` non-empty.
 
 ## 5. Memory & context management (`agent/memory/`)
 

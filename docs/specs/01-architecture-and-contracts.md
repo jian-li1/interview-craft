@@ -147,11 +147,18 @@ curricula/{curriculumId}
   created_at, updated_at
 
 curricula/{id}/modules/{moduleId}
+  # moduleId doc ids are "m1", "m2", ... contiguous, in curriculum order (the
+  # module_ref/id prefix from the approved plan's tasks — see plan/main below)
   order: int, title, summary, objectives: [str]
   status: "planned"|"writing"|"complete"
   estimated_minutes: int
 
 curricula/{id}/modules/{mid}/sections/{sectionId}
+  # sectionId doc ids are "s1", "s2", ... contiguous PER MODULE. Materialization derives
+  # this by stripping the "m{X}-" prefix from the owning plan task's id (task "m1-s2" ->
+  # module doc "m1", section doc "s2"). Legacy curricula predating this convention may
+  # still have sectionId == the full task id verbatim; code stays tolerant of both forms
+  # (see write_section's _mark_task_done in spec 02).
   order: int, title
   content_markdown: str         # rich markdown incl. mermaid blocks, [^n] citation markers
   citations: [{ id: int, url, title, accessed_at }]
@@ -159,9 +166,19 @@ curricula/{id}/modules/{mid}/sections/{sectionId}
 
 curricula/{id}/plan/main
   version: int
-  outline_markdown: str         # human-readable outline
-  tasks: [{ id: str, title: str, description: str, module_ref: str|null,
+  outline_markdown: str         # human-readable outline; every section line MUST be
+                                 # labeled "Section X.Y: <title>" (X=module #, Y=section #)
+                                 # so propose_task_plan can cross-check it against tasks
+  tasks: [{ id: str, title: str, description: str, module_ref: str,
             status: "pending"|"in_progress"|"done" }]
+            # id is BINDING: "m{X}-s{Y}" (X,Y >= 1), one task per planned section (no
+            # overview task — the overview is written later via write_curriculum_overview).
+            # module_ref is "m{X}" and must equal id's "m{X}-" prefix. Module numbering is
+            # contiguous from m1 (ascending first-appearance order); section numbering is
+            # contiguous from s1 per module (task-list order). propose_task_plan validates
+            # all of this server-side (format, uniqueness, contiguity, and the
+            # outline_markdown <-> tasks cross-check) and rejects the whole plan with an
+            # error observation (no partial save) on any violation.
   status: "proposed"|"approved"|"revising"
   user_feedback: [str]
 
