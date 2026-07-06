@@ -71,7 +71,8 @@ switcher (unaffected by the divider).
 - **Streaming**: connect WS on mount; render `text_delta` token-by-token with a blinking
   caret; auto-scroll with "scroll to bottom" pill when user scrolled up.
 - **Reasoning chain**: `reasoning_delta` streams into a collapsible "Thinking…" block
-  (shimmer label while streaming, collapses to a subtle expandable row when done).
+  (collapsed by default, like tool-call cards; shimmering header while streaming, "Thought
+  process" when done; expandable on click).
 - **Tool calls**: each renders as a compact card: icon + tool name + status spinner →
   check/error; expandable to show formatted JSON input and output preview. Group
   consecutive tool cards. This is the agent-transparency UI — make it polished.

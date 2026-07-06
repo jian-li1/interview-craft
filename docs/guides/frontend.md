@@ -303,10 +303,9 @@ can arrive during the initial fetch. `CurriculumPanel` resets its local `view`/
   a task checklist (checkmark when `status === "done"`); toggles between an idle
   [Approve & build]/[Request changes] row and a feedback-textarea row, calling
   `onDecision(decision, feedback)` which the page wires to `socket.sendPlanDecision(...)`.
-- **`ReasoningBlock.tsx`** — collapsible, `open` initialized to the `streaming` prop
-  (auto-expanded while reasoning is actively arriving), header reads "Thinking…"
-  (shimmer) while streaming or "Thought process" once done; renders `null` if there's no
-  reasoning text.
+- **`ReasoningBlock.tsx`** — collapsible, collapsed by default (`open` starts false,
+  matching the tool-call cards). Header reads "Thinking…" (shimmer) while streaming or
+  "Thought process" once done; renders `null` if there's no reasoning text.
 - **`ToolCallCard.tsx`** — exports `ToolCallGroup({ calls })`; icon is `Search` if the
   (lowercased) tool name contains `"search"`, else `Wrench`; status icon is a spinning
   `Loader2` (running), `CheckCircle2` (ok), or `XCircle` (error); expands to show

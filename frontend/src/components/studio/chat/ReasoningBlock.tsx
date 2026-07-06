@@ -13,23 +13,23 @@ interface ReasoningBlockProps {
 }
 
 /**
- * Renders the agent's `<thinking>...</thinking>` stream for one assistant
- * message — a provider-agnostic convention (see root CLAUDE.md "Agent
- * streaming") where the backend splits reasoning text from user-facing text
- * and the WS layer emits them as two distinct event types:
- * `reasoning_delta` (appended here via useChatStore.appendReasoningDelta)
- * vs `text_delta` (rendered in MessageBubble's markdown bubble instead).
- * This component only ever sees the reasoning half of that split.
+ * Renders the agent's native reasoning/thinking stream for one assistant
+ * message (see root CLAUDE.md "Agent streaming") — the backend LLM provider
+ * surfaces the model's own reasoning output and the WS layer emits it as two
+ * distinct event types: `reasoning_delta` (appended here via
+ * useChatStore.appendReasoningDelta) vs `text_delta` (rendered in
+ * MessageBubble's markdown bubble instead). This component only ever sees
+ * the reasoning half of that split.
  *
- * Collapsible: auto-opens while `streaming` is true (so the user watches the
- * thought process live) and can be toggled manually afterward via the
- * disclosure button. Renders nothing once `reasoning` is empty (e.g. before
- * the first delta arrives).
+ * Collapsible: collapsed by default (matching the tool-call cards); the header
+ * shows a shimmering "Thinking…" while streaming and "Thought process" when
+ * done. Toggled manually via the disclosure button. Renders nothing once
+ * `reasoning` is empty (e.g. before the first delta arrives).
  */
 export function ReasoningBlock({ reasoning, streaming }: ReasoningBlockProps) {
-  // Seed `open` from `streaming` so a message that arrives already-streaming
-  // starts expanded; once toggled by the user it's independent of `streaming`.
-  const [open, setOpen] = useState(streaming);
+  // Collapsed by default, like tool-call cards. The shimmering "Thinking…" header
+  // signals live reasoning; user can expand at any time (state independent of `streaming`).
+  const [open, setOpen] = useState(false);
 
   if (!reasoning) return null;
 
