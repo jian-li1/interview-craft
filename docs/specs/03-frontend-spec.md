@@ -149,3 +149,6 @@ Two views, toggle: **Workflow** and **Reader**.
 - Responsive down to 375px. Keyboard accessible (focus rings, aria labels on icon buttons).
 - Empty/loading/error states everywhere. Toasts (simple custom or sonner) for errors.
 - No hydration warnings; mermaid/xyflow rendered client-side only (dynamic import, ssr:false).
+- Mermaid parse failures degrade gracefully — the source renders as a plain code block
+  with a note (no raw parser error box), and Mermaid's own DOM error injection is
+  suppressed (`suppressErrorRendering: true`).

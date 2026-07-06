@@ -336,8 +336,14 @@ switches to `"reader"`.
   not a React component), re-rendering whenever the `chart` string or `next-themes`'s
   `resolvedTheme` changes. Calls `mermaid.initialize({ startOnLoad: false, theme:
   dark-or-default, securityLevel: "strict", fontFamily: "var(--font-sans-var),
-  sans-serif" })` and injects the rendered SVG via `dangerouslySetInnerHTML` (justified
-  by `securityLevel: "strict"`).
+  sans-serif", suppressErrorRendering: true })` and injects the rendered SVG via
+  `dangerouslySetInnerHTML` (justified by `securityLevel: "strict"`).
+  `suppressErrorRendering: true` stops Mermaid from injecting its own giant error SVG
+  into `document.body` on parse failure. On render/parse failure the component degrades
+  gracefully instead of showing a destructive error box: it renders the raw `chart`
+  source as a plain code block (styled like the loading state) with a small muted note
+  that the diagram couldn't render; the actual parser error is only logged via
+  `console.warn`, not shown in the UI.
 - **`ReaderView.tsx`** — single-section paging, not an all-sections scroll. A left
   mini-TOC (module/section tree with status icons: `Circle`/`Loader2`/`CheckCircle2` for
   planned/writing/complete) rendered as a sidebar at `lg+`; below `lg` the same tree is

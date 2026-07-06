@@ -132,9 +132,9 @@ during writing-only refinements, etc. — keep filtering simple: a phase→allow
 
 **Curriculum tools**
 - `list_curriculum_structure()` → modules/sections tree with statuses (compact).
-- `write_section(module_id, section_id, title, content_markdown, citations[])` → writes content; validates citations non-empty for research-based content; marks task done; emits `curriculum_updated` + `progress`; also refreshes the parent module's derived status (planned→writing→complete, from its sections) and estimated_minutes (~200 wpm from written content).
+- `write_section(module_id, section_id, title, content_markdown, citations[])` → writes content; validates citations non-empty for research-based content; syntax-lints any ```mermaid blocks and rejects the write with an error observation (no write performed) if a diagram is broken; marks task done; emits `curriculum_updated` + `progress`; also refreshes the parent module's derived status (planned→writing→complete, from its sections) and estimated_minutes (~200 wpm from written content).
 - `read_section(module_id, section_id)` → full content (for explanation/refinement).
-- `update_section(module_id, section_id, content_markdown, citations[], change_note)` → for refinement phase; also refreshes the parent module's derived status/estimated_minutes.
+- `update_section(module_id, section_id, content_markdown, citations[], change_note)` → for refinement phase; also syntax-lints ```mermaid blocks and rejects with an error observation (no write) if broken; also refreshes the parent module's derived status/estimated_minutes.
 - `write_curriculum_overview(overview_markdown, emoji, tags[])` → sets curriculum overview/metadata.
 - `set_curriculum_title(title, emoji?)` → renames the curriculum (and the linked
   conversation's sidebar/dashboard title) away from the placeholder derived from the raw

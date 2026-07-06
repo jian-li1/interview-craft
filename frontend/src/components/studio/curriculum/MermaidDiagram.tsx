@@ -24,13 +24,17 @@ interface MermaidDiagramProps {
  * pull mermaid into the server bundle and either crash the server render or
  * bloat it for no benefit, since this component always needs a live browser
  * DOM to actually draw anything.
+ *
+ * On parse/render failure, degrades gracefully: instead of a destructive
+ * error box, renders the raw chart source as a plain code block with a
+ * small muted note. The parser error itself only goes to `console.warn`.
  */
 function MermaidDiagramImpl({ chart }: MermaidDiagramProps) {
   const { resolvedTheme } = useTheme();
   const id = useId().replace(/[:]/g, "-");
   const containerRef = useRef<HTMLDivElement>(null);
   const [svg, setSvg] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false); // true once render() throws; source falls back to a code block
 
   useEffect(() => {
     // `cancelled` guards against a race where the chart/theme changes (and
@@ -40,7 +44,7 @@ function MermaidDiagramImpl({ chart }: MermaidDiagramProps) {
     let cancelled = false;
 
     async function render() {
-      setError(null);
+      setFailed(false);
       try {
         // Runtime `import()` (not a top-level `import mermaid from "mermaid"`)
         // — see this file's top-level doc comment for why: mermaid needs a
@@ -52,13 +56,14 @@ function MermaidDiagramImpl({ chart }: MermaidDiagramProps) {
           theme: resolvedTheme === "dark" ? "dark" : "default",
           securityLevel: "strict",
           fontFamily: "var(--font-sans-var), sans-serif",
+          suppressErrorRendering: true, // stop mermaid from injecting its own error SVG into document.body on parse failure
         });
         const { svg: rendered } = await mermaid.render(`mermaid-${id}`, chart);
         if (!cancelled) setSvg(rendered);
       } catch (err) {
-        if (!cancelled) {
-          setError(err instanceof Error ? err.message : "Failed to render diagram");
-        }
+        // Parser error is noisy and not actionable for end users — keep it in the console for developers only.
+        console.warn("Mermaid diagram failed to render:", err);
+        if (!cancelled) setFailed(true);
       }
     }
 
@@ -68,14 +73,17 @@ function MermaidDiagramImpl({ chart }: MermaidDiagramProps) {
     };
   }, [chart, resolvedTheme, id]);
 
-  if (error) {
+  if (failed) {
+    // Graceful fallback: show the raw source as a plain code block, styled like the loading state below.
     return (
-      <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive">
-        <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden="true" />
-        <div>
-          <p className="font-medium">Couldn&apos;t render diagram</p>
-          <pre className="mt-1 whitespace-pre-wrap opacity-80">{error}</pre>
-        </div>
+      <div className="rounded-lg border border-border bg-muted/30 p-3">
+        <p className="mb-2 flex items-center gap-1.5 text-xs text-muted-foreground">
+          <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+          Diagram couldn&apos;t render — showing source instead
+        </p>
+        <pre className="overflow-x-auto whitespace-pre text-xs">
+          <code>{chart}</code>
+        </pre>
       </div>
     );
   }

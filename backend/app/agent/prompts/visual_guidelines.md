@@ -26,6 +26,14 @@ correctness here matters as much as content quality.
 7. **Test complexity mentally before emitting** — if you can't clearly picture how the
    diagram renders, simplify it. A correct, simple diagram beats an ambitious, broken one.
 
+## Automatic syntax linting
+
+`write_section`/`update_section` run a heuristic Mermaid syntax lint before writing.
+Content containing a broken ```mermaid block (unknown diagram type, unbalanced
+brackets, unquoted risky labels, unclosed fence) is REJECTED with an error observation
+— nothing is written. If you see this error, fix ONLY the flagged diagram(s) per the
+guardrails above and resubmit the FULL corrected section content (not a fragment).
+
 ## Which diagram type to use when
 
 - **`flowchart`** (`flowchart TD` or `flowchart LR`): process steps, decision points,

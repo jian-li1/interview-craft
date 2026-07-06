@@ -63,7 +63,8 @@ iteration — a `complete_phase` call takes effect next iteration, not next turn
   **every** phase — changes here affect the whole agent.
 - Be concrete and behavior-shaping, not vague — the model only sees these files, not
   the codebase. Code-level enforcement is minimal (mainly `write_section`'s
-  citations check and `CompletePhaseTool`'s transition validation).
+  citations check, the Mermaid syntax lint (`mermaid_lint.py`) shared by
+  `write_section`/`update_section`, and `CompletePhaseTool`'s transition validation).
 - `profile_synthesis.md`/`compaction.md` are one-shot small-model tasks loaded
   directly by their call sites, not part of phase composition — their output is
   stored verbatim with no post-processing, so keep "return ONLY the output" intact.

@@ -1,7 +1,8 @@
 """Curriculum tools: set_curriculum_title updates both curriculum + conversation;
 write_section/update_section auto-derive parent module status/estimated_minutes;
 set_module_status emits a curriculum_updated WS event; write_section and
-complete_phase persist progress onto the curriculum doc for REST readers.
+complete_phase persist progress onto the curriculum doc for REST readers;
+write_section/update_section reject broken Mermaid diagrams at write time.
 """
 
 from __future__ import annotations
@@ -15,6 +16,8 @@ from app.agent.tools.curriculum import (
     SetCurriculumTitleTool,
     SetModuleStatusInput,
     SetModuleStatusTool,
+    UpdateSectionInput,
+    UpdateSectionTool,
     WriteSectionInput,
     WriteSectionTool,
 )
@@ -250,3 +253,83 @@ async def test_complete_phase_review_to_ready_sets_status_and_progress(fake_fs):
     # completed_tasks/total_tasks carry over untouched from the pre-existing progress blob.
     assert updated_curriculum["progress"]["completed_tasks"] == 3
     assert updated_curriculum["progress"]["total_tasks"] == 3
+
+
+@pytest.mark.asyncio
+async def test_write_section_rejects_broken_mermaid_and_does_not_write(fake_fs):
+    """write_section with a broken mermaid block (unquoted parens in a label) returns
+    {"error": ...} and the section is NOT created at all.
+    """
+    conv = fake_fs.fs.create_conversation("uid1", "New conversation", curriculum_id=None)
+    curriculum = fake_fs.fs.create_curriculum(
+        "uid1", "prep for a system design interview", "prep for a system design interview", conversation_id=conv["id"]
+    )
+    fake_fs.fs.update_conversation(conv["id"], {"curriculum_id": curriculum["id"]})
+    fake_fs.fs.create_module(curriculum["id"], "mod1", {"order": 0, "title": "Module 1", "status": "planned", "estimated_minutes": 0})
+
+    tool = WriteSectionTool()
+    ctx = _make_ctx(curriculum["id"], conv["id"])
+    broken_content = "Intro text.\n\n```mermaid\nflowchart TD\n    A[Review (Optional)] --> B\n```\n"
+
+    result = await tool.execute(
+        WriteSectionInput(module_id="mod1", section_id="sec1", title="Section 1", content_markdown=broken_content, citations=[]),
+        ctx,
+    )
+
+    assert "error" in result
+    assert fake_fs.fs.get_section(curriculum["id"], "mod1", "sec1") is None
+
+
+@pytest.mark.asyncio
+async def test_write_section_accepts_valid_mermaid(fake_fs):
+    """write_section with a correctly-quoted mermaid block succeeds and persists the section."""
+    conv = fake_fs.fs.create_conversation("uid1", "New conversation", curriculum_id=None)
+    curriculum = fake_fs.fs.create_curriculum(
+        "uid1", "prep for a system design interview", "prep for a system design interview", conversation_id=conv["id"]
+    )
+    fake_fs.fs.update_conversation(conv["id"], {"curriculum_id": curriculum["id"]})
+    fake_fs.fs.create_module(curriculum["id"], "mod1", {"order": 0, "title": "Module 1", "status": "planned", "estimated_minutes": 0})
+
+    tool = WriteSectionTool()
+    ctx = _make_ctx(curriculum["id"], conv["id"])
+    valid_content = 'Intro text.\n\n```mermaid\nflowchart TD\n    A["Screen"] --> B["Onsite"]\n```\n'
+
+    result = await tool.execute(
+        WriteSectionInput(module_id="mod1", section_id="sec1", title="Section 1", content_markdown=valid_content, citations=[]),
+        ctx,
+    )
+
+    assert result["status"] == "written"
+    written = fake_fs.fs.get_section(curriculum["id"], "mod1", "sec1")
+    assert written["content_markdown"] == valid_content
+
+
+@pytest.mark.asyncio
+async def test_update_section_rejects_broken_mermaid_and_leaves_content_untouched(fake_fs):
+    """update_section with a broken mermaid block returns {"error": ...} and leaves the
+    section's prior content_markdown unchanged.
+    """
+    conv = fake_fs.fs.create_conversation("uid1", "New conversation", curriculum_id=None)
+    curriculum = fake_fs.fs.create_curriculum(
+        "uid1", "prep for a system design interview", "prep for a system design interview", conversation_id=conv["id"]
+    )
+    fake_fs.fs.update_conversation(conv["id"], {"curriculum_id": curriculum["id"]})
+    fake_fs.fs.create_module(curriculum["id"], "mod1", {"order": 0, "title": "Module 1", "status": "planned", "estimated_minutes": 0})
+    original_content = "Original content, no diagrams."
+    fake_fs.fs.create_section(
+        curriculum["id"], "mod1", "sec1",
+        {"order": 0, "title": "Section 1", "content_markdown": original_content, "citations": [], "status": "complete"},
+    )
+
+    tool = UpdateSectionTool()
+    ctx = _make_ctx(curriculum["id"], conv["id"])
+    broken_content = "```mermaid\nflowchart TD\n    A[Bad (Label)] --> B\n```\n"
+
+    result = await tool.execute(
+        UpdateSectionInput(module_id="mod1", section_id="sec1", content_markdown=broken_content, citations=[], change_note="add diagram"),
+        ctx,
+    )
+
+    assert "error" in result
+    unchanged = fake_fs.fs.get_section(curriculum["id"], "mod1", "sec1")
+    assert unchanged["content_markdown"] == original_content

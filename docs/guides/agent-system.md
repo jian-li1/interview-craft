@@ -257,7 +257,12 @@ precisely or if the profile changed mid-run.
   **Validates**: if `content_markdown` is over 400 stripped characters and `citations`
   is empty, returns an error observation instructing the model to add citations or
   shorten the section — this is the concrete enforcement of the "citations are
-  non-negotiable" rule. On success: stamps `accessed_at` (server `utcnow()`) onto every
+  non-negotiable" rule. Also runs `mermaid_lint.lint_markdown_mermaid` over
+  `content_markdown` and, if any ```mermaid block fails the heuristic syntax check
+  (unknown diagram type, unbalanced brackets, unquoted risky labels, unclosed fence),
+  returns an error observation naming each broken block with **no write performed** —
+  the model fixes the diagram per `visual_guidelines.md` and resubmits the full
+  content. On success: stamps `accessed_at` (server `utcnow()`) onto every
   citation, creates or updates the section doc (preserving `order` if the section
   already existed), marks the matching plan task `"done"` and pops it from the agent
   state's `task_queue` (via the internal `_mark_task_done` helper — also updates
@@ -270,8 +275,10 @@ precisely or if the profile changed mid-run.
   refinement prompt mandates calling this before any `update_section`.
 - **`update_section`** — like `write_section` but requires the section to already exist,
   takes a `change_note` (surfaced to the user as a changelog line), does **not** run the
-  400-char citation-required check that `write_section` does, and emits only
-  `curriculum_updated` (no `progress` event, since this isn't task-queue-driven).
+  400-char citation-required check that `write_section` does, but runs the same
+  `mermaid_lint.lint_markdown_mermaid` guard (error observation + no write on a broken
+  diagram), and emits only `curriculum_updated` (no `progress` event, since this isn't
+  task-queue-driven).
 - **`write_curriculum_overview`** — sets `overview`, `emoji`, `tags` on the curriculum
   doc; emits `curriculum_updated(scope="overview")`.
 - **`set_curriculum_title`** — `title` (<=80 chars), optional `emoji`. Always available
@@ -509,7 +516,7 @@ All eleven files live in `backend/app/agent/prompts/` and are treated as code (p
 | `review_phase.md` | 54 | `review` | Structured quality pass over the whole draft: `list_curriculum_structure` then `read_section` module-by-module against a checklist (citations, diagrams, sample-Q&A coverage, 800-2000 word length, coherence, module status); fix failures directly via `write_section` overwrite (full corrected markdown + citations, never a fragment); `update_scratchpad` tracks which modules are already reviewed for resumability; `search_research_notes` only, no broad re-research; after all modules pass, `write_curriculum_overview`, then exit via `complete_phase("ready")`. |
 | `refinement_phase.md` | 67 | `ready`, `refinement` | Three request types and how to handle each: edits (read-before-write, minimal targeted changes, preserve citations, `change_note`), explanations (teach in chat, never silently modify content), additions/deep-dives (scoped targeted research, not a full re-run of `deep_research`). |
 | `citation_guidelines.md` | 79 | Every phase (always layer 3) | The exact `[^n]` marker mechanics, the `## Sources` footnote section format, the `citations` array contract (must mirror footnotes exactly), the hard "no fabricated URLs" rule, and a checklist of what does/doesn't need a citation. |
-| `visual_guidelines.md` | 84 | Every phase (always layer 4) | Mermaid syntax guardrails (always quote labels, avoid unquoted parens, cap ~25 nodes, short node IDs, one edge per line, always fence with `` ```mermaid ``); which diagram type for which content (flowchart default, sequenceDiagram for party interactions, mindmap for topic breakdowns); a worked correct example; `classDef`-based highlighting restrained to 2-3 accent classes; sparse, heading-only emoji usage. |
+| `visual_guidelines.md` | 92 | Every phase (always layer 4) | Mermaid syntax guardrails (always quote labels, avoid unquoted parens, cap ~25 nodes, short node IDs, one edge per line, always fence with `` ```mermaid ``); a note that `write_section`/`update_section` run an automatic syntax lint and reject broken diagrams (fix and resubmit); which diagram type for which content (flowchart default, sequenceDiagram for party interactions, mindmap for topic breakdowns); a worked correct example; `classDef`-based highlighting restrained to 2-3 accent classes; sparse, heading-only emoji usage. |
 | `profile_synthesis.md` | 63 | Onboarding `/api/onboarding/synthesize` endpoint only (small model, no tools) | Transforms raw onboarding fields + resume text into a 200-350 word third-person profile covering background, strengths, gaps vs. target roles, learning style translated into content-design guidance, and 2-4 concrete personalization hooks. Explicitly: no fabrication, no meta-commentary, plain prose only. |
 | `compaction.md` | 76 | `MemoryManager`'s auto-compaction only (small model, no tools) | What to preserve (key decisions, user preferences/corrections, curriculum/plan state, open threads) vs. drop (pleasantries, superseded tool detail, dead-end reasoning, full tool payloads); fixed-heading structured markdown output contract (`## Key Decisions` / `## User Preferences & Corrections` / `## Curriculum & Plan State` / `## Open Threads`); how to merge with an existing rolling summary (later decision wins, trim oldest/least-actionable first). |
 
@@ -596,7 +603,9 @@ sets state `phase="writing"`, `current_task_id` = first task, sets curriculum
 relevant notes; occasionally a targeted top-up `web_search`+`save_research_note`; then
 `write_section(module_id, section_id, title, content_markdown, citations)`. Each
 successful `write_section` call: validates non-empty citations for substantial content,
-writes/overwrites the section doc, marks the task `done` in the plan and pops it from
+syntax-lints any ```mermaid blocks (rejecting the write with an error observation if a
+diagram is broken — see `mermaid_lint.py`), writes/overwrites the section doc, marks
+the task `done` in the plan and pops it from
 `task_queue` (updating `current_task_id`), refreshes `module_count`/`section_count` on
 the curriculum, and emits both `curriculum_updated{scope:"section", module_id,
 section_id}` and `progress{completed, total, detail}`. The frontend's Workflow view
