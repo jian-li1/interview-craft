@@ -186,6 +186,8 @@ export interface ToolCallRecord {
   id: string;
   name: string;
   input: Record<string, unknown>;
+  /** Complete tool output — same text the model saw. Prefer this for expandable views. */
+  output_full: string;
   output_preview: string;
   status: ToolCallStatus;
   /** Present only for tool calls resolved live over WS (not in persisted history). */
@@ -284,6 +286,7 @@ export interface ToolCallResultEvent {
   message_id: string;
   tool_call_id: string;
   name: string;
+  output_full: string;
   output_preview: string;
   status: "ok" | "error";
   elapsed_ms: number;

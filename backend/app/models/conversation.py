@@ -20,7 +20,8 @@ class ToolCallRecord(ApiModel):
         id (str): Unique id of this tool call within the conversation.
         name (str): Name of the tool that was invoked.
         input (dict[str, Any]): Arguments passed to the tool.
-        output_preview (str): Truncated/summarized tool output for display purposes.
+        output_full (str): Complete tool output — the same text replayed to the model.
+        output_preview (str): Short slice of the output for compact display surfaces.
         status (ToolCallStatus): Whether the tool call succeeded ("ok") or failed
             ("error"); per `ToolRegistry.execute`, tool errors never raise and are
             instead surfaced via this status field.
@@ -29,6 +30,7 @@ class ToolCallRecord(ApiModel):
     id: str
     name: str
     input: dict[str, Any] = Field(default_factory=dict)
+    output_full: str = ""
     output_preview: str = ""
     status: ToolCallStatus = "ok"
 

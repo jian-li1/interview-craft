@@ -41,12 +41,10 @@ function humanizeName(name: string): string {
  *  - `"error"` — red X, plus the elapsed time once available.
  *
  * The disclosure (closed by default) reveals the raw JSON `input` the tool
- * was called with, and — if present — `output_preview`: a server-truncated
- * preview string of the tool's output (the backend caps this before sending
- * it over the wire so a huge tool result doesn't bloat every WS frame or get
- * held in memory client-side in full; the full output lives only in the
- * agent's research notes on the backend, per the memory-layers design in
- * root CLAUDE.md).
+ * was called with, and — if present — the tool's output: `output_full` (the
+ * complete result, same text the model saw), falling back to the short
+ * `output_preview` for legacy records that predate the full field. The pane
+ * is scroll-capped so a large result stays contained.
  */
 function ToolCallItem({ call }: { call: ToolCallRecord }) {
   const [open, setOpen] = useState(false);
@@ -101,13 +99,13 @@ function ToolCallItem({ call }: { call: ToolCallRecord }) {
                   {JSON.stringify(call.input, null, 2)}
                 </pre>
               </div>
-              {call.output_preview && (
+              {(call.output_full || call.output_preview) && (
                 <div>
                   <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
                     Output
                   </p>
                   <pre className="mt-1 max-h-40 overflow-auto rounded-md bg-muted/60 p-2 text-[11px] leading-relaxed whitespace-pre-wrap scrollbar-thin">
-                    {call.output_preview}
+                    {call.output_full || call.output_preview}
                   </pre>
                 </div>
               )}

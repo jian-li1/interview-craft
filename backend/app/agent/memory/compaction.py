@@ -156,9 +156,9 @@ def truncate_old_tool_outputs(messages: list[dict]) -> list[dict]:
     Runs on every `build_context` call, independent of whether compaction triggers this
     iteration — this keeps per-iteration context lean even when the conversation is well
     under the compaction threshold. Only the `RECENT_TOOL_EXCHANGES_KEPT_FULL` most recent
-    tool-call-bearing messages keep their full `output_preview`; older ones are trimmed to
-    `TOOL_OUTPUT_PREVIEW_CHARS` with a `"... [truncated]"` suffix. Messages without
-    `tool_calls` are passed through untouched (and un-copied).
+    tool-call-bearing messages keep their full `output_full` (the model-facing content);
+    older ones are trimmed to `TOOL_OUTPUT_PREVIEW_CHARS` with a `"... [truncated]"` suffix.
+    Messages without `tool_calls` are passed through untouched (and un-copied).
 
     Args:
         messages (list[dict]): The candidate messages (raw Firestore message dicts) to
@@ -167,8 +167,8 @@ def truncate_old_tool_outputs(messages: list[dict]) -> list[dict]:
     Returns:
         list[dict]: A new list with the same messages, except that outside the most
             recent `RECENT_TOOL_EXCHANGES_KEPT_FULL` tool-bearing messages, each tool
-            call's `output_preview` is truncated. Non-tool-bearing and recent
-            tool-bearing messages are included as-is (not copied).
+            call's `output_full` (the model-facing field) is truncated. Non-tool-bearing
+            and recent tool-bearing messages are included as-is (not copied).
     """
     # Identify indices of messages that carry tool_calls, from the end.
     tool_bearing_indices = [i for i, m in enumerate(messages) if m.get("tool_calls")]
@@ -183,9 +183,12 @@ def truncate_old_tool_outputs(messages: list[dict]) -> list[dict]:
         new_tool_calls = []
         for tc in msg["tool_calls"]:
             tc_copy = dict(tc)
-            preview = str(tc_copy.get("output_preview", ""))
-            if len(preview) > TOOL_OUTPUT_PREVIEW_CHARS:
-                tc_copy["output_preview"] = preview[:TOOL_OUTPUT_PREVIEW_CHARS] + "... [truncated]"
+            # The model reads `output_full` (falling back to the legacy `output_preview`),
+            # so truncate whichever field it would see — otherwise the full output of old
+            # exchanges would defeat the leaning this function exists to provide.
+            source = str(tc_copy.get("output_full") or tc_copy.get("output_preview", ""))
+            if len(source) > TOOL_OUTPUT_PREVIEW_CHARS:
+                tc_copy["output_full"] = source[:TOOL_OUTPUT_PREVIEW_CHARS] + "... [truncated]"
             new_tool_calls.append(tc_copy)
         new_msg["tool_calls"] = new_tool_calls
         result.append(new_msg)

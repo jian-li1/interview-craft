@@ -96,6 +96,7 @@ export function useChatSocket(conversationId: string | null) {
           resolveToolCall(
             event.message_id,
             event.tool_call_id,
+            event.output_full,
             event.output_preview,
             event.status,
             event.elapsed_ms

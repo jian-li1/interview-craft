@@ -30,6 +30,9 @@ logger = get_logger(__name__)
 # WS emitter is any async callable taking a JSON-serializable event dict.
 Emitter = Callable[[dict[str, Any]], Awaitable[None]]
 
+# Client-facing preview cap only. The full tool output is stored separately in
+# `output_full` and replayed to the model verbatim — this cap governs the short
+# `output_preview` shown in the WS/UI, NOT what the model sees.
 TOOL_OUTPUT_PREVIEW_CHARS = 1500
 
 
@@ -532,6 +535,7 @@ class Orchestrator:
                             "message_id": message_id,
                             "tool_call_id": tc.id,
                             "name": tc.name,
+                            "output_full": '{"error": "cancelled by user"}',
                             "output_preview": '{"error": "cancelled by user"}',
                             "status": "error",
                             "elapsed_ms": 0,
@@ -542,6 +546,8 @@ class Orchestrator:
                             "id": tc.id,
                             "name": tc.name,
                             "input": tc.arguments,
+                            # Short error string — no separate full output to preserve.
+                            "output_full": '{"error": "cancelled by user"}',
                             "output_preview": '{"error": "cancelled by user"}',
                             "status": "error",
                         }
@@ -561,8 +567,10 @@ class Orchestrator:
                 output.pop("_ws_event", None)
                 is_gate = bool(output.pop("_hitl_gate", False)) or self._registry.is_hitl_gate(tc.name)
 
-                preview_source = json.dumps(output, default=str)
-                output_preview = preview_source[:TOOL_OUTPUT_PREVIEW_CHARS]
+                # `output_full` is the complete tool result replayed to the model;
+                # `output_preview` is a short slice for the client UI only.
+                output_full = json.dumps(output, default=str)
+                output_preview = output_full[:TOOL_OUTPUT_PREVIEW_CHARS]
 
                 await emit(
                     {
@@ -570,6 +578,9 @@ class Orchestrator:
                         "message_id": message_id,
                         "tool_call_id": tc.id,
                         "name": tc.name,
+                        # Client gets both: full output for expandable views, preview for
+                        # compact ones.
+                        "output_full": output_full,
                         "output_preview": output_preview,
                         "status": result.status,
                         "elapsed_ms": result.elapsed_ms,
@@ -584,6 +595,8 @@ class Orchestrator:
                         "id": tc.id,
                         "name": tc.name,
                         "input": tc.arguments,
+                        # Full output for model replay; short preview for the client.
+                        "output_full": output_full,
                         "output_preview": output_preview,
                         "status": result.status,
                     }

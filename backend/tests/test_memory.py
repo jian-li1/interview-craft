@@ -65,8 +65,8 @@ def test_select_messages_to_compact_splits_older_60_percent():
 
 
 def test_truncate_old_tool_outputs_keeps_recent_full():
-    """Verify only the oldest tool-bearing messages get their output_preview truncated,
-    while the most recent 6 keep their full-length preview untouched.
+    """Verify only the oldest tool-bearing messages get their model-facing output_full
+    truncated, while the most recent 6 keep their full-length output untouched.
     """
     msgs = []
     for i in range(10):
@@ -75,19 +75,38 @@ def test_truncate_old_tool_outputs_keeps_recent_full():
                 "id": str(i),
                 "role": "assistant",
                 "tool_calls": [
-                    {"id": f"tc{i}", "name": "web_search", "output_preview": "x" * 500}
+                    {"id": f"tc{i}", "name": "web_search", "output_full": "x" * 500}
                 ],
             }
         )
     result = truncate_old_tool_outputs(msgs)
     # Last 6 tool-bearing messages keep full output; earlier ones get truncated.
     for i, msg in enumerate(result):
-        preview = msg["tool_calls"][0]["output_preview"]
+        full = msg["tool_calls"][0]["output_full"]
         if i >= 4:  # indices 4..9 are the last 6
-            assert preview == "x" * 500
+            assert full == "x" * 500
         else:
-            assert preview.endswith("... [truncated]")
-            assert len(preview) < 500
+            assert full.endswith("... [truncated]")
+            assert len(full) < 500
+
+
+def test_truncate_old_tool_outputs_falls_back_to_legacy_preview():
+    """Verify legacy records lacking `output_full` are truncated via their `output_preview`,
+    with the truncated result written to the model-facing `output_full` field.
+    """
+    # 7 tool-bearing messages so the oldest (index 0) falls outside the kept-full window.
+    msgs = [
+        {
+            "id": str(i),
+            "role": "assistant",
+            "tool_calls": [{"id": f"tc{i}", "name": "web_search", "output_preview": "y" * 500}],
+        }
+        for i in range(7)
+    ]
+    result = truncate_old_tool_outputs(msgs)
+    oldest = result[0]["tool_calls"][0]
+    assert oldest["output_full"].endswith("... [truncated]")
+    assert len(oldest["output_full"]) < 500
 
 
 def test_truncate_old_tool_outputs_leaves_non_tool_messages_untouched():

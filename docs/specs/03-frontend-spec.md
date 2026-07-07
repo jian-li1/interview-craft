@@ -74,7 +74,7 @@ switcher (unaffected by the divider).
   (collapsed by default, like tool-call cards; shimmering header while streaming, "Thought
   process" when done; expandable on click).
 - **Tool calls**: each renders as a compact card: icon + tool name + status spinner →
-  check/error; expandable to show formatted JSON input and output preview. Group
+  check/error; expandable to show formatted JSON input and the tool's full output. Group
   consecutive tool cards. This is the agent-transparency UI — make it polished.
 - **Phase banner**: sticky chip showing current phase from `phase_change`
   (Researching → Planning → Awaiting your approval → Writing → Ready) with animated icon.

@@ -102,10 +102,11 @@ interface ChatState {
     name: string,
     input: Record<string, unknown>
   ) => void;
-  /** Fills in the result (output preview, status, elapsed time) for a previously-started tool call, on both the message's `tool_calls` and the `activity` feed. */
+  /** Fills in the result (full output + preview, status, elapsed time) for a previously-started tool call, on both the message's `tool_calls` and the `activity` feed. */
   resolveToolCall: (
     messageId: string,
     toolCallId: string,
+    outputFull: string,
     outputPreview: string,
     status: "ok" | "error",
     elapsedMs: number
@@ -302,7 +303,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
                 ...m,
                 tool_calls: [
                   ...m.tool_calls,
-                  { id: toolCallId, name, input, output_preview: "", status: "running" },
+                  { id: toolCallId, name, input, output_full: "", output_preview: "", status: "running" },
                 ],
               }
             : m
@@ -323,7 +324,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       };
     }),
 
-  resolveToolCall: (messageId, toolCallId, outputPreview, status, elapsedMs) =>
+  resolveToolCall: (messageId, toolCallId, outputFull, outputPreview, status, elapsedMs) =>
     set((s) => ({
       messages: s.messages.map((m) =>
         m.id === messageId
@@ -331,7 +332,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
               ...m,
               tool_calls: m.tool_calls.map((tc) =>
                 tc.id === toolCallId
-                  ? { ...tc, output_preview: outputPreview, status, elapsed_ms: elapsedMs }
+                  ? { ...tc, output_full: outputFull, output_preview: outputPreview, status, elapsed_ms: elapsedMs }
                   : tc
               ),
             }

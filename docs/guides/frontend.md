@@ -221,7 +221,7 @@ on change or unmount) and contains the **entire WS-event-to-store dispatch table
 | `reasoning_delta` | `appendReasoningDelta(id, delta)` | appends to `reasoning`, `reasoningStreaming: true` |
 | `text_delta` | `appendTextDelta(id, delta)` | appends to `content`, `contentStreaming: true` |
 | `tool_call_start` | `startToolCall(messageId, toolCallId, name, input)` | pushes a `running` tool-call record onto the message, prepends an activity-feed item |
-| `tool_call_result` | `resolveToolCall(messageId, toolCallId, outputPreview, status, elapsedMs)` | updates the tool call and matching activity item's status/detail. **`elapsedMs` is accepted but discarded — never stored** (see discrepancy below). |
+| `tool_call_result` | `resolveToolCall(messageId, toolCallId, outputFull, outputPreview, status, elapsedMs)` | updates the tool call and matching activity item's status/detail (`outputFull` = complete result stored on the message record; `outputPreview` = short slice kept on the activity feed). **`elapsedMs` is accepted but discarded — never stored** (see discrepancy below). |
 | `message_end` | `endMessage(id)` | clears both streaming flags, `agentRunning: false` |
 | `phase_change` | `setPhase(phase, label)` | |
 | `progress` | `setProgress(completed, total, detail)` | |
@@ -309,7 +309,8 @@ can arrive during the initial fetch. `CurriculumPanel` resets its local `view`/
 - **`ToolCallCard.tsx`** — exports `ToolCallGroup({ calls })`; icon is `Search` if the
   (lowercased) tool name contains `"search"`, else `Wrench`; status icon is a spinning
   `Loader2` (running), `CheckCircle2` (ok), or `XCircle` (error); expands to show
-  pretty-printed JSON input and the output preview.
+  pretty-printed JSON input and the tool's full output (`output_full`, falling back to
+  `output_preview` for legacy records) in a scroll-capped pane.
 
 ### 5.5 Curriculum panel components (`components/studio/curriculum/`)
 

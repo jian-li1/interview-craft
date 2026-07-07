@@ -401,13 +401,20 @@ implied by earlier chat history.
 `recent_messages` — everything before it is represented only by the `summary` string
 appended as a fourth system block (`"Summary of earlier conversation:\n\n{summary}"`).
 
+Each tool-call record stores two fields: `output_full` (the complete result, replayed to
+the model verbatim) and `output_preview` (a short slice, capped at
+`TOOL_OUTPUT_PREVIEW_CHARS = 1500` in `orchestrator.py`, sent to the client UI over WS
+only). `_message_to_chat_messages` feeds `output_full` to the model — so the model sees
+the whole tool output for recent exchanges, not a truncated preview.
+
 Before assembly, `truncate_old_tool_outputs` (`memory/compaction.py`) copies the
 message list, identifies which messages carry `tool_calls`, and for every such message
 **except the last `RECENT_TOOL_EXCHANGES_KEPT_FULL = 6`**, truncates each tool call's
-`output_preview` to `TOOL_OUTPUT_PREVIEW_CHARS = 300` chars with an `"... [truncated]"`
-suffix. This runs on every `build_context` call regardless of whether compaction fires —
-it's a separate, cheaper lever for keeping context lean (full tool data always still
-lives in Firestore research notes / sections, retrievable via tools).
+model-facing `output_full` to `TOOL_OUTPUT_PREVIEW_CHARS = 300` chars with an
+`"... [truncated]"` suffix (legacy records lacking `output_full` fall back to their
+`output_preview`). This runs on every `build_context` call regardless of whether
+compaction fires — it's a separate, cheaper lever for keeping context lean (full tool
+data always still lives in Firestore research notes / sections, retrievable via tools).
 
 `_message_to_chat_messages` converts each stored Firestore message dict into one or more
 `ChatMessage`s: a plain `user`/`assistant` message with no tool calls becomes one

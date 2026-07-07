@@ -87,7 +87,7 @@ async def run_turn(ctx: AgentContext, user_message: str | PlanDecision):
             for tc in result.tool_calls:
                 emit tool_call_start
                 output = await registry.execute(tc, ctx)   # errors → structured error output, loop continues
-                emit tool_call_result (preview truncated to ~1500 chars)
+                emit tool_call_result (output_full = complete result; output_preview ≈ 1500-char slice)
                 memory.append_tool_exchange(tc, output)
             if a HITL tool (propose_task_plan / request_user_input) was called:
                 persist state; return PAUSED               # loop exits; resumes on next client frame
@@ -187,8 +187,9 @@ during writing-only refinements, etc. — keep filtering simple: a phase→allow
   decisions, user preferences expressed, curriculum state, unresolved items), merge into
   `conversations/{id}.summary`, set `compacted_through`, and rebuild context as
   [system blocks] + [summary block] + [remaining recent messages]. Emit WS `compaction`.
-- Tool outputs older than the last 6 exchanges are also truncated to short previews in the
-  rebuilt context (full data lives in Firestore research notes / sections anyway).
+- The model is replayed each tool call's full `output_full`; only outputs older than the
+  last 6 exchanges are truncated to short previews in the rebuilt context (full data also
+  lives in Firestore research notes / sections, retrievable via tools).
 
 ## 6. Prompt files (`agent/prompts/*.md`) — write these THOROUGHLY
 

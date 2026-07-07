@@ -316,7 +316,7 @@ def _message_to_chat_messages(msg: dict[str, Any]) -> list[ChatMessage]:
 
     Args:
         msg (dict[str, Any]): A raw message document (role, content, optional
-            tool_calls list with id/name/input/output_preview per call).
+            tool_calls list with id/name/input/output_full/output_preview per call).
 
     Returns:
         list[ChatMessage]: A single ChatMessage for plain messages, or an
@@ -343,7 +343,9 @@ def _message_to_chat_messages(msg: dict[str, Any]) -> list[ChatMessage]:
             out.append(
                 ChatMessage(
                     role="tool",
-                    content=str(tc.get("output_preview", "")),
+                    # Replay the full tool output; fall back to the short preview for
+                    # legacy records written before `output_full` existed.
+                    content=str(tc.get("output_full") or tc.get("output_preview", "")),
                     name=tc["name"],
                     tool_call_id=tc["id"],
                 )

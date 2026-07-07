@@ -203,7 +203,9 @@ conversations/{convId}/messages/{msgId}
   role: "user"|"assistant"|"system"
   content: str
   reasoning: str|null                       # assistant thinking text
-  tool_calls: [{ id, name, input: obj, output_preview: str, status }]
+  tool_calls: [{ id, name, input: obj, output_full: str, output_preview: str, status }]
+                                        # output_full: complete result replayed to the model
+                                        # output_preview: short slice for the client UI/WS only
   created_at
   seq: int                                  # monotonic ordering
   # role:"system" — internal agent-control records synthesized by the orchestrator itself
@@ -269,8 +271,9 @@ immediately after reconnecting to a still-running turn.
 {type:"reasoning_delta", message_id, delta: str}         # thinking-chain text
 {type:"text_delta", message_id, delta: str}              # user-facing answer text
 {type:"tool_call_start", message_id, tool_call_id, name, input: obj}
-{type:"tool_call_result", message_id, tool_call_id, name, output_preview: str,
-      status:"ok"|"error", elapsed_ms: int}
+{type:"tool_call_result", message_id, tool_call_id, name, output_full: str,
+      output_preview: str, status:"ok"|"error", elapsed_ms: int}
+      # output_full: complete result; output_preview: short slice for compact views
 {type:"message_end", message_id}
 {type:"phase_change", phase, label: str}                 # e.g. "deep_research" → "Researching"
 {type:"progress", completed: int, total: int, detail: str}
