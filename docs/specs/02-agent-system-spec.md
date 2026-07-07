@@ -135,7 +135,7 @@ during writing-only refinements, etc. — keep filtering simple: a phase→allow
 
 **Research tools**
 - `web_search(query, max_results=8)` → list of {title, url, snippet} via search provider.
-- `fetch_url(url)` → cleaned page text (httpx + readability-style extraction, truncate ~8k tokens; strip scripts; handle errors/timeouts gracefully; block private/internal IPs — SSRF guard).
+- `fetch_url(url)` → cleaned page text (httpx + readability-style extraction, full page returned untruncated with no byte cap; strip scripts; handle errors/timeouts gracefully; block private/internal IPs — SSRF guard).
 - `save_research_note(query, url, title, summary, key_facts[], relevance)` → note id. Summary must be a dense distillation, not raw copy.
 - `search_research_notes(keywords)` → ranked matching notes (simple keyword/substring scoring over summary+key_facts+relevance is fine).
 - `list_research_notes()` → compact listing (id, title, url, relevance) for orientation.

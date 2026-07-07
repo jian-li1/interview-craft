@@ -406,8 +406,9 @@ stored in Firestore (`users/{uid}/profile/main.resume_text` /
   refused (defends against DNS rebinding to a public-looking name that actually resolves
   to `127.0.0.1` or an internal IP). Unparsable IP strings are blocked defensively.
   Covered by `backend/tests/test_ssrf_guard.py`.
-- **Fetch limits**: 10-second timeout, follows redirects, caps body read at 2,000,000
-  bytes, and rejects non-text/html content types outright.
+- **Fetch limits**: 10-second timeout, follows redirects, rejects non-text/html content
+  types outright. No body-size cap and no text truncation — the full page is read and
+  returned (bounded only by the timeout).
 - **Rate limiting**: see §3.4 — in-memory per-uid token bucket on
   conversation-creation and profile-synthesis endpoints.
 - **Upload limits**: see §9 — 5 MB cap, content-type/extension allowlist, in-memory only,

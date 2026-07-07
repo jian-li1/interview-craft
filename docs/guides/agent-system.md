@@ -213,7 +213,7 @@ owner ids, settings, both LLM providers, search provider, current phase, and an 
 | Tool | Input | What it does |
 |---|---|---|
 | `web_search` | `query`, `max_results=8 (1-20)` | Calls `ctx.search.search(...)`, returns `{results: [{title,url,snippet}], count}`. |
-| `fetch_url` | `url` | SSRF-guarded fetch (§ backend.md §10) + lightweight stdlib-`HTMLParser`-based text extraction (`_html_to_text`), truncated to `_TRUNCATE_CHARS = 32_000` chars (~8k tokens). Returns `{url, text, truncated, length_chars}` or `{"error": ...}`. |
+| `fetch_url` | `url` | SSRF-guarded fetch (§ backend.md §10) + lightweight stdlib-`HTMLParser`-based text extraction (`_html_to_text`); the full page text is returned untruncated. Returns `{url, text, truncated, length_chars}` (`truncated` always `False`, kept for schema stability) or `{"error": ...}`. |
 | `save_research_note` | `query, url, title, summary, key_facts[], relevance` | Writes a `curricula/{id}/research/{noteId}` doc via `fs.create_research_note`. Returns `{note_id}`. |
 | `search_research_notes` | `keywords` | Keyword/substring scoring (`_score_note`: counts keyword occurrences across `summary + key_facts + relevance + title`, case-insensitive) over all notes for this curriculum, returns the top 15 with `count > 0`, sorted descending. |
 | `list_research_notes` | (none) | Compact `{id, title, url, relevance}` listing of every note — used for coverage orientation. |

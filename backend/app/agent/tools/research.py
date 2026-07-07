@@ -17,8 +17,6 @@ from app.services import firestore as fs
 logger = get_logger(__name__)
 
 _FETCH_TIMEOUT_SECONDS = 10.0
-_MAX_FETCH_BYTES = 2_000_000
-_TRUNCATE_CHARS = 32_000  # ~8k tokens at ~4 chars/token
 _ALLOWED_SCHEMES = {"http", "https"}
 
 
@@ -142,8 +140,8 @@ def _html_to_text(html: str) -> str:
     Returns:
         str: Whitespace-collapsed plain text extracted from the document, with
             script/style/noscript/svg contents excluded and block-level tags turned into
-            newline breaks. Falls back to a truncated raw-HTML slice if parsing itself
-            raises (malformed markup).
+            newline breaks. Falls back to the raw HTML if parsing itself raises
+            (malformed markup).
     """
     from html.parser import HTMLParser
 
@@ -190,8 +188,8 @@ def _html_to_text(html: str) -> str:
     try:
         parser.feed(html)
     except Exception:
-        logger.warning("html parsing failed; returning raw truncated content")
-        return html[:_TRUNCATE_CHARS]
+        logger.warning("html parsing failed; returning raw content")
+        return html
     text = " ".join(parser.chunks)
     # Collapse excessive whitespace.
     return " ".join(text.split())
@@ -201,7 +199,7 @@ class FetchUrlTool(Tool):
     name = "fetch_url"
     description = (
         "Fetch a web page by URL and return cleaned, readable text content (scripts/styles "
-        "stripped, truncated to roughly 8k tokens). This is a REQUIRED step before "
+        "stripped; the full page text is returned untruncated). This is a REQUIRED step before "
         "save_research_note for any source you intend to keep — search snippets alone are "
         "never enough to write a note from. Blocks private/internal/loopback network "
         "addresses (SSRF protection) and times out gracefully on slow or unreachable pages — "
@@ -221,8 +219,9 @@ class FetchUrlTool(Tool):
 
         Returns:
             dict[str, Any]: On success, `{"url", "text", "truncated", "length_chars"}`
-                with the cleaned/truncated page text. On failure (disallowed URL,
-                unsupported content-type, timeout, or HTTP error), `{"error": "..."}`.
+                with the full cleaned page text (`truncated` is always False, kept for
+                schema stability). On failure (disallowed URL, unsupported content-type,
+                timeout, or HTTP error), `{"error": "..."}`.
         """
         try:
             safe_url = _guard_url(input.url)
@@ -241,13 +240,8 @@ class FetchUrlTool(Tool):
                     if "text" not in content_type and "html" not in content_type:
                         return {"error": f"unsupported content-type: {content_type}"}
 
-                    # Stream the body in chunks, bailing out once we exceed the byte cap
-                    # rather than buffering an unbounded response fully in memory first.
-                    body = bytearray()
-                    async for chunk in response.aiter_bytes():
-                        body.extend(chunk)
-                        if len(body) > _MAX_FETCH_BYTES:
-                            break
+                    # Read the entire body — no byte cap, so the full page is returned.
+                    body = await response.aread()
                     html = body.decode(response.encoding or "utf-8", errors="replace")
         except httpx.TimeoutException:
             return {"error": f"timed out fetching {input.url}"}
@@ -257,12 +251,12 @@ class FetchUrlTool(Tool):
             return {"error": f"failed to fetch {input.url}: {exc}"}
 
         text = _html_to_text(html)
-        truncated = text[:_TRUNCATE_CHARS]
+        # Return the full cleaned text untruncated; `truncated` stays for schema stability.
         return {
             "url": input.url,
-            "text": truncated,
-            "truncated": len(text) > _TRUNCATE_CHARS,
-            "length_chars": len(truncated),
+            "text": text,
+            "truncated": False,
+            "length_chars": len(text),
         }
 
 
