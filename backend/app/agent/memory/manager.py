@@ -5,7 +5,9 @@ Layers (see docs/specs/02-agent-system-spec.md §5):
 2. User memory (synthesized profile)
 3. Working memory (agent state doc: phase, task queue, scratchpad, plan version)
 4. Episodic memory (conversation summary + recent messages + tool exchanges verbatim)
-5. Research memory — NOT injected; accessed on demand via tools.
+5. Saved sources: pinned wholesale into the system prompt (below working memory),
+   grouped by query — only the agent's own summary per source (written when calling
+   `save_sources`); full content is persisted separately and retrievable via `fetch_url`.
 
 Also owns auto-compaction: when the assembled context exceeds 0.8 * CONTEXT_TOKEN_LIMIT,
 older messages are summarized via the small model and folded into a rolling summary
@@ -157,6 +159,50 @@ def build_working_memory_block(state: dict[str, Any]) -> str:
     )
 
 
+def build_sources_memory_block(sources: list[dict[str, Any]]) -> str | None:
+    """Render layer 5 of the context: every saved source's summary, grouped by its search query.
+
+    Unlike the old research-notes subsystem (pulled on demand via tools), saved sources
+    are injected wholesale here — but only each source's own written summary, not its
+    full page content, so this block stays small even as the source list grows. Full
+    content is retrievable on demand via `fetch_url`.
+
+    Args:
+        sources (list[dict[str, Any]]): Source documents from `fs.list_sources`, each
+            with `query`, `title`, `url`, `summary` fields.
+
+    Returns:
+        str | None: None if `sources` is empty; otherwise a Markdown block grouping
+            sources under `## Query: "..."` headings (first-appearance order preserved)
+            with each source rendered as a compact title/url/summary bullet.
+    """
+    if not sources:
+        return None
+
+    # Group by query while preserving first-appearance order (plain dict insertion
+    # order does this for free in Python 3.7+).
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for source in sources:
+        grouped.setdefault(source.get("query", ""), []).append(source)
+
+    lines = [
+        "Saved research sources (pinned working memory): one entry per source you saved "
+        "via save_sources — your own summary of the page, grouped by the search query "
+        "that surfaced it. To re-read a source's full content, call fetch_url on its "
+        "URL. Cite saved sources when writing.",
+    ]
+    query_blocks = []
+    for query, group_sources in grouped.items():
+        # Compact bullet list (not headings + full content) — the point is staying small.
+        source_lines = [
+            f"- {s.get('title', s.get('url', ''))} — {s.get('url', '')}\n  {s.get('summary', '')}"
+            for s in group_sources
+        ]
+        query_blocks.append(f'## Query: "{query}"\n\n' + "\n".join(source_lines))
+    lines.append("\n\n".join(query_blocks))
+    return "\n\n".join(lines)
+
+
 class MemoryManager:
     """Builds LLM context for a conversation/curriculum, with auto-compaction."""
 
@@ -175,6 +221,7 @@ class MemoryManager:
     async def build_context(
         self,
         conversation_id: str,
+        curriculum_id: str,
         phase: str,
         synthesized_profile: str | None,
         profile: dict[str, Any] | None,
@@ -186,12 +233,13 @@ class MemoryManager:
 
         Called on every ReAct iteration (must stay cheap — see module docstring). Builds
         the layered context in fixed order: static system prompt, user memory, working
-        memory, optional rolling summary, then recent conversation messages (with old
-        tool outputs truncated via `truncate_old_tool_outputs`). If the assembled context
-        exceeds `COMPACTION_TRIGGER_FRACTION` (0.8) of `context_token_limit`, the older
-        ~60% of candidate messages (`select_messages_to_compact`) are summarized via the
-        small model and folded into a new rolling summary, replacing the raw messages in
-        the returned list; the conversation doc's `summary`/`compacted_through`/
+        memory, optional saved-sources block, optional rolling summary, then recent
+        conversation messages (with old tool outputs truncated via
+        `truncate_old_tool_outputs`). If the assembled context exceeds
+        `COMPACTION_TRIGGER_FRACTION` (0.8) of `context_token_limit`, the older ~60% of
+        candidate messages (`select_messages_to_compact`) are summarized via the small
+        model and folded into a new rolling summary, replacing the raw messages in the
+        returned list; the conversation doc's `summary`/`compacted_through`/
         `token_estimate` fields are updated to persist the new checkpoint. If compaction
         does not trigger, only `token_estimate` is updated.
 
@@ -200,6 +248,8 @@ class MemoryManager:
 
         Args:
             conversation_id (str): The conversation whose messages/summary to load.
+            curriculum_id (str): The curriculum whose saved sources (`sources`
+                subcollection) to load for the pinned-working-memory block.
             phase (str): The current agent phase, used to select the phase prompt file.
             synthesized_profile (str | None): The user's synthesized profile text, or
                 None if not yet generated.
@@ -236,10 +286,15 @@ class MemoryManager:
         static_prompt = build_static_system_prompt(phase)
         user_memory = build_user_memory_block(synthesized_profile, profile)
         working_memory = build_working_memory_block(agent_state)
+        sources_block = build_sources_memory_block(fs.list_sources(curriculum_id))
 
         # Fixed layer order per the module docstring / CLAUDE.md invariant: static
-        # prompt -> user memory -> working memory -> (optional) summary -> messages.
+        # prompt -> user memory -> working memory -> (optional) sources -> (optional)
+        # summary -> messages. Sources sit between working memory and the summary so
+        # they always immediately precede the episodic layers.
         system_blocks = [static_prompt, user_memory, working_memory]
+        if sources_block:
+            system_blocks.append(sources_block)
         if existing_summary:
             system_blocks.append(f"Summary of earlier conversation:\n\n{existing_summary}")
 

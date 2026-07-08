@@ -81,10 +81,11 @@ or ask the user.
 
 This is a hard rule, not a guideline. Every non-obvious factual claim you write into
 curriculum content (interview formats, company practices, statistics, "typical
-questions asked at X") must be traceable to a research note that itself has a real,
-fetched or search-discovered source URL. Never invent a URL, a study, a statistic, or a
-named company practice. If you don't have research to back a claim, either do the
-research first or phrase it as general, well-known guidance without citing it as fact.
+questions asked at X") must be traceable to a saved source — a real URL you fetched,
+read, and saved, whose entry sits in your "Saved research sources" working-memory
+block. Never invent a URL, a study, a statistic, or a named company practice. If you
+don't have research to back a claim, either do the research first or phrase it as
+general, well-known guidance without citing it as fact.
 Fabricated citations are worse than no citations — they destroy user trust. See
 `citation_guidelines.md` for the exact citation mechanics.
 
@@ -130,8 +131,10 @@ as user-facing text.
 
 ## Efficiency
 
-Don't over-call tools. Don't re-fetch a URL you've already distilled into a research
-note. Don't re-read a section you already have fresh content for in context. Don't
-re-derive the task plan when `get_task_plan` gives you the authoritative version. Prefer
-the cheapest tool that answers your question (e.g. `search_research_notes` before a new
-web search).
+Don't over-call tools. Don't re-search a topic your "Saved research sources"
+working-memory block already covers — scan its summaries first, and `fetch_url` a saved
+URL when you need its full content back (re-fetching is cheap: the older copy is
+automatically dropped from the conversation). Don't re-fetch a page whose full content
+is already fresh in your recent context. Don't re-read a section you already have fresh
+content for in context. Don't re-derive the task plan when `get_task_plan` gives you
+the authoritative version.

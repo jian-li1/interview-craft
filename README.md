@@ -13,17 +13,18 @@ personalized to *your* background, and citations for every claim.
 ## Highlights
 
 - **Agentic ReAct core** — a Planning & Reasoning loop with real tools (web search, page
-  fetching, research notes, curriculum writing) and a phase state machine:
+  fetching, source saving, curriculum writing) and a phase state machine:
   *research → plan → human approval → write → review → refine*.
 - **Human-in-the-loop** — the agent pauses with a proposed outline + task plan; you approve
   or request changes before anything is written. Clarifying questions pause the loop too.
-- **Deep research with citations** — findings are distilled into a research-note memory;
+- **Deep research with citations** — the agent triages search results, reads full pages
+  as Markdown, and pins its own summaries of the kept sources into working memory;
   every curriculum section carries `[^n]` footnotes linked to real sources.
 - **Personalization memory** — onboarding (bio, background, target roles, resume upload)
   is synthesized by AI into a durable user profile the agent consults on every run.
 - **Sophisticated context management** — layered memory (system / user profile / working
-  state / conversation / research) with automatic conversation compaction before the LLM
-  context window fills up.
+  state / saved sources / conversation) with automatic conversation compaction before the
+  LLM context window fills up.
 - **Transparent streaming UI** — Claude/ChatGPT-style chat with token streaming over
   WebSockets, visible reasoning chains, and expandable tool-call cards (inputs + outputs).
 - **Visual curriculum** — n8n-style workflow canvas of modules (React Flow) plus a Reader
@@ -52,7 +53,7 @@ personalized to *your* background, and citations for every claim.
                                                                 ▼
                                                        Firestore (users, profiles,
                                                        curricula, modules/sections,
-                                                       research notes, conversations,
+                                                       saved sources, conversations,
                                                        agent state)
 ```
 

@@ -18,6 +18,7 @@ from app.agent.memory.manager import MemoryManager
 from app.agent.tools.base import AgentContext
 from app.agent.tools.control import PHASE_LABELS
 from app.agent.tools.registry import ToolRegistry
+from app.agent.tools.research import strip_stale_fetch_url_outputs
 from app.core.config import Settings
 from app.core.logging import get_logger
 from app.services import firestore as fs
@@ -145,10 +146,10 @@ async def _wait_cancellable(coro_task: asyncio.Task, cancel_event: asyncio.Event
     WS frame only takes effect at coarse checkpoints (between loop iterations), leaving
     two gaps — (a) nothing interrupts a long wait on the next LLM stream chunk (a slow
     prefill on a local llama.cpp server can stall for many seconds), and (b) a
-    long-running tool call (e.g. `fetch_url`, which can take 10-30s) runs to completion
-    even after `stop` arrives. By racing the actual work against `cancel_event.wait()`,
-    a `stop` frame that arrives mid-await is noticed within one event-loop tick instead
-    of only at the next natural checkpoint.
+    long-running tool call (e.g. `fetch_url`, which fetches a full page and can take
+    10-30s) runs to completion even after `stop` arrives. By racing the actual work
+    against `cancel_event.wait()`, a `stop` frame that arrives mid-await is noticed
+    within one event-loop tick instead of only at the next natural checkpoint.
 
     Args:
         coro_task (asyncio.Task): An already-scheduled task wrapping the awaitable to
@@ -346,6 +347,10 @@ class Orchestrator:
         state = fs.get_agent_state(curriculum_id) or {"phase": "intake", "task_queue": [], "scratchpad": "", "iteration_count": 0}
         phase = state.get("phase", "intake")
 
+        # Shared across every iteration's AgentContext for this run only (not persisted)
+        # so save_sources can reuse pages fetch_url already fetched earlier this run.
+        page_cache: dict[str, dict[str, Any]] = {}
+
         max_iterations = self._settings.agent_max_iterations
 
         for iteration in range(max_iterations):
@@ -381,6 +386,7 @@ class Orchestrator:
 
             messages = await self._memory.build_context(
                 conversation_id=conversation_id,
+                curriculum_id=curriculum_id,
                 phase=phase,
                 synthesized_profile=synthesized_profile,
                 profile=profile,
@@ -399,6 +405,7 @@ class Orchestrator:
                 search=search,
                 phase=phase,
                 emit=emit,
+                page_cache=page_cache,
             )
 
             message_id = fs.new_id()
@@ -502,6 +509,9 @@ class Orchestrator:
             tool_call_records: list[dict[str, Any]] = []
             hit_hitl_gate = False
             tool_batch_cancelled = False
+            # Set if any fetch_url call this batch succeeded — triggers a dedup pass over
+            # stored fetch_url outputs after the batch is persisted (see below).
+            any_fetch_succeeded = False
 
             for tc in tool_calls:
                 # Cancellation check: must stop the *rest* of batch from starting, else
@@ -566,6 +576,10 @@ class Orchestrator:
                 )
                 output.pop("_ws_event", None)
                 is_gate = bool(output.pop("_hitl_gate", False)) or self._registry.is_hitl_gate(tc.name)
+                # Track whether any fetch_url call in this batch succeeded — a single
+                # dedup pass after the batch covers every fetch this turn.
+                if tc.name == "fetch_url" and result.status == "ok":
+                    any_fetch_succeeded = True
 
                 # `output_full` is the complete tool result replayed to the model;
                 # `output_preview` is a short slice for the client UI only.
@@ -635,6 +649,11 @@ class Orchestrator:
                 },
             )
             await emit({"type": "message_end", "message_id": message_id})
+
+            if any_fetch_succeeded:
+                # Dedup fetch_url outputs: keep only the newest fetch of each URL in
+                # context, so re-fetching the same URL later never duplicates content.
+                strip_stale_fetch_url_outputs(conversation_id)
 
             fs.set_agent_state(curriculum_id, {"iteration_count": iteration + 1})
 

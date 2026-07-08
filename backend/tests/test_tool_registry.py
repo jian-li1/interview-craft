@@ -11,9 +11,7 @@ from app.services.llm.base import ToolSpec
 ALL_TOOL_NAMES = {
     "web_search",
     "fetch_url",
-    "save_research_note",
-    "search_research_notes",
-    "list_research_notes",
+    "save_sources",
     "get_user_profile",
     "propose_task_plan",
     "get_task_plan",
@@ -90,20 +88,36 @@ def test_always_available_tools_present_in_every_phase(registry):
 
 
 def test_research_tools_hidden_during_awaiting_approval(registry):
-    """Verify research tools (web_search, fetch_url, save_research_note) are not
-    exposed while the agent is paused awaiting plan approval."""
+    """Verify research tools (web_search, fetch_url, save_sources) are not exposed
+    while the agent is paused awaiting plan approval."""
     names = {s.name for s in registry.specs_for_phase("awaiting_approval")}
     assert "web_search" not in names
     assert "fetch_url" not in names
-    assert "save_research_note" not in names
+    assert "save_sources" not in names
 
 
 def test_research_tools_available_during_deep_research(registry):
-    """Verify all research-related tools are exposed during the deep_research phase."""
+    """Verify web_search/fetch_url/save_sources are exposed during deep_research."""
     names = {s.name for s in registry.specs_for_phase("deep_research")}
-    assert {"web_search", "fetch_url", "save_research_note", "search_research_notes", "list_research_notes"}.issubset(
-        names
-    )
+    assert {"web_search", "fetch_url", "save_sources"}.issubset(names)
+
+
+def test_research_tools_available_during_outline_planning(registry):
+    """Verify web_search/fetch_url/save_sources are also exposed during
+    outline_planning, for targeted top-up research when `modify` feedback reveals a
+    research gap."""
+    names = {s.name for s in registry.specs_for_phase("outline_planning")}
+    assert {"web_search", "fetch_url", "save_sources", "propose_task_plan", "get_task_plan"}.issubset(names)
+
+
+def test_review_phase_allows_fetch_url_but_not_web_search_or_save_sources(registry):
+    """Verify review may re-read saved sources via fetch_url but cannot discover new
+    ones — web_search/save_sources are absent, unlike every other research-enabled
+    phase."""
+    names = {s.name for s in registry.specs_for_phase("review")}
+    assert "fetch_url" in names
+    assert "web_search" not in names
+    assert "save_sources" not in names
 
 
 def test_writing_tools_hidden_during_intake(registry):

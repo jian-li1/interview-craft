@@ -1,11 +1,11 @@
-"""Curriculum, module, section, plan and research-note models.
+"""Curriculum, module, section, plan and source models.
 
 Mirrors the Firestore collections described in docs/specs/01-architecture-and-contracts.md §5:
   curricula/{id}
   curricula/{id}/modules/{moduleId}
   curricula/{id}/modules/{mid}/sections/{sectionId}
   curricula/{id}/plan/main
-  curricula/{id}/research/{noteId}
+  curricula/{id}/sources/{sourceId}
   curricula/{id}/state/main
 """
 
@@ -251,21 +251,27 @@ class Plan(ApiModel):
     user_feedback: list[str] = Field(default_factory=list)
 
 
-class ResearchNote(ApiModel):
-    """A single research finding, mirroring `curricula/{id}/research/{noteId}`.
+class Source(ApiModel):
+    """A saved research source, mirroring `curricula/{id}/sources/{sourceId}`.
 
-    Research notes are pulled on demand via tools during writing (never injected
-    wholesale into the LLM context) and back citations in the final sections.
+    Working memory shows only `summary` — the agent's own <=5-sentence distillation,
+    injected wholesale every iteration (see `memory/manager.py`'s
+    `build_sources_memory_block`) so the context stays small. `content_markdown` (the
+    full fetched page) is persisted evidence for citations, retrievable on demand by
+    re-fetching the URL via `fetch_url` rather than being kept in the model's context.
 
     Attributes:
-        id (str): Research note id.
-        query (str): Search query that produced this note.
-        url (str): Source URL the note was extracted from.
+        id (str): Source id (derived deterministically from the URL — see
+            `firestore._source_doc_id` — so the same URL can never be saved twice).
+        query (str): Search query that surfaced this source.
+        url (str): Source URL the content was fetched from.
         title (str): Title of the source page/document.
-        summary (str): Summary of the relevant content found at the source.
-        key_facts (list[str]): Discrete facts extracted from the source.
-        relevance (str): Free-text note on why/how this source is relevant.
-        created_at (dt.datetime): Timestamp the note was created.
+        summary (str): Agent-written distillation (<=5 sentences) of the page's
+            content and relevance — the only part injected into working memory.
+        content_markdown (str): The full page content, converted to Markdown.
+        content_truncated (bool): Whether `content_markdown` was cut off at the
+            per-page character cap (`PAGE_CONTENT_MAX_CHARS`).
+        created_at (dt.datetime): Timestamp the source was saved.
     """
 
     id: str
@@ -273,8 +279,8 @@ class ResearchNote(ApiModel):
     url: str
     title: str
     summary: str
-    key_facts: list[str] = Field(default_factory=list)
-    relevance: str = ""
+    content_markdown: str
+    content_truncated: bool = False
     created_at: dt.datetime
 
 

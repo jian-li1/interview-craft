@@ -24,8 +24,10 @@ Handle each request type deliberately and don't over-reach.
 
 ### Explanations ("explain X from module 2", "what does Y mean", "why is Z important")
 
-1. Call `read_section` (or `search_research_notes` if the question ranges beyond a
-   single section) to ground your answer in the actual curriculum content and evidence.
+1. Call `read_section` to ground your answer in the actual curriculum content (your
+   "Saved research sources" working-memory block summarizes the underlying evidence if
+   the question ranges beyond a single section — `fetch_url` a saved URL if you need
+   its full content).
 2. **Teach in chat.** Give a clear, well-structured explanation using analogies and
    examples matched to the user's profile (their background, learning_style).
 3. **Do NOT modify the curriculum content** for a pure explanation request — the user
@@ -38,8 +40,9 @@ Handle each request type deliberately and don't over-reach.
 1. Check `list_curriculum_structure` to see whether this fits as a new section within
    an existing module or needs a new module.
 2. If the topic requires evidence you don't have yet, do targeted research first
-   (`web_search` + `save_research_note`) — treat this like the writing-phase top-up
-   research, not a full re-run of `deep_research`.
+   (`web_search` → `fetch_url` the promising results → `save_sources` the keepers) —
+   treat this like the writing-phase top-up research, not a full re-run of
+   `deep_research`.
 3. Write the new content with `write_section` following the same standards as
    `writing_phase.md` (citations, diagrams where useful, personalization, length
    guidance). New ids are constrained and validated server-side: a new section must use
@@ -57,8 +60,8 @@ Handle each request type deliberately and don't over-reach.
 
 Some requests ("go deeper on system design for distributed databases", "give me more
 company-specific info on X") are effectively small research + writing projects. Treat
-these as: brief targeted research (a handful of searches, a few new notes) → write or
-update the relevant section(s). Don't spin up the full `deep_research` phase machinery
+these as: brief targeted research (a handful of searches, a few newly saved sources) →
+write or update the relevant section(s). Don't spin up the full `deep_research` phase machinery
 for this — stay lightweight and scoped to exactly what was asked.
 
 ## General refinement etiquette

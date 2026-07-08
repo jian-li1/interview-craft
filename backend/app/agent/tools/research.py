@@ -1,13 +1,26 @@
-"""Research tools: web_search, fetch_url (with SSRF guard), save/search/list research notes."""
+"""Research tools: snippet-only web_search, standalone fetch_url, and save_sources.
+
+Iteration 2 of the research architecture: web_search returns cheap snippets for
+relevance triage only; the agent must call fetch_url to read a page's full content
+before deciding whether to save it (via save_sources, with its own written summary).
+Full page content never lands in the system prompt — only the agent's own summaries
+do (see `memory/manager.py`'s `build_sources_memory_block`), keeping working memory
+small while `content_markdown` is still persisted per source as citation evidence.
+"""
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress
+import json
+import re
 import socket
 from typing import Any
 from urllib.parse import urlparse
 
 import httpx
+from bs4 import BeautifulSoup
+from markdownify import markdownify as _markdownify
 from pydantic import BaseModel, Field
 
 from app.agent.tools.base import AgentContext, Tool
@@ -19,51 +32,10 @@ logger = get_logger(__name__)
 _FETCH_TIMEOUT_SECONDS = 10.0
 _ALLOWED_SCHEMES = {"http", "https"}
 
-
-class WebSearchInput(BaseModel):
-    """Input schema for `WebSearchTool`."""
-
-    query: str = Field(..., description="The search query string.")
-    max_results: int = Field(8, ge=1, le=20, description="Maximum number of results to return.")
-
-
-class WebSearchTool(Tool):
-    name = "web_search"
-    description = (
-        "Search the web for a query and return a list of results (title, url, snippet). "
-        "Use this to discover candidate sources during research. Issue diverse, specific "
-        "queries rather than broad generic ones — see research_phase.md for the query "
-        "diversification strategy. Snippets returned here are for RELEVANCE TRIAGE ONLY — "
-        "deciding which results to fetch or skip. Always call fetch_url on a result before "
-        "saving a research note about it; never save a note from a snippet alone."
-    )
-    input_model = WebSearchInput
-
-    async def execute(self, input: WebSearchInput, ctx: AgentContext) -> dict[str, Any]:
-        """Run a web search via the configured `ctx.search` provider and return raw results.
-
-        Args:
-            input (WebSearchInput): The validated query and max_results.
-            ctx (AgentContext): The current agent run's context; `ctx.search` is the
-                provider resolved from settings/user overrides (DuckDuckGo/Google/Tavily).
-
-        Returns:
-            dict[str, Any]: `{"results": [...], "count": int}`, where each result has
-                `title`, `url`, and `snippet` fields for relevance triage only.
-        """
-        results = await ctx.search.search(input.query, max_results=input.max_results)
-        return {
-            "results": [
-                {"title": r.title, "url": r.url, "snippet": r.snippet} for r in results
-            ],
-            "count": len(results),
-        }
-
-
-class FetchUrlInput(BaseModel):
-    """Input schema for `FetchUrlTool`."""
-
-    url: str = Field(..., description="The absolute URL to fetch and extract readable text from.")
+# Defensive per-page cap so one pathological page can't blow Firestore's 1 MiB document
+# limit once saved via save_sources (Markdown is denser than raw HTML but still risky
+# for very large pages).
+PAGE_CONTENT_MAX_CHARS = 200_000
 
 
 def _is_blocked_ip(ip_str: str) -> bool:
@@ -131,306 +103,343 @@ def _guard_url(url: str) -> str:
     return url
 
 
-def _html_to_text(html: str) -> str:
-    """Very small, dependency-light HTML→text cleaner: strips scripts/styles/tags.
+_BLANK_LINES_RE = re.compile(r"\n{3,}")
+
+
+def _html_to_title_and_markdown(html: str) -> tuple[str | None, str]:
+    """Convert raw HTML to cleaned Markdown and extract the page `<title>`, in one parse pass.
 
     Args:
-        html (str): The raw HTML document to convert to plain text.
+        html (str): The raw HTML document to convert.
 
     Returns:
-        str: Whitespace-collapsed plain text extracted from the document, with
-            script/style/noscript/svg contents excluded and block-level tags turned into
-            newline breaks. Falls back to the raw HTML if parsing itself raises
-            (malformed markup).
+        tuple[str | None, str]: `(title, markdown)`. `title` is the stripped text of the
+            `<title>` tag if present, else None. `markdown` is ATX-style Markdown with
+            script/style/noscript/svg content removed and runs of 3+ blank lines
+            collapsed to 2; falls back to `(None, raw_html[:PAGE_CONTENT_MAX_CHARS])` if
+            parsing raises.
     """
-    from html.parser import HTMLParser
-
-    class _TextExtractor(HTMLParser):
-        """Minimal HTMLParser subclass collecting visible text chunks, skipping non-content tags."""
-
-        def __init__(self) -> None:
-            """Initialize with an empty chunk list and non-content-tag skip counter."""
-            super().__init__()
-            self.chunks: list[str] = []
-            self._skip_depth = 0
-
-        def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-            """Enter a skip region for non-content tags; insert a newline for block tags.
-
-            Args:
-                tag (str): The lowercased tag name being opened.
-                attrs (list[tuple[str, str | None]]): The tag's attributes (unused).
-            """
-            if tag in ("script", "style", "noscript", "svg"):
-                self._skip_depth += 1
-            if tag in ("p", "br", "div", "li", "h1", "h2", "h3", "h4", "tr"):
-                self.chunks.append("\n")
-
-        def handle_endtag(self, tag: str) -> None:
-            """Exit a skip region when a non-content tag closes.
-
-            Args:
-                tag (str): The lowercased tag name being closed.
-            """
-            if tag in ("script", "style", "noscript", "svg") and self._skip_depth > 0:
-                self._skip_depth -= 1
-
-        def handle_data(self, data: str) -> None:
-            """Collect non-whitespace text data, unless inside a skip region.
-
-            Args:
-                data (str): The raw text content between tags.
-            """
-            if self._skip_depth == 0 and data.strip():
-                self.chunks.append(data.strip())
-
-    parser = _TextExtractor()
     try:
-        parser.feed(html)
+        soup = BeautifulSoup(html, "html.parser")
+        # Title must be read before the tag-stripping loop below (it doesn't touch
+        # <title>, but keep parse-then-read order explicit for clarity).
+        title = soup.title.get_text(strip=True) if soup.title else None
+        # Drop tags that never contribute readable content (scripts/styles/inline SVG).
+        for tag in soup(["script", "style", "noscript", "svg"]):
+            tag.decompose()
+        markdown = _markdownify(str(soup), heading_style="ATX")
+        return title, _BLANK_LINES_RE.sub("\n\n", markdown)
     except Exception:
-        logger.warning("html parsing failed; returning raw content")
-        return html
-    text = " ".join(parser.chunks)
-    # Collapse excessive whitespace.
-    return " ".join(text.split())
+        logger.warning("html-to-markdown conversion failed; falling back to raw html")
+        return None, html[:PAGE_CONTENT_MAX_CHARS]
+
+
+async def _fetch_page_markdown(url: str) -> dict[str, Any]:
+    """Fetch `url` and convert its HTML body to a title + capped Markdown.
+
+    Runs the (blocking) SSRF guard in a thread executor since `_guard_url` calls
+    `socket.getaddrinfo`, which would otherwise stall the event loop.
+
+    Args:
+        url (str): The absolute URL to fetch.
+
+    Returns:
+        dict[str, Any]: On success, `{"url", "title": str | None, "content_markdown",
+            "content_truncated"}` (`content_truncated` is only meaningful as a bool,
+            always present). On any failure (blocked URL, unsupported content-type,
+            timeout, HTTP error), `{"url", "fetch_error": "..."}`.
+    """
+    loop = asyncio.get_running_loop()
+    try:
+        # Offload the blocking DNS resolution inside _guard_url to a thread.
+        safe_url = await loop.run_in_executor(None, _guard_url, url)
+    except ValueError as exc:
+        return {"url": url, "fetch_error": str(exc)}
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=_FETCH_TIMEOUT_SECONDS,
+            follow_redirects=True,
+            headers={"User-Agent": "InterviewCraftBot/1.0 (+research agent)"},
+        ) as client:
+            async with client.stream("GET", safe_url) as response:
+                response.raise_for_status()
+                content_type = response.headers.get("content-type", "")
+                if "text" not in content_type and "html" not in content_type:
+                    return {"url": url, "fetch_error": f"unsupported content-type: {content_type}"}
+
+                body = await response.aread()
+                html = body.decode(response.encoding or "utf-8", errors="replace")
+    except httpx.TimeoutException:
+        return {"url": url, "fetch_error": f"timed out fetching {url}"}
+    except httpx.HTTPStatusError as exc:
+        return {"url": url, "fetch_error": f"http error {exc.response.status_code} fetching {url}"}
+    except httpx.HTTPError as exc:
+        return {"url": url, "fetch_error": f"failed to fetch {url}: {exc}"}
+
+    title, markdown = _html_to_title_and_markdown(html)
+    truncated = len(markdown) > PAGE_CONTENT_MAX_CHARS
+    if truncated:
+        markdown = markdown[:PAGE_CONTENT_MAX_CHARS]
+    return {"url": url, "title": title, "content_markdown": markdown, "content_truncated": truncated}
+
+
+class WebSearchInput(BaseModel):
+    """Input schema for `WebSearchTool`."""
+
+    query: str = Field(..., description="The search query string.")
+    max_results: int = Field(8, ge=1, le=20, description="Maximum number of results to return.")
+
+
+class WebSearchTool(Tool):
+    name = "web_search"
+    description = (
+        "Search the web for a query and return a list of results (title, url, snippet). "
+        "Use this to discover candidate sources during research. Issue diverse, specific "
+        "queries rather than broad generic ones — see the research phase instructions for "
+        "the query diversification strategy. Snippets are for RELEVANCE TRIAGE ONLY — "
+        "deciding which results to fetch or skip. Always call fetch_url on a result and "
+        "read its full content before saving it via save_sources; never save a source "
+        "from a snippet alone."
+    )
+    input_model = WebSearchInput
+
+    async def execute(self, input: WebSearchInput, ctx: AgentContext) -> dict[str, Any]:
+        """Run a web search and return snippet-only results — no page fetching.
+
+        Args:
+            input (WebSearchInput): The validated query and max_results.
+            ctx (AgentContext): The current agent run's context; `ctx.search` is the
+                provider resolved from settings/user overrides.
+
+        Returns:
+            dict[str, Any]: `{"query", "results": [{"title","url","snippet"}], "count"}`.
+        """
+        results = await ctx.search.search(input.query, max_results=input.max_results)
+        return {
+            "query": input.query,
+            "results": [{"title": r.title, "url": r.url, "snippet": r.snippet} for r in results],
+            "count": len(results),
+        }
+
+
+class FetchUrlInput(BaseModel):
+    """Input schema for `FetchUrlTool`."""
+
+    url: str = Field(..., description="The absolute URL to fetch and convert to Markdown.")
 
 
 class FetchUrlTool(Tool):
     name = "fetch_url"
     description = (
-        "Fetch a web page by URL and return cleaned, readable text content (scripts/styles "
-        "stripped; the full page text is returned untruncated). This is a REQUIRED step before "
-        "save_research_note for any source you intend to keep — search snippets alone are "
-        "never enough to write a note from. Blocks private/internal/loopback network "
-        "addresses (SSRF protection) and times out gracefully on slow or unreachable pages — "
-        "such failures return an error observation rather than crashing; when a fetch fails, "
-        "skip that source entirely (do not write a note from the snippet as a fallback) and "
-        "move on to a different candidate rather than retrying the same URL."
+        "Fetch a web page by URL and return its full content converted to Markdown "
+        "(scripts/styles stripped). This is a REQUIRED step before saving a source via "
+        "save_sources — search snippets alone are never enough to judge or summarize a "
+        "page. Also use it to re-read the full content of a source you saved earlier "
+        "(its URL is listed in your working memory). When the same URL is fetched again, "
+        "earlier fetch results for it are removed from the conversation automatically, so "
+        "re-fetching never duplicates context. Blocks private/internal network addresses "
+        "(SSRF protection) and returns an error observation on failures — when a fetch "
+        "fails, skip the source and move on to a different candidate rather than retrying "
+        "the same URL."
     )
     input_model = FetchUrlInput
 
     async def execute(self, input: FetchUrlInput, ctx: AgentContext) -> dict[str, Any]:
-        """Fetch `input.url`, guard against SSRF, and return cleaned readable text.
+        """Fetch a single URL's full content, caching it for a later save_sources call.
 
         Args:
             input (FetchUrlInput): The validated URL to fetch.
-            ctx (AgentContext): The current agent run's context (unused directly here;
-                required by the `Tool.execute` signature).
+            ctx (AgentContext): The current agent run's context; `ctx.page_cache` is
+                populated here so save_sources can persist without re-fetching.
 
         Returns:
-            dict[str, Any]: On success, `{"url", "text", "truncated", "length_chars"}`
-                with the full cleaned page text (`truncated` is always False, kept for
-                schema stability). On failure (disallowed URL, unsupported content-type,
-                timeout, or HTTP error), `{"error": "..."}`.
+            dict[str, Any]: `{"error": ...}` on fetch failure (registry maps this to
+                status "error"); otherwise `{"url", "title", "content_markdown",
+                "content_truncated"}`.
         """
-        try:
-            safe_url = _guard_url(input.url)
-        except ValueError as exc:
-            return {"error": str(exc)}
+        page = await _fetch_page_markdown(input.url)
+        if "fetch_error" in page:
+            return {"error": page["fetch_error"]}
 
-        try:
-            async with httpx.AsyncClient(
-                timeout=_FETCH_TIMEOUT_SECONDS,
-                follow_redirects=True,
-                headers={"User-Agent": "InterviewCraftBot/1.0 (+research agent)"},
-            ) as client:
-                async with client.stream("GET", safe_url) as response:
-                    response.raise_for_status()
-                    content_type = response.headers.get("content-type", "")
-                    if "text" not in content_type and "html" not in content_type:
-                        return {"error": f"unsupported content-type: {content_type}"}
-
-                    # Read the entire body — no byte cap, so the full page is returned.
-                    body = await response.aread()
-                    html = body.decode(response.encoding or "utf-8", errors="replace")
-        except httpx.TimeoutException:
-            return {"error": f"timed out fetching {input.url}"}
-        except httpx.HTTPStatusError as exc:
-            return {"error": f"http error {exc.response.status_code} fetching {input.url}"}
-        except httpx.HTTPError as exc:
-            return {"error": f"failed to fetch {input.url}: {exc}"}
-
-        text = _html_to_text(html)
-        # Return the full cleaned text untruncated; `truncated` stays for schema stability.
+        # Cache the fetched page (title falls back to the URL) so save_sources can
+        # persist it later without a second network round-trip.
+        ctx.page_cache[input.url] = {
+            "title": page.get("title") or input.url,
+            "content_markdown": page["content_markdown"],
+            "content_truncated": page.get("content_truncated", False),
+        }
         return {
             "url": input.url,
-            "text": text,
-            "truncated": False,
-            "length_chars": len(text),
+            "title": page.get("title") or input.url,
+            "content_markdown": page["content_markdown"],
+            "content_truncated": page.get("content_truncated", False),
         }
 
 
-class SaveResearchNoteInput(BaseModel):
-    """Input schema for `SaveResearchNoteTool`."""
+class SourceToSave(BaseModel):
+    """One URL + agent-written summary pair to persist via `SaveSourcesTool`."""
 
-    query: str = Field(..., description="The search query that surfaced this source.")
-    url: str = Field(..., description="The source URL.")
-    title: str = Field(..., description="The source's title.")
+    url: str = Field(..., description="A result URL whose full content you fetched and read via fetch_url.")
     summary: str = Field(
         ...,
+        min_length=1,
+        max_length=1500,
         description=(
-            "A comprehensive, multi-paragraph distillation of the FETCHED FULL CONTENT "
-            "(via fetch_url), in your own words — not a 2-5 sentence teaser, and not a raw "
-            "copy-paste of page text. Cover all key ideas, concepts, frameworks, process "
-            "details, example questions, and advice the source contains, scaled to the "
-            "richness of the source (roughly 150-500+ words for a substantial source). The "
-            "writing phase must be able to write curriculum content from this summary alone, "
-            "without re-fetching the source."
+            "Your own dense summary of the page, AT MOST 5 sentences: what the page "
+            "contains and why it matters for this curriculum. This is what stays visible "
+            "in your working memory, so make it recall the page's value at a glance."
         ),
     )
-    key_facts: list[str] = Field(
-        default_factory=list, description="Short list of concrete, checkable facts/points from the source."
-    )
-    relevance: str = Field(
-        "", description="Which outline/coverage area(s) this note supports."
+
+
+class SaveSourcesInput(BaseModel):
+    """Input schema for `SaveSourcesTool`."""
+
+    query: str = Field(..., description="The exact search query whose results these URLs came from.")
+    sources: list[SourceToSave] = Field(
+        ..., description="The sources genuinely worth keeping — be selective."
     )
 
 
-class SaveResearchNoteTool(Tool):
-    name = "save_research_note"
+class SaveSourcesTool(Tool):
+    name = "save_sources"
     description = (
-        "Save a comprehensive research note distilled from a source's FETCHED FULL CONTENT — "
-        "the source must have been retrieved with fetch_url first; do not call this based on "
-        "a web_search snippet alone. Summaries must be thorough, multi-paragraph distillations "
-        "in your own words, not raw copies. Every note's url is preserved for later citation."
+        "Pin the relevant sources you have READ (via fetch_url) into your working "
+        "memory. Pass the exact query that surfaced them and, for each URL, a summary of "
+        "AT MOST 5 sentences capturing what the page contains and why it matters for "
+        "this curriculum — the summary (not the full page) is what stays permanently "
+        "visible in your working memory, grouped under its query. Only URLs whose full "
+        "content you fetched with fetch_url can be saved — a URL you never fetched is "
+        "rejected with status not_fetched; fetch it first. URLs already saved earlier are "
+        "skipped automatically, so duplicates are impossible. To re-read a saved page's "
+        "full content later, call fetch_url on its URL."
     )
-    input_model = SaveResearchNoteInput
+    input_model = SaveSourcesInput
 
-    async def execute(self, input: SaveResearchNoteInput, ctx: AgentContext) -> dict[str, Any]:
-        """Persist a new research note document for this curriculum.
+    async def execute(self, input: SaveSourcesInput, ctx: AgentContext) -> dict[str, Any]:
+        """Persist chosen URLs with the agent's own summary, strictly requiring a prior fetch.
 
         Args:
-            input (SaveResearchNoteInput): The validated note fields (query, url, title,
-                summary, key_facts, relevance).
+            input (SaveSourcesInput): The validated query and per-URL summaries (order
+                preserved, duplicate URLs within the list collapsed — first summary wins).
             ctx (AgentContext): The current agent run's context; `ctx.curriculum_id`
-                scopes the note to the right curriculum's Firestore subcollection.
+                scopes storage, `ctx.page_cache` supplies content for URLs already
+                fetched this run (no re-fetching fallback — read-before-save is strict).
 
         Returns:
-            dict[str, Any]: `{"note_id": str}`, the id of the newly created note doc.
+            dict[str, Any]: `{"query", "results": [{"url", "status", ("error")}],
+                "saved_count": int}`.
         """
-        note_id = fs.create_research_note(
-            ctx.curriculum_id,
-            {
-                "query": input.query,
-                "url": input.url,
-                "title": input.title,
-                "summary": input.summary,
-                "key_facts": input.key_facts,
-                "relevance": input.relevance,
-            },
-        )
-        return {"note_id": note_id}
+        # Preserve first-appearance order while deduping by url; first summary wins.
+        seen: set[str] = set()
+        unique_sources: list[SourceToSave] = []
+        for source in input.sources:
+            if source.url not in seen:
+                seen.add(source.url)
+                unique_sources.append(source)
+
+        results: dict[str, dict[str, Any]] = {}
+        saved_count = 0
+        for source in unique_sources:
+            if fs.source_exists(ctx.curriculum_id, source.url):
+                results[source.url] = {"url": source.url, "status": "duplicate_skipped"}
+                continue
+            cached = ctx.page_cache.get(source.url)
+            if cached is None:
+                # Strict read-before-save: never silently fetch on the tool's behalf.
+                results[source.url] = {
+                    "url": source.url,
+                    "status": "not_fetched",
+                    "error": "URL was never fetched this run — call fetch_url on it first, then save it",
+                }
+                continue
+            fs.create_source(
+                ctx.curriculum_id,
+                {
+                    "query": input.query,
+                    "url": source.url,
+                    "title": cached.get("title") or source.url,
+                    # Agent's own distillation — the only part injected into memory.
+                    "summary": source.summary,
+                    # Full content persisted as citation evidence, retrievable via fetch_url.
+                    "content_markdown": cached["content_markdown"],
+                    "content_truncated": cached.get("content_truncated", False),
+                },
+            )
+            results[source.url] = {"url": source.url, "status": "saved"}
+            saved_count += 1
+
+        return {
+            "query": input.query,
+            "results": [results[s.url] for s in unique_sources],
+            "saved_count": saved_count,
+        }
 
 
-class SearchResearchNotesInput(BaseModel):
-    """Input schema for `SearchResearchNotesTool`."""
+def strip_stale_fetch_url_outputs(conversation_id: str) -> int:
+    """Rewrite every non-latest `fetch_url` tool output per URL to remove its page content.
 
-    keywords: str = Field(..., description="Keywords to match against saved research notes.")
-
-
-def _score_note(note: dict[str, Any], keywords: list[str]) -> int:
-    """Score a research note's relevance to `keywords` by simple case-insensitive substring counting.
+    Called after any batch containing a successful `fetch_url` call so re-fetching the
+    same URL later in a long conversation doesn't leave duplicate full-page Markdown
+    sitting in the model-facing history — only the most recent fetch of a given URL
+    keeps its content; earlier fetches of that URL are rewritten to a short note.
 
     Args:
-        note (dict[str, Any]): A research note document (summary, key_facts, relevance,
-            title fields are searched).
-        keywords (list[str]): The keyword tokens to search for (already split/cleaned by
-            the caller).
+        conversation_id (str): The conversation whose messages to scan and rewrite.
 
     Returns:
-        int: The total number of keyword occurrences found across the note's searchable
-            text fields; higher is more relevant. Falsy/empty keyword tokens contribute
-            nothing.
+        int: The number of messages whose `tool_calls` were rewritten (0 on any
+            internal failure — this function never raises).
     """
-    haystack = " ".join(
-        [
-            note.get("summary", ""),
-            " ".join(note.get("key_facts", [])),
-            note.get("relevance", ""),
-            note.get("title", ""),
-        ]
-    ).lower()
-    return sum(haystack.count(kw.lower()) for kw in keywords if kw)
+    updated_count = 0
+    try:
+        messages = fs.list_messages(conversation_id)
 
+        # Pass 1: find, for each URL, the (message_index, tool_call_index) of its LAST
+        # fetch_url occurrence — chronological message order, then call order within a
+        # message — so pass 2 knows which occurrence to leave untouched.
+        last_occurrence: dict[str, tuple[int, int]] = {}
+        parsed_outputs: dict[tuple[int, int], dict[str, Any]] = {}
+        for msg_idx, msg in enumerate(messages):
+            for tc_idx, tc in enumerate(msg.get("tool_calls") or []):
+                if tc.get("name") != "fetch_url":
+                    continue
+                try:
+                    output = json.loads(tc.get("output_full") or "{}")
+                except Exception:
+                    continue
+                if not isinstance(output, dict) or "content_markdown" not in output:
+                    continue
+                url = output.get("url")
+                if not url:
+                    continue
+                parsed_outputs[(msg_idx, tc_idx)] = output
+                last_occurrence[url] = (msg_idx, tc_idx)
 
-class SearchResearchNotesTool(Tool):
-    name = "search_research_notes"
-    description = (
-        "Search previously saved research notes for this curriculum by keyword, ranked by "
-        "relevance. Use this before writing any section to ground content in prior research, "
-        "and before starting a new web search to check whether you already have relevant notes."
-    )
-    input_model = SearchResearchNotesInput
-
-    async def execute(self, input: SearchResearchNotesInput, ctx: AgentContext) -> dict[str, Any]:
-        """Rank saved research notes by keyword match count and return the top 15.
-
-        Args:
-            input (SearchResearchNotesInput): The validated keyword string (split on
-                whitespace/commas into individual tokens).
-            ctx (AgentContext): The current agent run's context; `ctx.curriculum_id`
-                scopes which notes are searched.
-
-        Returns:
-            dict[str, Any]: `{"matches": [...], "count": int}` — notes with zero keyword
-                matches are excluded entirely, and results are sorted by score descending,
-                capped at the top 15.
-        """
-        notes = fs.list_research_notes(ctx.curriculum_id)
-        keywords = [k for k in input.keywords.replace(",", " ").split() if k]
-        scored = [(_score_note(n, keywords), n) for n in notes]
-        scored = [pair for pair in scored if pair[0] > 0]
-        scored.sort(key=lambda pair: pair[0], reverse=True)
-        top = scored[:15]
-        return {
-            "matches": [
-                {
-                    "id": n["id"],
-                    "title": n.get("title"),
-                    "url": n.get("url"),
-                    "summary": n.get("summary"),
-                    "key_facts": n.get("key_facts", []),
-                    "relevance": n.get("relevance"),
+        # Pass 2: rewrite every occurrence that isn't the last one for its URL.
+        for msg_idx, msg in enumerate(messages):
+            tool_calls = msg.get("tool_calls") or []
+            changed = False
+            new_tool_calls = []
+            for tc_idx, tc in enumerate(tool_calls):
+                output = parsed_outputs.get((msg_idx, tc_idx))
+                if output is None or last_occurrence.get(output["url"]) == (msg_idx, tc_idx):
+                    new_tool_calls.append(tc)
+                    continue
+                stripped_output = {
+                    "url": output["url"],
+                    "note": (
+                        "full page content removed — this URL was re-fetched later in the "
+                        "conversation; the latest fetch_url result carries the content"
+                    ),
                 }
-                for _, n in top
-            ],
-            "count": len(top),
-        }
-
-
-class ListResearchNotesInput(BaseModel):
-    """Input schema for `ListResearchNotesTool` (no fields — takes no arguments)."""
-
-    pass
-
-
-class ListResearchNotesTool(Tool):
-    name = "list_research_notes"
-    description = (
-        "List all saved research notes for this curriculum in compact form (id, title, url, "
-        "relevance) for orientation — use this to check overall research coverage before "
-        "deciding whether to keep researching or move to outline_planning."
-    )
-    input_model = ListResearchNotesInput
-
-    async def execute(self, input: ListResearchNotesInput, ctx: AgentContext) -> dict[str, Any]:
-        """List all research notes for the curriculum in compact (non-summary) form.
-
-        Args:
-            input (ListResearchNotesInput): Empty input (no fields).
-            ctx (AgentContext): The current agent run's context; `ctx.curriculum_id`
-                scopes which notes are listed.
-
-        Returns:
-            dict[str, Any]: `{"notes": [...], "count": int}`, each note reduced to
-                `id`, `title`, `url`, and `relevance` (full summaries are omitted to
-                keep this listing cheap — fetch full notes via `search_research_notes`).
-        """
-        notes = fs.list_research_notes(ctx.curriculum_id)
-        return {
-            "notes": [
-                {"id": n["id"], "title": n.get("title"), "url": n.get("url"), "relevance": n.get("relevance")}
-                for n in notes
-            ],
-            "count": len(notes),
-        }
+                new_tool_calls.append({**tc, "output_full": json.dumps(stripped_output)})
+                changed = True
+            if changed:
+                fs.update_message(conversation_id, msg["id"], {"tool_calls": new_tool_calls})
+                updated_count += 1
+    except Exception:
+        logger.warning("failed to strip stale fetch_url outputs", exc_info=True)
+        return updated_count
+    return updated_count

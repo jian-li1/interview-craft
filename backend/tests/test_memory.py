@@ -9,6 +9,7 @@ from app.agent.memory.compaction import (
     truncate_old_tool_outputs,
 )
 from app.agent.memory.manager import (
+    build_sources_memory_block,
     build_static_system_prompt,
     build_user_memory_block,
     build_working_memory_block,
@@ -173,3 +174,54 @@ def test_build_working_memory_block_empty_scratchpad():
     """Verify an empty/missing scratchpad renders as the literal "(empty)" placeholder."""
     block = build_working_memory_block({})
     assert "(empty)" in block
+
+
+def test_build_sources_memory_block_empty_returns_none():
+    """Verify no saved sources yields None (nothing appended to the context)."""
+    assert build_sources_memory_block([]) is None
+
+
+def test_build_sources_memory_block_groups_by_query():
+    """Verify sources are grouped under their originating query, each rendering its
+    title, URL, and agent-written summary (NOT full content_markdown, which is now
+    only persisted, not injected), preserving first-appearance query order.
+    """
+    sources = [
+        {
+            "query": "system design basics",
+            "title": "Designing Data-Intensive Apps",
+            "url": "https://example.com/ddia",
+            "summary": "Covers replication and partitioning strategies for distributed systems.",
+            "content_markdown": "# Chapter 1\n\nReplication and partitioning.",
+        },
+        {
+            "query": "behavioral interview tips",
+            "title": "STAR method guide",
+            "url": "https://example.com/star",
+            "summary": "Explains the STAR framework for structuring behavioral answers.",
+            "content_markdown": "# STAR\n\nSituation, Task, Action, Result.",
+        },
+        {
+            "query": "system design basics",
+            "title": "Consistent hashing",
+            "url": "https://example.com/hashing",
+            "summary": "Explains ring-based consistent hashing for partition rebalancing.",
+            "content_markdown": "# Consistent hashing\n\nRing-based partitioning.",
+        },
+    ]
+    block = build_sources_memory_block(sources)
+    assert block is not None
+    assert 'Query: "system design basics"' in block
+    assert 'Query: "behavioral interview tips"' in block
+    # Both sources under the same query are present.
+    assert "Designing Data-Intensive Apps" in block
+    assert "Consistent hashing" in block
+    assert "https://example.com/ddia" in block
+    # Summaries appear in the block...
+    assert "Covers replication and partitioning strategies for distributed systems." in block
+    # ...but full page content does NOT — the whole point of the compact block.
+    assert "Chapter 1" not in block
+    assert "Situation, Task, Action, Result." not in block
+    # First-appearance query order preserved: "system design basics" query heading
+    # appears before "behavioral interview tips" even though sources interleave.
+    assert block.index('Query: "system design basics"') < block.index('Query: "behavioral interview tips"')

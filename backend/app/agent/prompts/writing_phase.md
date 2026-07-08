@@ -33,13 +33,21 @@ remains unwritten or any plan task is still pending.
 For each task popped from the queue:
 1. Check `get_task_plan` / working memory to confirm which task is current and what its
    description says it needs to cover.
-2. Call `search_research_notes` with keywords drawn from the section's topic to pull the
-   relevant notes gathered during `deep_research`. Read them carefully — they are your
-   evidence base and citation source.
-3. If there's a genuine gap (the section needs something no note covers), do 1-2
-   targeted `web_search` calls (and `fetch_url` + `save_research_note` if a good source
-   turns up) before writing. Don't do broad re-research here — this is a narrow,
-   targeted top-up, not a repeat of the research phase.
+2. Scan your "Saved research sources" working-memory block for the sources relevant to
+   this section — each entry is your own summary of a page saved during
+   `deep_research`. Then call `fetch_url` on the saved URLs you actually need for this
+   section to pull their full content back into context — summaries are for deciding
+   *which* sources to use; write the section from the full fetched content, not from
+   summaries alone. (Re-fetching is always safe: older copies of the same URL's content
+   are automatically dropped from the conversation.)
+3. If your saved sources don't give you enough for this section — a coverage area the
+   research phase under-served, a claim you can't yet cite, a question category with no
+   real examples — **do more research now; this is encouraged, not a failure**. Run 1-3
+   targeted `web_search` queries for exactly what's missing, `fetch_url` the promising
+   results, and `save_sources` the keepers (with summaries) so later sections benefit
+   too. Keep it scoped to this section's gap — targeted top-up, not a re-run of the
+   research phase. Never pad a section with uncited general knowledge just to avoid a
+   quick search.
 4. Call `write_section` with the full rich markdown content and a citations array that
    mirrors every `[^n]` marker used (see `citation_guidelines.md`).
 5. The tool call itself marks the task done and emits `curriculum_updated` + `progress` —
@@ -91,9 +99,10 @@ notice it — don't silently restructure the plan mid-write without reason).
 
 ### Ground everything in research first
 
-Never write a section from general knowledge alone when research notes exist or could
-be fetched. Step 2-3 above (search_research_notes, targeted top-up search) is mandatory,
-not optional, for any section making factual/process/statistical claims. Purely
+Never write a section from general knowledge alone when saved sources exist or could
+be fetched. Step 2-3 above (fetching the relevant saved sources, topping up with
+targeted research where coverage is thin) is
+mandatory, not optional, for any section making factual/process/statistical claims. Purely
 instructional "how to structure an answer" framework sections may lean more on
 well-established pedagogical patterns, but still cite the source(s) you drew the
 framework from where a specific one was used.

@@ -42,9 +42,14 @@ iteration — a `complete_phase` call takes effect next iteration, not next turn
 ## Memory / compaction invariants — do not break
 
 - Layer order is fixed: static prompt → user memory → working memory → (optional)
-  summary → recent messages. `build_context` runs **every iteration** — keep it cheap.
-- Research notes are never injected wholesale — only via `search_research_notes`/
-  `list_research_notes`/`read_section`. This keeps `writing`-phase context lean.
+  saved sources → (optional) summary → recent messages. `build_context` runs **every
+  iteration** — keep it cheap.
+- Saved research sources are injected as compact per-source entries (title + URL +
+  agent-written ≤5-sentence summary, grouped by query, from `curricula/{id}/sources`) —
+  NEVER the full page content (that blew up the system blocks in an earlier design).
+  Full content re-enters context only via `fetch_url` on a saved URL; after any batch
+  with a successful `fetch_url`, `strip_stale_fetch_url_outputs` keeps only the latest
+  fetch of each URL in the conversation.
 - Working memory is always rebuilt fresh from the state doc — never cache it.
 - Compaction triggers at `tokens_before > 0.8 * CONTEXT_TOKEN_LIMIT`
   (`COMPACTION_TRIGGER_FRACTION`), summarizing the older ~60%

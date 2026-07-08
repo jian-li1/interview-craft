@@ -34,9 +34,7 @@ interface ActivityFeedProps {
 const TOOL_ACTION_LABELS: Record<string, string> = {
   web_search: "Searching the web",
   fetch_url: "Reading a web page",
-  save_research_note: "Saving research notes",
-  search_research_notes: "Searching research notes",
-  list_research_notes: "Listing research notes",
+  save_sources: "Saving sources",
   list_curriculum_structure: "Reviewing the curriculum structure",
   write_section: "Writing a section",
   read_section: "Reading a section",

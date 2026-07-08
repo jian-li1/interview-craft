@@ -269,7 +269,7 @@ lets tests re-import the app without "app already exists" errors) and returns a
 Every other function in this module is a thin, typed wrapper around a Firestore
 collection/document path, grouped by comment banners matching the schema in spec 01 §5:
 `users/{uid}`, `users/{uid}/profile/main`, `curricula/{id}` (+ `modules`/`sections`
-subcollections), `curricula/{id}/plan/main`, `curricula/{id}/research/{noteId}`,
+subcollections), `curricula/{id}/plan/main`, `curricula/{id}/sources/{sourceId}`,
 `curricula/{id}/state/main`, `conversations/{convId}` (+ `messages` subcollection).
 **None of these functions check ownership** — that responsibility is explicitly pushed
 to callers (API routes via `get_owned_curriculum`/`get_owned_conversation`, or the
@@ -283,7 +283,7 @@ Noteworthy repository behaviors:
   lock ensures the orchestrator itself never writes messages concurrently for the same
   conversation.
 - `delete_curriculum` performs a **best-effort recursive delete**: walks
-  `modules → sections` deleting leaves first, then `research` notes, then the singleton
+  `modules → sections` deleting leaves first, then saved `sources`, then the singleton
   `plan/main` and `state/main` docs, then the curriculum doc itself. There's no batching
   or transaction — for pathologically large curricula this could be slow, but curricula
   are bounded in size by design.
@@ -407,8 +407,9 @@ stored in Firestore (`users/{uid}/profile/main.resume_text` /
   to `127.0.0.1` or an internal IP). Unparsable IP strings are blocked defensively.
   Covered by `backend/tests/test_ssrf_guard.py`.
 - **Fetch limits**: 10-second timeout, follows redirects, rejects non-text/html content
-  types outright. No body-size cap and no text truncation — the full page is read and
-  returned (bounded only by the timeout).
+  types outright. The full page is read and converted to Markdown; the only cap is a
+  defensive 200k-char/page slice (flagged `content_truncated`) protecting Firestore's
+  1 MiB document limit.
 - **Rate limiting**: see §3.4 — in-memory per-uid token bucket on
   conversation-creation and profile-synthesis endpoints.
 - **Upload limits**: see §9 — 5 MB cap, content-type/extension allowlist, in-memory only,
@@ -435,7 +436,7 @@ module imported `app.main` before env vars were set, the import itself would rai
 
 Two central fixtures:
 - **`fake_fs`** — a `FakeFirestore` class holding plain Python dicts (`users`,
-  `profiles`, `curricula`, `modules`, `sections`, `plans`, `research_notes`, `states`,
+  `profiles`, `curricula`, `modules`, `sections`, `plans`, `sources`, `states`,
   `conversations`, `messages`) that mirror the real Firestore schema shape. The fixture
   monkeypatches every public function in `app.services.firestore` (`get_user`,
   `upsert_user_login`, `create_curriculum`, `append_message`, etc.) onto this in-memory

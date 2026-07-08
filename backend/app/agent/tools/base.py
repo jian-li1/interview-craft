@@ -8,7 +8,7 @@ orchestrator loop (see spec 02 §3).
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from pydantic import BaseModel
@@ -35,6 +35,11 @@ class AgentContext:
     # emit events directly (rare — most emission happens in the orchestrator loop after
     # a tool call completes) can use this. Optional so tools are unit-testable headless.
     emit: Any = None
+
+    # In-run cache of fetched pages (url -> {title, content_markdown, content_truncated}),
+    # shared across every iteration's AgentContext for one orchestrator run — lets
+    # save_sources skip re-fetching a page fetch_url already pulled this run.
+    page_cache: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 class ToolExecutionError(Exception):

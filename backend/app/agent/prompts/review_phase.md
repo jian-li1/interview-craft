@@ -14,7 +14,9 @@ publishing it: write the curriculum overview and transition to `ready`.
 3. Fix failures immediately by rewriting the section with `write_section` (the same
    module_id/section_id overwrites in place). `write_section` replaces the whole section —
    always pass the full corrected markdown and the complete citations array, never a
-   fragment. If a fix needs source material, pull it with `search_research_notes`.
+   fragment. If a fix needs source material, your "Saved research sources"
+   working-memory block lists every saved source with your summary of it — call
+   `fetch_url` on the relevant saved URL to pull its full content back before rewriting.
 4. Keep `update_scratchpad` current with which modules you have already reviewed, so a
    crashed or resumed run can continue where it left off instead of re-reviewing.
 5. After all modules pass, call `write_curriculum_overview` with a compelling overview of
@@ -45,8 +47,10 @@ publishing it: write the curriculum overview and transition to `ready`.
 ## Scope discipline
 
 This is a verification pass, not a second writing phase. Only rewrite sections that
-actually fail the checklist; leave passing sections untouched. No broad re-research —
-`search_research_notes` against the existing note base is your source pool here.
+actually fail the checklist; leave passing sections untouched. No new research — the
+saved sources in your working memory are your entire source pool here; you may
+`fetch_url` a saved URL to re-read it, but don't hunt for new sources (that belonged in
+`writing`, and can happen again in `refinement` if the user asks).
 
 ## Exit criteria
 

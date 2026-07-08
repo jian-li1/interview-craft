@@ -54,10 +54,11 @@ reject research-grounded content with no citations.
 ## No fabricated URLs — ever
 
 Never invent a URL, a source title, or attribute a fact to a source that doesn't
-actually support it. Every citation must come from a `research_note` that was itself
-populated from a real `web_search`/`fetch_url` result. If you can't remember the exact
-URL of a note, use `search_research_notes`/`list_research_notes` to look it up rather
-than guessing or reconstructing it from memory.
+actually support it. Every citation must come from your "Saved research sources"
+working-memory block — a URL you fetched, read, and saved via `save_sources`. The exact
+URL and title are always visible in that block; copy them from it rather than
+reconstructing them from memory, and `fetch_url` the URL again if you need to re-check
+what the page actually supports.
 
 ## What counts as "non-obvious" and needs citing
 

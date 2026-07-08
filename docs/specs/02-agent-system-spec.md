@@ -26,16 +26,23 @@ intake ──► deep_research ──► outline_planning ──► awaiting_app
   covering: (a) the interview type's format/stages/evaluation criteria, (b) foundational
   concepts and skills to learn, (c) REAL sample interview questions commonly asked,
   (d) strong sample answers / answer frameworks, (e) preparation roadmaps, (f) company- or
-  domain-specific specifics from the user prompt. Search snippets are used ONLY for
-  relevance triage (deciding what to fetch or skip); fetching (`fetch_url`) is mandatory
-  for every source kept — the agent distills findings into **research notes** (tool:
-  save_research_note) from the fetched full text, never from a snippet alone (the sole
-  exception: a fetch fails, in which case the source is skipped entirely rather than
-  noted from its snippet). There is no note-count target, upper or lower — the agent
-  keeps researching, purely qualitatively, until every relevant coverage area has solid
-  fetched-and-distilled notes and new searches hit diminishing returns. Every note keeps
-  its source URL — this feeds citations later.
-- **outline_planning**: Synthesize research notes into a curriculum outline (modules →
+  domain-specific specifics from the user prompt. `web_search` returns `{title, url,
+  snippet}` results; snippets are for RELEVANCE TRIAGE ONLY. Every source worth keeping
+  is fetched with `fetch_url` (full page as Markdown) and READ; the agent then calls
+  **`save_sources(query, sources: [{url, summary}])`** with its own ≤5-sentence summary
+  per kept URL — the summary (never the full page) is pinned into the agent's working
+  memory (system prompt), grouped under the query that surfaced it, while the full
+  Markdown is persisted on the source doc as citation evidence. To re-read a saved
+  page, the agent re-fetches its URL; whenever the same URL is fetched again, all
+  earlier `fetch_url` outputs for that URL are stripped from the conversation (only the
+  latest fetch keeps its content), so full page content never appears twice.
+  `save_sources` enforces read-before-save: a URL not fetched during the current run is
+  rejected with `not_fetched`. Duplicate URLs are never saved twice (URL-hash doc ids).
+  There is no source-count target, upper or lower — the agent keeps researching, purely
+  qualitatively, until every relevant coverage area has solid saved sources and new
+  searches hit diminishing returns. Every saved source keeps its URL — this feeds
+  citations later.
+- **outline_planning**: Synthesize the saved sources (visible in working memory) into a curriculum outline (modules →
   sections) + a task plan — EXACTLY one task per planned section (never an overview
   task; the overview is written later in `review` via `write_curriculum_overview`).
   Personalize using the synthesized user profile. Call `propose_task_plan` → the tool
@@ -53,9 +60,11 @@ intake ──► deep_research ──► outline_planning ──► awaiting_app
   writing, emit live `phase_change` (writing) + `progress` WS events. modify → feedback
   appended, return to outline_planning to revise (increment plan version), emit a live
   `phase_change` (outline_planning) WS event.
-- **writing**: Pop tasks from the queue one at a time. For each: search research notes for
-  relevant material (`search_research_notes`), optionally do 1–2 targeted extra searches if
-  a gap exists, then `write_section` with full rich markdown. `write_section` enforces a
+- **writing**: Pop tasks from the queue one at a time. For each: scan the saved-source
+  summaries in working memory, `fetch_url` the relevant saved URLs to pull full content
+  back into context, and — explicitly encouraged when saved coverage is thin for the
+  section — run further targeted `web_search` → `fetch_url` → `save_sources` rounds
+  before writing; then `write_section` with full rich markdown. `write_section` enforces a
   target guard first: in `writing`/`review` it only accepts module/section ids already
   materialized from the approved plan, rejecting any invented id with an error listing the
   existing ids. Update progress after each task (WS `progress` + `curriculum_updated`).
@@ -134,11 +143,25 @@ A `ToolRegistry` exposes provider-formatted specs filtered by phase (research to
 during writing-only refinements, etc. — keep filtering simple: a phase→allowed-tools map).
 
 **Research tools**
-- `web_search(query, max_results=8)` → list of {title, url, snippet} via search provider.
-- `fetch_url(url)` → cleaned page text (httpx + readability-style extraction, full page returned untruncated with no byte cap; strip scripts; handle errors/timeouts gracefully; block private/internal IPs — SSRF guard).
-- `save_research_note(query, url, title, summary, key_facts[], relevance)` → note id. Summary must be a dense distillation, not raw copy.
-- `search_research_notes(keywords)` → ranked matching notes (simple keyword/substring scoring over summary+key_facts+relevance is fine).
-- `list_research_notes()` → compact listing (id, title, url, relevance) for orientation.
+- `web_search(query, max_results=8)` → list of {title, url, snippet} via search
+  provider. Snippets are relevance triage only — no page fetching happens here.
+- `fetch_url(url)` → the page's `<title>` plus full content converted to Markdown
+  (httpx; SSRF guard blocking private/internal IPs; scripts/styles/svg stripped via
+  BeautifulSoup, then markdownify; graceful `{"error": ...}` on failure). Per-page
+  content is capped only defensively (200k chars, flagged `content_truncated`) to
+  respect Firestore's 1 MiB doc limit. Successful fetches populate an in-run page cache
+  (`ctx.page_cache`) that `save_sources` reads from. After any batch containing a
+  successful `fetch_url`, the orchestrator runs `strip_stale_fetch_url_outputs`: for
+  every URL fetched more than once in the conversation, only the LATEST fetch keeps its
+  content — earlier ones are rewritten to `{url, note}` so the same page never occupies
+  context twice.
+- `save_sources(query, sources: [{url, summary}])` → persists each non-duplicate,
+  already-fetched URL to `curricula/{id}/sources` (doc id = URL hash → dedup) with the
+  agent's ≤5-sentence `summary` (max 1500 chars, the only part later injected into
+  working memory) plus the cached full `content_markdown` as citation evidence. Strictly
+  enforces read-before-save: a URL absent from the in-run page cache is rejected with
+  status `not_fetched` (no silent re-fetch). Returns per-URL statuses
+  (saved / duplicate_skipped / not_fetched).
 
 **User-memory tools**
 - `get_user_profile()` → synthesized_profile + structured fields (target roles, experience level, learning style, timeline).
@@ -175,10 +198,16 @@ during writing-only refinements, etc. — keep filtering simple: a phase→allow
 2. **User memory**: synthesized profile (injected as a system block: "About the user: ...").
 3. **Working memory**: agent state doc — phase, task queue with statuses, scratchpad,
    plan version. Injected as a compact system block each turn (always fresh, never stale).
-4. **Episodic memory**: conversation summary (if compaction has run) + recent messages +
+4. **Saved research sources**: one compact entry per source saved via `save_sources` —
+   title, URL, and the agent's own ≤5-sentence summary — grouped by the query that
+   surfaced it, injected as a system block (after the working-memory block, before the
+   summary block), every iteration, in every phase. Full page content is deliberately
+   NOT injected (that blew up context in an earlier design): it lives on the source doc
+   as evidence, and the agent re-fetches a saved URL when it needs the full text —
+   duplicate fetches of the same URL are stripped from the conversation, keeping only
+   the latest.
+5. **Episodic memory**: conversation summary (if compaction has run) + recent messages +
    tool exchanges verbatim.
-5. **Research memory**: NOT injected wholesale — accessed on demand via
-   search_research_notes/list_research_notes tools. This keeps context lean.
 
 **Auto-compaction** (`memory/compaction.py`):
 - Track token estimate with tiktoken (fallback: chars/4) over the assembled context.
@@ -189,7 +218,7 @@ during writing-only refinements, etc. — keep filtering simple: a phase→allow
   [system blocks] + [summary block] + [remaining recent messages]. Emit WS `compaction`.
 - The model is replayed each tool call's full `output_full`; only outputs older than the
   last 6 exchanges are truncated to short previews in the rebuilt context (full data also
-  lives in Firestore research notes / sections, retrievable via tools).
+  lives in Firestore saved sources / sections).
 
 ## 6. Prompt files (`agent/prompts/*.md`) — write these THOROUGHLY
 
@@ -200,17 +229,18 @@ detailed, high-quality instruction document (not a stub). Required files:
   (reason internally first (native reasoning): assess state → decide next action; one
   coherent batch of tool calls per step; adapt on tool errors), tone, honesty about sources,
   personalization mandate (always ground advice in the user profile), safety rules
-  (no fabricated citations — every factual claim traceable to a research note).
-- `research_phase.md` — Deep-research methodology: query diversification strategy (the 6
-  coverage areas in §2), source quality heuristics (prefer official docs, well-known prep
-  sites, recent content), fetching is MANDATORY for every kept source (snippets are for
-  relevance triage only — never write a note from a snippet alone; the only exception is
-  a failed fetch, which means skip the source), note-taking standards (summary is a long,
-  comprehensive, multi-paragraph distillation of the fetched full text — roughly
-  150–500+ words for a substantial source, enough that the writing phase never needs to
-  re-fetch), stop criteria (purely qualitative coverage checklist + diminishing returns,
-  no numeric note-count target), anti-patterns (don't save duplicate notes, don't fetch
-  paywalled/JS-only pages repeatedly, don't pad or artificially cap note count).
+  (no fabricated citations — every factual claim traceable to a saved source).
+- `research_phase.md` — Deep-research methodology: the search→fetch→read→save rhythm
+  (`web_search` snippets are triage only; `fetch_url` is the mandatory reading step for
+  every kept source; `save_sources` pins a ≤5-sentence agent-written summary per keeper
+  into working memory, with full content re-fetchable on demand), summary-writing
+  standards (name the page's concrete assets, not vague praise — the summary is the
+  coverage ledger entry), query diversification strategy (the 6 coverage areas in §2),
+  source quality heuristics (prefer official docs, well-known prep sites, recent
+  content; judge by the FETCHED content, not the snippet), stop criteria (purely
+  qualitative coverage checklist + diminishing returns, no numeric source-count
+  target), anti-patterns (never save unfetched URLs, no vague summaries, don't retry
+  failed fetches, don't re-search covered topics).
 - `planning_phase.md` — Outline design principles: beginner→interview-ready arc,
   module sequencing (foundations → core skills → question drills → mock/strategy),
   every module must include sample-questions-with-model-answers sections, no fixed
@@ -223,11 +253,15 @@ detailed, high-quality instruction document (not a stub). Required files:
   interview questions with STRONG model answers personalized to the user's background
   (use their actual experience level/target roles); inline citation markers `[^n]`
   with a footnote list matching the citations array; length guidance (800–2000 words/section);
-  ground every section in research notes retrieved first.
+  ground every section in saved sources: scan their summaries in working memory,
+  `fetch_url` the relevant saved URLs for full content, and run further targeted
+  `web_search` → `fetch_url` → `save_sources` top-ups (encouraged, not exceptional)
+  when saved coverage is thin for the section.
 - `review_phase.md` — Structured quality pass over the whole draft curriculum: a
   per-section checklist (citations, diagrams, sample-Q&A coverage, 800-2000 word length,
   coherence); fix failures directly via `write_section` overwrite (never a fragment);
-  `search_research_notes` against the existing note base only (no broad re-research);
+  sources come only from the already-saved source pool (re-read via `fetch_url` on a
+  saved URL; no new searching);
   after all modules pass, `write_curriculum_overview`; exit via `complete_phase("ready")`.
 - `refinement_phase.md` — How to handle edits (read before update, minimal targeted
   changes, preserve citations, describe what changed), explanations (teach in chat with

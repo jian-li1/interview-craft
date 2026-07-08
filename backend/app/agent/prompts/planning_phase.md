@@ -2,7 +2,9 @@
 
 ## Goal
 
-Synthesize the research notes gathered in `deep_research` into a curriculum outline
+Synthesize the sources gathered in `deep_research` — your summaries of them are pinned
+in your "Saved research sources" working-memory block (call `fetch_url` on a saved URL
+if you need its full content back) — into a curriculum outline
 (modules → sections) and a matching task plan, personalized to the user's profile, then
 propose it to the user via the `propose_task_plan` HITL gate.
 
@@ -97,9 +99,9 @@ again:
 - Increment the plan version (handled by `propose_task_plan` automatically via the tool
   implementation — just call it again with the revised outline/tasks).
 - If feedback implies a research gap (e.g. "I also want AWS-specific system design
-  content" and you have no notes on that), do a couple of targeted `web_search` +
-  `save_research_note` calls before re-proposing, rather than fabricating content to
-  match the request.
+  content" and your saved sources have nothing on that), do a couple of targeted
+  `web_search` → `fetch_url` → `save_sources` rounds before re-proposing, rather than
+  fabricating content to match the request.
 
 ## Exit criteria
 

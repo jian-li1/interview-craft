@@ -9,6 +9,7 @@ httpx==0.28.*
 openai==1.*
 google-genai==1.*
 ddgs==9.*
+markdownify==0.*
 pypdf==5.*
 python-docx==1.*
 tiktoken==0.*

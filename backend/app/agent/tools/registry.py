@@ -24,13 +24,7 @@ from app.agent.tools.curriculum import (
     WriteSectionTool,
 )
 from app.agent.tools.planning import GetTaskPlanTool, ProposeTaskPlanTool
-from app.agent.tools.research import (
-    FetchUrlTool,
-    ListResearchNotesTool,
-    SaveResearchNoteTool,
-    SearchResearchNotesTool,
-    WebSearchTool,
-)
+from app.agent.tools.research import FetchUrlTool, SaveSourcesTool, WebSearchTool
 from app.agent.tools.user_memory import GetUserProfileTool
 from app.core.logging import get_logger
 from app.services.llm.base import ToolSpec
@@ -76,25 +70,23 @@ _PHASE_TOOLS: dict[str, list[str]] = {
         *_ALWAYS_AVAILABLE,
         "web_search",
         "fetch_url",
-        "save_research_note",
-        "search_research_notes",
-        "list_research_notes",
+        "save_sources",
     ],
     "outline_planning": [
         *_ALWAYS_AVAILABLE,
-        "search_research_notes",
-        "list_research_notes",
+        # Targeted top-up research when `modify` feedback reveals a research gap.
+        "web_search",
+        "fetch_url",
+        "save_sources",
         "propose_task_plan",
         "get_task_plan",
     ],
     "awaiting_approval": [*_ALWAYS_AVAILABLE, "get_task_plan"],
     "writing": [
         *_ALWAYS_AVAILABLE,
-        "search_research_notes",
-        "list_research_notes",
         "web_search",
         "fetch_url",
-        "save_research_note",
+        "save_sources",
         "get_task_plan",
         "list_curriculum_structure",
         "write_section",
@@ -108,7 +100,8 @@ _PHASE_TOOLS: dict[str, list[str]] = {
         "write_section",
         "write_curriculum_overview",
         "set_module_status",
-        "search_research_notes",
+        # fetch_url only — review may re-read saved sources but not hunt for new ones.
+        "fetch_url",
     ],
     "ready": [
         *_ALWAYS_AVAILABLE,
@@ -116,11 +109,9 @@ _PHASE_TOOLS: dict[str, list[str]] = {
         "read_section",
         "update_section",
         "write_section",
-        "search_research_notes",
-        "list_research_notes",
         "web_search",
         "fetch_url",
-        "save_research_note",
+        "save_sources",
     ],
     "refinement": [
         *_ALWAYS_AVAILABLE,
@@ -128,11 +119,9 @@ _PHASE_TOOLS: dict[str, list[str]] = {
         "read_section",
         "update_section",
         "write_section",
-        "search_research_notes",
-        "list_research_notes",
         "web_search",
         "fetch_url",
-        "save_research_note",
+        "save_sources",
     ],
 }
 
@@ -153,9 +142,7 @@ class ToolRegistry:
         tool_instances: list[Tool] = [
             WebSearchTool(),
             FetchUrlTool(),
-            SaveResearchNoteTool(),
-            SearchResearchNotesTool(),
-            ListResearchNotesTool(),
+            SaveSourcesTool(),
             GetUserProfileTool(),
             ProposeTaskPlanTool(),
             GetTaskPlanTool(),

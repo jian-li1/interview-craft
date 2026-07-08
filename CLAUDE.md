@@ -37,13 +37,17 @@ specs silently.
   persisted to `curricula/{id}/state/main`); loop resumes on the next client WS frame.
   Runs are resumable/cancellable; one active run per conversation (asyncio lock).
 - Memory layers: static prompts → synthesized user profile → working state doc →
-  conversation (with rolling compaction summary at 0.8× CONTEXT_TOKEN_LIMIT via the small
-  model) → research notes (pulled on demand via tools, never injected wholesale).
+  saved research sources (agent-written ≤5-sentence summaries from save_sources, grouped
+  by search query — full page content stays on the source doc; the agent re-fetches a
+  saved URL via fetch_url, and duplicate fetches of a URL are stripped from the
+  conversation keeping only the latest) → conversation (with rolling compaction
+  summary at 0.8× CONTEXT_TOKEN_LIMIT via the small model).
 - Providers are swappable via env/user settings: LLM_PROVIDER (openai | gemini | llamacpp —
   llamacpp = OpenAI provider with OPENAI_BASE_URL), SEARCH_PROVIDER (duckduckgo | google | tavily).
   DuckDuckGo uses the `ddgs` package (keyless).
-- Citations are non-negotiable: research → notes with URLs → sections cite `[^n]` footnotes
-  mirrored in a `citations` array. No fabricated sources.
+- Citations are non-negotiable: web_search (snippet triage) → fetch_url (full page as
+  Markdown, mandatory read) → save_sources pins URL + agent summary into working memory →
+  sections cite `[^n]` footnotes mirrored in a `citations` array. No fabricated sources.
 
 ## Working on this repo
 

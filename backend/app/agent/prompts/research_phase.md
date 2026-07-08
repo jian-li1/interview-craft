@@ -2,12 +2,46 @@
 
 ## Goal
 
-Build a solid, well-cited evidence base of quality research notes before any outline is
-drafted. There is no note-count target, upper or lower — gather as many notes as the
-topic genuinely warrants. Everything you write later — the outline, the sections, the
-sample Q&A — should be traceable back to notes gathered here. Skipping or rushing this
-phase produces generic, unverifiable curricula; treat it as the foundation the whole
-product quality rests on.
+Build a solid, well-cited evidence base of saved sources before any outline is drafted.
+There is no source-count target, upper or lower — save as many sources as the topic
+genuinely warrants. Everything you write later — the outline, the sections, the sample
+Q&A — should be traceable back to sources saved here. Skipping or rushing this phase
+produces generic, unverifiable curricula; treat it as the foundation the whole product
+quality rests on.
+
+## How research works — search, fetch, read, save
+
+You have three research tools, used in a strict rhythm:
+
+1. **`web_search(query, max_results)`** — returns results as `title`, `url`, `snippet`.
+   Snippets exist for ONE purpose: **relevance triage** — deciding which results are
+   worth fetching and which to skip. A snippet is never sufficient grounds for saving.
+2. **`fetch_url(url)`** — fetches one page and returns its full content as Markdown.
+   This is the mandatory reading step: every source you keep must have been fetched and
+   actually read first. Re-fetching a URL later is always safe — when you fetch the same
+   URL again, the older copy of its content is automatically removed from the
+   conversation, so nothing is duplicated.
+3. **`save_sources(query, sources)`** — after reading, pass the query that surfaced the
+   keepers and, for each kept URL, **your own summary of AT MOST 5 sentences**: what
+   the page contains (its frameworks, question lists, process details) and why it
+   matters for this curriculum. The summary — not the full page — is what stays
+   permanently visible in your working memory (the "Saved research sources" block in
+   your system prompt, grouped by query), in every later phase. Whenever you need a
+   saved page's full content again, just `fetch_url` its URL.
+
+Deduplication is automatic: a URL already saved (under any query) is skipped, and a URL
+you never fetched is rejected with `not_fetched` — fetch it, read it, then save it.
+
+### Writing good source summaries
+
+The 5-sentence cap is tight on purpose — your working memory holds every summary
+forever, so each one must earn its size. A good summary lets future-you decide, at a
+glance, whether to re-fetch this page when writing a given section. Name the concrete
+assets the page offers ("lists ~40 real behavioral questions with sample answers",
+"walks through the profitability framework with two worked cases"), not vague praise
+("a useful page about interviews"). Include the source's angle or authority when it
+matters (official engineering blog, veteran interviewer's writeup, aggregated candidate
+reports).
 
 ## Query diversification strategy — the 6 coverage areas
 
@@ -37,9 +71,20 @@ area — some areas need 2-4 queries, especially (a) and (c)):
 Vary phrasing across queries — don't submit near-duplicate queries. Use `web_search`
 with `max_results` around 6-8 per query; you do not need to fetch every result.
 
-## Source quality heuristics
+## When to fetch a page vs. skip it from the snippet
 
-Prefer, in roughly this order:
+- If a snippet suggests the page might contain substantial, specific, useful content (a
+  real question list, a detailed process breakdown, a worked framework), `fetch_url` it
+  before doing anything else with it.
+- If the snippet clearly signals the page is thin, generic, or a duplicate of a source
+  you've already saved, skip it without fetching.
+- If a fetch fails (paywall, JS-only shell, timeout, blocked host), skip the source
+  entirely — never save from the snippet as a fallback, and don't retry the same URL.
+
+## Deciding which fetched pages to save — source quality heuristics
+
+Judge by the FETCHED content, never the snippet. Prefer, in roughly this order:
+
 1. Official company engineering/careers blogs or documented interview guides.
 2. Well-known, reputable prep platforms and educational sites (established interview
    prep companies, major coding practice platforms, respected career sites).
@@ -50,78 +95,37 @@ Prefer, in roughly this order:
    experience) — treat individual anecdotes as illustrative, not universal fact; don't
    over-generalize from one Reddit comment.
 
-Deprioritize or skip: content-farm SEO pages with no real substance, pages that are
-clearly outdated (stale UI screenshots, references to defunct processes), and anything
-that requires login/paywall to read.
-
-## When to fetch a page vs. just use the search snippet
-
-Search snippets exist for ONE purpose only: **relevance triage** — deciding which
-results are worth fetching and which to skip. A snippet is never sufficient grounds for
-a research note.
-
-Fetching is now **mandatory** for every source worth keeping:
-- If a snippet suggests the page might contain substantial, specific, useful content (a
-  real question list, a detailed process breakdown, a worked framework), call
-  `fetch_url` on it before doing anything else with it.
-- Never call `save_research_note` from a snippet alone. The only exception is when a
-  `fetch_url` call actually fails (paywall, JS-only shell, timeout, blocked host) — in
-  that case, do not fall back to writing a note from the snippet; simply skip the source
-  entirely and move to the next candidate.
-- If the snippet clearly signals the page is thin, generic, or a duplicate of a source
-  you've already fetched and noted, skip it without fetching — don't waste a fetch on
-  something you can already tell is low-value.
-- A previous fetch attempt to the same domain/page pattern already failed or returned a
-  paywall/JS-shell (see anti-patterns below) — don't retry the same dead end.
-
-## Note-taking standards
-
-For every source worth keeping, first `fetch_url` it, then call `save_research_note`
-with:
-- `query`: the search query that surfaced it (for traceability).
-- `url`, `title`: exact source identifiers.
-- `summary`: a LONG, comprehensive, descriptive summary written from the FETCHED FULL
-  TEXT, in your own words. This is not a teaser — it's a multi-paragraph distillation
-  scaled to the richness of the source: roughly 150-500+ words for a substantial source
-  (shorter only if the fetched content itself is genuinely thin). Capture ALL the ideas,
-  concepts, frameworks, process details, example questions, and advice the source
-  contains — don't cherry-pick one takeaway and drop the rest. Never paste raw scraped
-  text; synthesize it. The bar to hit: the `writing` phase must be able to write a full
-  curriculum section directly from this note alone, without ever re-fetching the source.
-  If you find yourself writing 2-5 sentences, you have not met the bar — go back to the
-  fetched text and extract more.
-- `key_facts`: a short list of concrete, checkable facts/points pulled from the source
-  (specific questions asked, specific process steps, specific frameworks named, etc.).
-- `relevance`: which outline/coverage area(s) this supports (e.g. "foundational
-  concepts — system design basics" or "sample questions — behavioral").
-
-Quality over quantity, and depth over both. A note that just says "this page talks about
-interviews" is useless — make every note something you could directly build a
-curriculum section from without looking at anything else.
+Do NOT save: content-farm SEO pages with no real substance, fetched content that turned
+out to be a paywall stub or JS-only skeleton, clearly outdated pages, or near-duplicates
+of content you already saved. An imperfect solid source still beats an empty coverage
+area, though — don't leave an area with nothing.
 
 ## Stop criteria
 
 Stop researching and call `complete_phase("outline_planning", reason=...)` purely
-qualitatively — there is no note-count target, upper or lower; as many notes as the
-topic warrants — when **all** of these are true:
-- Every one of the 6 coverage areas relevant to this request has at least one solid,
-  fetched-and-distilled note (skip area (f) only if genuinely not applicable), AND
-- New searches hit diminishing returns — mostly duplicates of what you already have, or
-  pages that don't clear the fetch-worthiness bar above.
+qualitatively — there is no source-count target, upper or lower — when **all** of
+these are true:
 
-Use `list_research_notes` periodically to check both your running count and your
-coverage across areas before deciding you're done. If coverage on some area is thin, run
-1-2 more targeted queries for just that area rather than broadly re-searching everything.
+- Every one of the 6 coverage areas relevant to this request has at least one solid
+  saved source (skip area (f) only if genuinely not applicable), AND
+- New searches hit diminishing returns — mostly duplicates of what you already saved,
+  or pages that don't clear the fetch-worthiness bar above.
+
+Your "Saved research sources" working-memory block is your coverage ledger: scan its
+queries and summaries to see which areas are covered and which are thin. If coverage on
+some area is thin, run 1-2 more targeted queries for just that area rather than broadly
+re-searching everything.
 
 ## Anti-patterns to avoid
 
-- Don't save duplicate notes for the same core content found via different queries —
-  check `search_research_notes`/`list_research_notes` first if a result looks familiar.
-- Don't keep fetching paywalled or JS-only pages that return empty/garbled text after
-  one failed attempt — note the failure mentally and move to the next candidate.
-- Don't write a note from a snippet just because a fetch would be "extra work" — every
-  kept source must be fetched; there is no shortcut.
-- Don't pad note count with thin, low-value notes just to look thorough — every note
-  must be genuinely comprehensive and meet the note-taking standards above. A shallow
-  note doesn't count just because it exists.
+- Don't save a source you never fetched — `save_sources` rejects it, and a snippet
+  can't produce an honest summary anyway.
+- Don't fetch a page and move on without deciding: save it (with a real summary) or
+  consciously skip it. Unfetched decisions pile up as wasted context.
+- Don't write vague summaries — "this page talks about interviews" is useless as a
+  ledger entry; name what the page actually offers.
+- Don't re-search what your saved-sources block already covers — check it first; it is
+  always visible in your system prompt.
+- Don't retry a URL that returned an error or paywalled/empty content — skip it and
+  move to the next candidate.
 - Don't start writing curriculum content in this phase — that belongs to `writing`.

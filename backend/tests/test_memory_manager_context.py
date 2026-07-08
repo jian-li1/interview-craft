@@ -69,6 +69,7 @@ async def test_build_context_includes_static_and_working_memory_blocks(manager, 
 
     messages = await manager.build_context(
         conversation_id=conv["id"],
+        curriculum_id="cur1",
         phase="intake",
         synthesized_profile="A career-changer targeting PM roles.",
         profile={"target_roles": ["Product Manager"]},
@@ -98,6 +99,7 @@ async def test_build_context_does_not_compact_below_threshold(manager, fake_fs):
 
     await manager.build_context(
         conversation_id=conv["id"],
+        curriculum_id="cur1",
         phase="refinement",
         synthesized_profile=None,
         profile=None,
@@ -136,6 +138,7 @@ async def test_build_context_triggers_compaction_above_threshold(manager, fake_f
 
     await manager.build_context(
         conversation_id=conv["id"],
+        curriculum_id="cur1",
         phase="refinement",
         synthesized_profile=None,
         profile=None,
@@ -153,3 +156,49 @@ async def test_build_context_triggers_compaction_above_threshold(manager, fake_f
     updated_conv = fake_fs.fs.get_conversation(conv["id"])
     assert updated_conv["summary"] == "## Summary\n\nCondensed everything."
     assert updated_conv["compacted_through"] is not None
+
+
+@pytest.mark.asyncio
+async def test_build_context_injects_sources_block_between_working_memory_and_summary(manager, fake_fs):
+    """Verify saved sources are rendered into their own system block, positioned after
+    working memory and before the rolling summary — the fixed layer order invariant
+    from `app/agent/CLAUDE.md`.
+    """
+    conv = fake_fs.fs.create_conversation("uid1", "New chat", curriculum_id="cur1")
+    fake_fs.fs.update_conversation(conv["id"], {"summary": "Earlier conversation summary text."})
+    fake_fs.fs.create_source(
+        "cur1",
+        {
+            "query": "system design basics",
+            "url": "https://example.com/ddia",
+            "title": "Designing Data-Intensive Apps",
+            "summary": "Covers leader-follower replication trade-offs.",
+            "content_markdown": "# Replication\n\nLeader-follower replication details.",
+            "content_truncated": False,
+        },
+    )
+
+    messages = await manager.build_context(
+        conversation_id=conv["id"],
+        curriculum_id="cur1",
+        phase="writing",
+        synthesized_profile=None,
+        profile=None,
+        agent_state={"phase": "writing"},
+        small_llm=None,
+        on_compaction=None,
+    )
+
+    system_messages = [m for m in messages if m.role == "system"]
+    contents = [m.content for m in system_messages]
+    # "pinned working memory" is unique to build_sources_memory_block's own heading —
+    # the phrase "Saved research sources" alone also appears (quoted) in the static
+    # phase prompts, so it can't disambiguate the block by itself.
+    sources_idx = next(i for i, c in enumerate(contents) if "pinned working memory" in c)
+    working_memory_idx = next(i for i, c in enumerate(contents) if "Agent working memory" in c)
+    summary_idx = next(i for i, c in enumerate(contents) if "Summary of earlier conversation" in c)
+
+    assert working_memory_idx < sources_idx < summary_idx
+    # The sources block carries the agent's summary, not the full fetched page content.
+    assert "Covers leader-follower replication trade-offs." in contents[sources_idx]
+    assert "Leader-follower replication details." not in contents[sources_idx]

@@ -466,10 +466,11 @@ async def test_run_turn_rejects_concurrent_run_on_same_conversation(monkeypatch,
 @pytest.mark.asyncio
 async def test_run_turn_cancels_mid_tool_call(monkeypatch, fake_fs, orchestrator):
     """Verify a `stop` frame that arrives while a tool call is still in-flight (e.g. a
-    slow `fetch_url`) aborts the tool batch immediately rather than waiting for it to
-    finish, emits an error-status `tool_call_result` for the aborted call, and ends the
-    turn as CANCELLED — the `_wait_cancellable` race in `_run_turn_inner`'s tool-batch
-    loop (see orchestrator.py item B.3) is what's under test here.
+    slow `fetch_url`, which fetches a full page) aborts the tool batch
+    immediately rather than waiting for it to finish, emits an error-status
+    `tool_call_result` for the aborted call, and ends the turn as CANCELLED — the
+    `_wait_cancellable` race in `_run_turn_inner`'s tool-batch loop (see orchestrator.py
+    item B.3) is what's under test here.
     """
     import asyncio
 
@@ -477,14 +478,14 @@ async def test_run_turn_cancels_mid_tool_call(monkeypatch, fake_fs, orchestrator
 
     conv, curriculum = _setup_conversation(fake_fs, phase="deep_research")
 
-    # Script a single tool call (web_search) followed by Done — the fake registry
+    # Script a single tool call (fetch_url) followed by Done — the fake registry
     # execute() below never actually returns normally; it hangs until cancelled so we
     # can deterministically simulate "cancellation arrives mid-tool-call".
     scripted = ScriptedLLM(
         [
             ReasoningDelta(text="searching"),
             TextDelta(text="Let me look that up."),
-            ToolCallDelta(id="call_1", name="web_search", arguments={"query": "system design interview"}),
+            ToolCallDelta(id="call_1", name="fetch_url", arguments={"url": "https://example.com/guide"}),
             Done(),
         ]
     )
@@ -535,3 +536,118 @@ async def test_run_turn_cancels_mid_tool_call(monkeypatch, fake_fs, orchestrator
     assistant_msgs = [m for m in messages if m["role"] == "assistant"]
     assert len(assistant_msgs) == 1
     assert assistant_msgs[0]["tool_calls"][0]["status"] == "error"
+
+
+@pytest.mark.asyncio
+async def test_successful_fetch_url_strips_stale_prior_fetch_of_same_url(monkeypatch, fake_fs, orchestrator):
+    """Verify a batch containing a successful `fetch_url` call triggers
+    `strip_stale_fetch_url_outputs` for the conversation — rewriting an earlier stored
+    `fetch_url` output for the SAME URL down to a short note (losing `content_markdown`)
+    while the just-appended (latest) fetch of that URL keeps its content intact, per the
+    dedup contract: only the newest fetch of a URL stays in context.
+    """
+    import json
+
+    conv, curriculum = _setup_conversation(fake_fs, phase="deep_research")
+
+    # Seed a prior assistant message with a fetch_url tool_call carrying full page
+    # content for the same URL, as if it ran in an earlier turn/iteration.
+    prior_output = {"url": "https://example.com/guide", "title": "Guide", "content_markdown": "# Old guide content"}
+    fake_fs.fs.append_message(
+        conv["id"],
+        {
+            "role": "assistant",
+            "content": "",
+            "reasoning": None,
+            "tool_calls": [
+                {
+                    "id": "prior_call",
+                    "name": "fetch_url",
+                    "input": {"url": "https://example.com/guide"},
+                    "output_full": json.dumps(prior_output),
+                    "output_preview": json.dumps(prior_output)[:1500],
+                    "status": "ok",
+                }
+            ],
+        },
+    )
+
+    class _TwoTurnLLM:
+        """Fake LLMProvider: calls fetch_url on the first chat_stream call, then answers
+        with plain text on the second — needed because fetch_url is not a HITL-gate
+        tool, so the orchestrator loops to a second iteration after it runs.
+        """
+
+        def __init__(self) -> None:
+            """Track how many times chat_stream has been invoked."""
+            self._calls = 0
+
+        async def chat_stream(self, messages, tools=None, small: bool = False):
+            """Yield the tool-call script on call 1, a plain-text script on call 2+."""
+            self._calls += 1
+            if self._calls == 1:
+                events = [
+                    TextDelta(text="Re-reading the guide."),
+                    ToolCallDelta(
+                        id="call_fetch",
+                        name="fetch_url",
+                        arguments={"url": "https://example.com/guide"},
+                    ),
+                    Done(),
+                ]
+            else:
+                events = [TextDelta(text="Read it."), Done()]
+            for event in events:
+                yield event
+
+        async def complete(self, messages, small: bool = False) -> str:
+            """Unused by this test; present to satisfy the LLMProvider protocol."""
+            return "stub completion"
+
+    scripted = _TwoTurnLLM()
+    monkeypatch.setattr("app.agent.orchestrator.get_llm_provider", lambda *a, **k: scripted)
+    monkeypatch.setattr("app.agent.orchestrator.get_search_provider", lambda *a, **k: StubSearch())
+
+    # Stub the registry's execute to return a fetch_url-shaped success without touching
+    # real network plumbing — this test is about the orchestrator's dedup wiring, not
+    # fetch_url's own internals (covered separately in test_research_tools.py).
+    from app.agent.tools.registry import ToolResult
+
+    async def fake_execute(tool_name, raw_input, ctx):
+        """Return a canned successful fetch_url result for the same URL, with new content."""
+        assert tool_name == "fetch_url"
+        return ToolResult(
+            {"url": raw_input["url"], "title": "Guide", "content_markdown": "# New guide content"},
+            "ok",
+            5,
+        )
+
+    monkeypatch.setattr(orchestrator._registry, "execute", fake_execute)
+
+    events = []
+
+    async def emit(event):
+        events.append(event)
+
+    result = await orchestrator.run_turn(
+        conversation_id=conv["id"],
+        curriculum_id=curriculum["id"],
+        owner_uid="uid1",
+        user_input="re-read that page",
+        emit=emit,
+    )
+
+    assert result.outcome == TurnOutcome.DONE
+
+    messages = fake_fs.fs.list_messages(conv["id"])
+    prior_msg = next(m for m in messages if any(tc["id"] == "prior_call" for tc in m.get("tool_calls", [])))
+    prior_tc = next(tc for tc in prior_msg["tool_calls"] if tc["id"] == "prior_call")
+    rewritten = json.loads(prior_tc["output_full"])
+    assert "content_markdown" not in rewritten
+    assert rewritten["url"] == "https://example.com/guide"
+
+    # The latest fetch (appended by this turn) keeps its content intact.
+    latest_msg = next(m for m in messages if any(tc["id"] == "call_fetch" for tc in m.get("tool_calls", [])))
+    latest_tc = next(tc for tc in latest_msg["tool_calls"] if tc["id"] == "call_fetch")
+    kept = json.loads(latest_tc["output_full"])
+    assert kept["content_markdown"] == "# New guide content"

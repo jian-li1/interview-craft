@@ -182,11 +182,18 @@ curricula/{id}/plan/main
   status: "proposed"|"approved"|"revising"
   user_feedback: [str]
 
-curricula/{id}/research/{noteId}
-  query: str, url: str, title: str
-  summary: str                  # distilled findings
-  key_facts: [str]
-  relevance: str                # which outline topics this supports
+curricula/{id}/sources/{sourceId}
+  # sourceId is a deterministic hash of the url (sha256 hex, truncated) so the same URL
+  # can never be saved twice — save_sources dedup relies on this doc-id scheme.
+  query: str                    # the web_search query that surfaced this source
+  url: str, title: str
+  summary: str                  # agent-written distillation (max 5 sentences) — the ONLY
+                                 # part injected into the agent's working memory (spec 02
+                                 # §5); the agent re-fetches the URL for full content
+  content_markdown: str         # FULL page content, HTML converted to Markdown
+                                 # (markdownify) — persisted as citation evidence, NOT
+                                 # injected into context
+  content_truncated: bool       # true only if the page hit the defensive per-page cap
   created_at
 
 curricula/{id}/state/main       # agent working memory (see spec 02)

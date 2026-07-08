@@ -59,7 +59,7 @@ class FakeFirestore:
         self.modules: dict[str, dict[str, dict[str, Any]]] = {}
         self.sections: dict[tuple[str, str], dict[str, dict[str, Any]]] = {}
         self.plans: dict[str, dict[str, Any]] = {}
-        self.research_notes: dict[str, dict[str, dict[str, Any]]] = {}
+        self.sources: dict[str, dict[str, dict[str, Any]]] = {}
         self.states: dict[str, dict[str, Any]] = {}
         self.conversations: dict[str, dict[str, Any]] = {}
         self.messages: dict[str, list[dict[str, Any]]] = {}
@@ -209,7 +209,7 @@ def fake_fs(monkeypatch) -> FakeFirestore:
         store.curricula.pop(curriculum_id, None)
         store.modules.pop(curriculum_id, None)
         store.plans.pop(curriculum_id, None)
-        store.research_notes.pop(curriculum_id, None)
+        store.sources.pop(curriculum_id, None)
         store.states.pop(curriculum_id, None)
 
     def create_module(curriculum_id, module_id, fields):
@@ -262,17 +262,28 @@ def fake_fs(monkeypatch) -> FakeFirestore:
         """Fake for `firestore.set_plan` — merge fields into the curriculum's plan doc."""
         store.plans.setdefault(curriculum_id, {}).update(fields)
 
-    def create_research_note(curriculum_id, fields):
-        """Fake for `firestore.create_research_note` — store a note, return its new id."""
-        note_id = store.new_id()
-        data = {**fields, "created_at": store.utcnow()}
-        store.research_notes.setdefault(curriculum_id, {})[note_id] = data
-        return note_id
+    def _source_doc_id(url: str) -> str:
+        """Mirror `firestore._source_doc_id` — deterministic id from a SHA-256 of the URL."""
+        import hashlib
 
-    def list_research_notes(curriculum_id):
-        """Fake for `firestore.list_research_notes` — all notes for a curriculum."""
-        notes = store.research_notes.get(curriculum_id, {})
-        return [{"id": nid, **data} for nid, data in notes.items()]
+        return hashlib.sha256(url.encode()).hexdigest()[:24]
+
+    def source_exists(curriculum_id, url):
+        """Fake for `firestore.source_exists` — True if a source doc exists for this URL."""
+        source_id = _source_doc_id(url)
+        return source_id in store.sources.get(curriculum_id, {})
+
+    def create_source(curriculum_id, fields):
+        """Fake for `firestore.create_source` — save/overwrite a source keyed by URL hash."""
+        source_id = _source_doc_id(fields["url"])
+        data = {**fields, "created_at": store.utcnow()}
+        store.sources.setdefault(curriculum_id, {})[source_id] = data
+        return source_id
+
+    def list_sources(curriculum_id):
+        """Fake for `firestore.list_sources` — all sources for a curriculum."""
+        sources = store.sources.get(curriculum_id, {})
+        return [{"id": sid, **data} for sid, data in sources.items()]
 
     def get_agent_state(curriculum_id):
         """Fake for `firestore.get_agent_state` — look up the persisted state, or None."""
@@ -335,6 +346,13 @@ def fake_fs(monkeypatch) -> FakeFirestore:
         msgs.append(record)
         return record
 
+    def update_message(conversation_id, message_id, fields):
+        """Fake for `firestore.update_message` — merge fields into an existing message in place."""
+        for msg in store.messages.get(conversation_id, []):
+            if msg["id"] == message_id:
+                msg.update(fields)
+                break
+
     def list_messages(conversation_id):
         """Fake for `firestore.list_messages` — all messages for a conversation, in order."""
         return list(store.messages.get(conversation_id, []))
@@ -367,8 +385,9 @@ def fake_fs(monkeypatch) -> FakeFirestore:
         "update_section": update_section,
         "get_plan": get_plan,
         "set_plan": set_plan,
-        "create_research_note": create_research_note,
-        "list_research_notes": list_research_notes,
+        "source_exists": source_exists,
+        "create_source": create_source,
+        "list_sources": list_sources,
         "get_agent_state": get_agent_state,
         "set_agent_state": set_agent_state,
         "create_conversation": create_conversation,
@@ -377,6 +396,7 @@ def fake_fs(monkeypatch) -> FakeFirestore:
         "update_conversation": update_conversation,
         "delete_conversation": delete_conversation,
         "append_message": append_message,
+        "update_message": update_message,
         "list_messages": list_messages,
         "list_recent_messages": list_recent_messages,
     }

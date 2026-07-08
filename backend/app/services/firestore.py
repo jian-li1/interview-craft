@@ -13,6 +13,7 @@ return another user's data. This mirrors spec 01 §5/§8.
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import os
 import uuid
 from functools import lru_cache
@@ -335,7 +336,7 @@ def delete_curriculum(curriculum_id: str) -> None:
     """Delete a curriculum and all known subcollections (best-effort recursive delete).
 
     Firestore does not cascade-delete subcollections automatically, so this walks each
-    known subcollection (`modules` with nested `sections`, `research`, `plan`, `state`)
+    known subcollection (`modules` with nested `sections`, `sources`, `plan`, `state`)
     and deletes documents individually before deleting the curriculum doc itself. No
     ownership check is performed here; callers must verify the requesting user owns the
     curriculum before calling this.
@@ -352,8 +353,8 @@ def delete_curriculum(curriculum_id: str) -> None:
             section_doc.reference.delete()
         module_doc.reference.delete()
 
-    for note_doc in curriculum_ref.collection("research").stream():
-        note_doc.reference.delete()
+    for source_doc in curriculum_ref.collection("sources").stream():
+        source_doc.reference.delete()
 
     curriculum_ref.collection("plan").document("main").delete()
     curriculum_ref.collection("state").document("main").delete()
@@ -542,53 +543,87 @@ def set_plan(curriculum_id: str, fields: dict[str, Any]) -> None:
 
 
 # --------------------------------------------------------------------------------------
-# curricula/{id}/research/{noteId}
+# curricula/{id}/sources/{sourceId}
 # --------------------------------------------------------------------------------------
 
 
-def _research_ref(curriculum_id: str):
-    """Return the collection reference for `curricula/{curriculum_id}/research`.
+def _source_doc_id(url: str) -> str:
+    """Derive a deterministic source document id from its URL.
+
+    Keying the doc id on a hash of the URL (rather than a random id) means the same
+    URL can never be saved twice for a curriculum — a second `save_sources` call for an
+    already-saved URL just overwrites the identical doc, so `source_exists` can cheaply
+    detect duplicates by id lookup alone.
+
+    Args:
+        url (str): The source URL to derive an id from.
+
+    Returns:
+        str: The first 24 hex characters of the URL's SHA-256 digest.
+    """
+    return hashlib.sha256(url.encode()).hexdigest()[:24]
+
+
+def _sources_ref(curriculum_id: str):
+    """Return the collection reference for `curricula/{curriculum_id}/sources`.
 
     Args:
         curriculum_id (str): The parent curriculum document id.
 
     Returns:
-        google.cloud.firestore.CollectionReference: Reference to the research notes
-            subcollection (pulled on demand by agent tools, never injected wholesale
-            into the LLM context — see the memory-layers note in the root CLAUDE.md).
+        google.cloud.firestore.CollectionReference: Reference to the sources
+            subcollection — pinned wholesale into the LLM's working memory every
+            iteration (see `memory/manager.py`'s `build_sources_memory_block`), unlike
+            the old research-notes subcollection which was pulled on demand via tools.
     """
     db = get_firestore_client()
-    return db.collection("curricula").document(curriculum_id).collection("research")
+    return db.collection("curricula").document(curriculum_id).collection("sources")
 
 
-def create_research_note(curriculum_id: str, fields: dict[str, Any]) -> str:
-    """Append a new research note (with citation/URL fields) to a curriculum.
+def source_exists(curriculum_id: str, url: str) -> bool:
+    """Check whether a source for `url` has already been saved for this curriculum.
 
     Args:
         curriculum_id (str): The parent curriculum document id.
-        fields (dict[str, Any]): Note fields to store (expected to include source URLs
-            per the citation requirements in the root CLAUDE.md).
+        url (str): The source URL to check.
 
     Returns:
-        str: The generated id of the newly created research note document.
+        bool: True if a source document already exists at the URL's derived doc id.
     """
-    note_id = new_id()
+    return _sources_ref(curriculum_id).document(_source_doc_id(url)).get().exists
+
+
+def create_source(curriculum_id: str, fields: dict[str, Any]) -> str:
+    """Save a source under its URL-derived doc id, stamping `created_at`.
+
+    Args:
+        curriculum_id (str): The parent curriculum document id.
+        fields (dict[str, Any]): Source fields to store; must include `url` (used to
+            derive the doc id). Also expected to include the agent-written `summary`
+            (the only part injected into working memory) alongside the full
+            `content_markdown` (persisted as citation evidence, retrievable by
+            re-fetching the URL).
+
+    Returns:
+        str: The generated (deterministic) id of the source document.
+    """
+    source_id = _source_doc_id(fields["url"])
     fields = {**fields, "created_at": utcnow()}
-    _research_ref(curriculum_id).document(note_id).set(fields)
-    return note_id
+    _sources_ref(curriculum_id).document(source_id).set(fields)
+    return source_id
 
 
-def list_research_notes(curriculum_id: str) -> list[dict[str, Any]]:
-    """List all research notes for a curriculum in creation order.
+def list_sources(curriculum_id: str) -> list[dict[str, Any]]:
+    """List all saved sources for a curriculum in creation order.
 
     Args:
         curriculum_id (str): The parent curriculum document id.
 
     Returns:
-        list[dict[str, Any]]: Research note documents (each with `id` included), ordered
-            by `created_at` ascending.
+        list[dict[str, Any]]: Source documents (each with `id` included), ordered by
+            `created_at` ascending.
     """
-    docs = _research_ref(curriculum_id).order_by("created_at").stream()
+    docs = _sources_ref(curriculum_id).order_by("created_at").stream()
     return [{"id": d.id, **(d.to_dict() or {})} for d in docs]
 
 

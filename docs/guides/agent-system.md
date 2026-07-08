@@ -60,13 +60,13 @@ tool allowlist (§3) restricting what the LLM can even attempt to call.
 | Phase | Prompt file | Curriculum status set | Key tools available |
 |---|---|---|---|
 | `intake` | `intake_phase.md` | `researching` (on creation) | always-available only |
-| `deep_research` | `research_phase.md` | `researching` | `web_search`, `fetch_url`, `save_research_note`, `search_research_notes`, `list_research_notes` |
-| `outline_planning` | `planning_phase.md` | `planning` | `search_research_notes`, `list_research_notes`, `propose_task_plan`, `get_task_plan` |
+| `deep_research` | `research_phase.md` | `researching` | `web_search`, `fetch_url`, `save_sources` |
+| `outline_planning` | `planning_phase.md` | `planning` | `web_search`, `fetch_url`, `save_sources`, `propose_task_plan`, `get_task_plan` |
 | `awaiting_approval` | `planning_phase.md` | `awaiting_approval` | `get_task_plan` only (research/writing tools hidden) |
-| `writing` | `writing_phase.md` | `writing` | research tools + `list_curriculum_structure`, `write_section`, `write_curriculum_overview`, `set_module_status`, `get_task_plan` |
-| `review` | `review_phase.md` | `reviewing` | `list_curriculum_structure`, `read_section`, `write_section`, `write_curriculum_overview`, `set_module_status`, `search_research_notes` |
+| `writing` | `writing_phase.md` | `writing` | `web_search`, `fetch_url`, `save_sources`, `list_curriculum_structure`, `write_section`, `write_curriculum_overview`, `set_module_status`, `get_task_plan` |
+| `review` | `review_phase.md` | `reviewing` | `list_curriculum_structure`, `read_section`, `write_section`, `write_curriculum_overview`, `set_module_status`, `fetch_url` (re-read saved sources only — no `web_search`/`save_sources`) |
 | `ready` | `refinement_phase.md` | `ready` | full refinement toolset (below) |
-| `refinement` | `refinement_phase.md` | `ready` | `list_curriculum_structure`, `read_section`, `update_section`, `write_section`, `search_research_notes`, `list_research_notes`, `web_search`, `fetch_url`, `save_research_note` |
+| `refinement` | `refinement_phase.md` | `ready` | `list_curriculum_structure`, `read_section`, `update_section`, `write_section`, `web_search`, `fetch_url`, `save_sources` |
 
 `_ALWAYS_AVAILABLE = ["get_user_profile", "update_scratchpad", "complete_phase",
 "request_user_input"]` is unioned into every phase's list in
@@ -205,18 +205,16 @@ Every tool subclasses `Tool` (`app/agent/tools/base.py`): a `name`, LLM-facing
 `Tool.json_schema()` calls `input_model.model_json_schema()` and strips the `title` key
 (providers don't need it). Tools receive an `AgentContext` (curriculum/conversation/
 owner ids, settings, both LLM providers, search provider, current phase, and an optional
-`emit`). All 17 concrete tools are instantiated once in `ToolRegistry.__init__`
+`emit`). All 16 concrete tools are instantiated once in `ToolRegistry.__init__`
 (`app/agent/tools/registry.py`) and looked up by name.
 
 ### Research tools (`tools/research.py`)
 
 | Tool | Input | What it does |
 |---|---|---|
-| `web_search` | `query`, `max_results=8 (1-20)` | Calls `ctx.search.search(...)`, returns `{results: [{title,url,snippet}], count}`. |
-| `fetch_url` | `url` | SSRF-guarded fetch (§ backend.md §10) + lightweight stdlib-`HTMLParser`-based text extraction (`_html_to_text`); the full page text is returned untruncated. Returns `{url, text, truncated, length_chars}` (`truncated` always `False`, kept for schema stability) or `{"error": ...}`. |
-| `save_research_note` | `query, url, title, summary, key_facts[], relevance` | Writes a `curricula/{id}/research/{noteId}` doc via `fs.create_research_note`. Returns `{note_id}`. |
-| `search_research_notes` | `keywords` | Keyword/substring scoring (`_score_note`: counts keyword occurrences across `summary + key_facts + relevance + title`, case-insensitive) over all notes for this curriculum, returns the top 15 with `count > 0`, sorted descending. |
-| `list_research_notes` | (none) | Compact `{id, title, url, relevance}` listing of every note — used for coverage orientation. |
+| `web_search` | `query`, `max_results=8 (1-20)` | Calls `ctx.search.search(...)`, returns `{query, results: [{title,url,snippet}], count}`. Snippets are relevance triage only — no page fetching happens here. |
+| `fetch_url` | `url` | SSRF-guarded fetch (§ backend.md §10) via `_fetch_page_markdown`: httpx GET, BeautifulSoup strip of script/style/noscript/svg, `<title>` extraction, `markdownify` HTML→Markdown, defensive 200k-char cap flagged via `content_truncated`. Returns `{url, title, content_markdown, content_truncated}` or `{"error": ...}`. Successful fetches populate `ctx.page_cache` (in-run url→page dict shared across iterations) — the cache is what `save_sources` reads from. After any batch with a successful fetch, the orchestrator runs `strip_stale_fetch_url_outputs(conversation_id)`: for each URL fetched more than once, only the LATEST fetch keeps its content; earlier ones are rewritten to `{url, note}` so a page never occupies context twice. |
+| `save_sources` | `query, sources: [{url, summary}]` | Pins read sources into working memory as agent-written summaries (≤5 sentences, ≤1500 chars each). Strictly enforces read-before-save: a URL absent from `ctx.page_cache` → status `not_fetched` (no silent re-fetch). Dedupes within the list and against `curricula/{id}/sources` (doc id = sha256(url) truncated → `duplicate_skipped`). Writes `{query,url,title,summary,content_markdown,content_truncated}` docs — the summary is what the memory manager injects; the full content is persisted evidence. Returns per-URL statuses + `saved_count`. |
 
 ### User-memory tool (`tools/user_memory.py`)
 
@@ -393,7 +391,21 @@ literal "no profile information available yet" fallback rather than an empty blo
 own rendered text — `base_system.md` instructs the model to trust this over anything
 implied by earlier chat history.
 
-### Layer 4 — Episodic memory (conversation)
+### Layer 4 — Saved research sources (summaries only)
+
+`build_sources_memory_block(sources)` renders every `curricula/{id}/sources` doc —
+loaded via `fs.list_sources(curriculum_id)` on each `build_context` call — into one
+compact system block: sources grouped by the search query that surfaced them, each as a
+bullet with its title, URL, and the agent's own ≤5-sentence `summary`. The block sits
+after working memory and before the compaction summary, and is omitted entirely when
+nothing has been saved yet. Full page content is deliberately NOT injected — an earlier
+design pinned full Markdown here and system-block growth blew past the token budget
+(compaction can't shrink system blocks, only conversation messages). Instead the
+summaries act as a permanent ledger; the agent calls `fetch_url` on a saved URL when it
+needs the full text back, and `strip_stale_fetch_url_outputs` guarantees each URL's
+content exists at most once in the conversation (latest fetch wins).
+
+### Layer 5 — Episodic memory (conversation)
 
 `build_context` loads the conversation doc for `summary`/`compacted_through`, then
 `fs.list_messages(conversation_id)` (all messages, ordered by `seq`). If
@@ -414,7 +426,7 @@ model-facing `output_full` to `TOOL_OUTPUT_PREVIEW_CHARS = 300` chars with an
 `"... [truncated]"` suffix (legacy records lacking `output_full` fall back to their
 `output_preview`). This runs on every `build_context` call regardless of whether
 compaction fires — it's a separate, cheaper lever for keeping context lean (full tool
-data always still lives in Firestore research notes / sections, retrievable via tools).
+data always still lives in Firestore saved sources / sections).
 
 `_message_to_chat_messages` converts each stored Firestore message dict into one or more
 `ChatMessage`s: a plain `user`/`assistant` message with no tool calls becomes one
@@ -423,15 +435,6 @@ data always still lives in Firestore research notes / sections, retrievable via 
 tool call — reconstructing the OpenAI-style multi-message tool-exchange shape that both
 provider adapters expect (Gemini's adapter further translates this into its own
 `function`-role content parts).
-
-### Layer 5 — Research memory (not injected)
-
-Research notes are deliberately **never** part of the assembled context — they're
-retrieved only on demand via `search_research_notes`/`list_research_notes`/
-`list_curriculum_structure`/`read_section`. This is the single biggest lever keeping
-context lean during `writing`, since a curriculum can accumulate a large, uncapped
-number of comprehensive notes (however many the topic's coverage areas warrant) and many
-sections whose combined text would otherwise dwarf the token budget.
 
 ### Auto-compaction algorithm (`memory/compaction.py` + the tail of `build_context`)
 
@@ -542,10 +545,10 @@ All eleven files live in `backend/app/agent/prompts/` and are treated as code (p
 |---|---|---|---|
 | `base_system.md` | 131 | Every phase (always layer 1) | Identity, the internal-reasoning ReAct convention, tool-error adaptation rules, tone, the "no fabricated citations" hard rule, the personalization mandate, phase discipline, HITL gate etiquette, scratchpad hygiene, tool-call efficiency guidance. |
 | `intake_phase.md` | 57 | `intake` | What to figure out (interview type, scope, constraints) from the user's message + profile; strict guidance on when to ask a clarifying question vs. proceed (err toward proceeding); curriculum naming; exit via `complete_phase("deep_research")`. |
-| `research_phase.md` | ~115 | `deep_research` | The 6 query-diversification coverage areas (format/stages; foundational skills; real sample questions; sample answers/frameworks; prep roadmaps; company/domain specifics); source-quality heuristics; mandatory fetch-before-note rule (snippets are relevance triage only; a failed fetch means skip the source, never note-from-snippet); note-taking standards (long, comprehensive, multi-paragraph summaries — roughly 150-500+ words — written from the fetched full text, sufficient that `writing` never needs to re-fetch); qualitative stop criteria (all relevant areas covered with fetched-and-distilled notes, diminishing returns — no numeric note-count target); anti-patterns (no duplicate notes, don't retry dead ends, don't pad or artificially cap count). |
+| `research_phase.md` | ~135 | `deep_research` | The search→fetch→read→save rhythm (`web_search` snippets are relevance triage only; `fetch_url` is the mandatory reading step for every keeper — re-fetching is safe since older copies are auto-stripped; `save_sources(query, sources)` pins a ≤5-sentence agent-written summary per keeper into working memory, full content re-fetchable on demand); summary-writing standards (name the page's concrete assets, not vague praise); the 6 query-diversification coverage areas (format/stages; foundational skills; real sample questions; sample answers/frameworks; prep roadmaps; company/domain specifics); fetch-vs-skip triage rules; source-quality heuristics judged from the FETCHED content; qualitative stop criteria (all relevant areas covered by saved sources, diminishing returns — no numeric source-count target; the saved-sources block is the coverage ledger); anti-patterns (never save unfetched URLs, no vague summaries, don't retry failed fetches, don't re-search covered topics). |
 | `planning_phase.md` | 109 | `outline_planning`, `awaiting_approval` | The beginner→interview-ready module arc (foundations → core skills → question drills → mock/strategy); no fixed module/section count — scope driven by researched material and user goals, timeline respected via priority ordering rather than a count cap; every module needs a sample-Q&A section; the binding task-plan id contract (`m{X}-s{Y}` ids, required `module_ref`, exactly one task per section, no overview task, `outline_markdown` must label every section `Section X.Y` for the server-side cross-check); how `propose_task_plan` behaves as a HITL gate (and rejects the whole plan on any contract violation); how to incorporate `modify` feedback on revision (read all feedback, targeted changes, top-up research if needed). |
-| `writing_phase.md` | 114 | `writing` | A strongly-worded "only write what was planned" subsection (module_id/section_id come verbatim from the approved plan, never invented; the overview is never a section); per-task workflow (search notes → optional targeted top-up research → `write_section`); markdown/Mermaid/table/callout formatting standards; sample-Q&A authoring standard (personalize to the user's actual background); 800-2000 word/section length guidance; "ground everything in research first" mandate; resumability via `update_scratchpad`; exit via `complete_phase("review")` when the task queue is empty — validated server-side against pending tasks/planned sections. |
-| `review_phase.md` | 56 | `review` | Structured quality pass over the whole draft: `list_curriculum_structure` then `read_section` module-by-module against a checklist (citations, diagrams, sample-Q&A coverage, 800-2000 word length, coherence, module status); fix failures directly via `write_section` overwrite (full corrected markdown + citations, never a fragment); `update_scratchpad` tracks which modules are already reviewed for resumability; `search_research_notes` only, no broad re-research; after all modules pass, `write_curriculum_overview`, then exit via `complete_phase("ready")` — validated server-side (all sections complete + overview written). |
+| `writing_phase.md` | 114 | `writing` | A strongly-worded "only write what was planned" subsection (module_id/section_id come verbatim from the approved plan, never invented; the overview is never a section); per-task workflow (scan saved-source summaries → `fetch_url` the relevant saved URLs for full content → further targeted `web_search`→`fetch_url`→`save_sources` top-ups explicitly encouraged when saved coverage is thin → `write_section`); markdown/Mermaid/table/callout formatting standards; sample-Q&A authoring standard (personalize to the user's actual background); 800-2000 word/section length guidance; "ground everything in research first" mandate; resumability via `update_scratchpad`; exit via `complete_phase("review")` when the task queue is empty — validated server-side against pending tasks/planned sections. |
+| `review_phase.md` | 56 | `review` | Structured quality pass over the whole draft: `list_curriculum_structure` then `read_section` module-by-module against a checklist (citations, diagrams, sample-Q&A coverage, 800-2000 word length, coherence, module status); fix failures directly via `write_section` overwrite (full corrected markdown + citations, never a fragment); `update_scratchpad` tracks which modules are already reviewed for resumability; the already-saved source pool is the only one (re-read via `fetch_url`, no new searching); after all modules pass, `write_curriculum_overview`, then exit via `complete_phase("ready")` — validated server-side (all sections complete + overview written). |
 | `refinement_phase.md` | 74 | `ready`, `refinement` | Three request types and how to handle each: edits (read-before-write, minimal targeted changes, preserve citations, `change_note`), explanations (teach in chat, never silently modify content), additions/deep-dives (scoped targeted research, not a full re-run of `deep_research`; new sections/modules must use the next sequential id — `s{K+1}`/`m{N+1}` — arbitrary slugs are rejected server-side). |
 | `citation_guidelines.md` | 79 | Every phase (always layer 3) | The exact `[^n]` marker mechanics, the `## Sources` footnote section format, the `citations` array contract (must mirror footnotes exactly), the hard "no fabricated URLs" rule, and a checklist of what does/doesn't need a citation. |
 | `visual_guidelines.md` | 92 | Every phase (always layer 4) | Mermaid syntax guardrails (always quote labels, avoid unquoted parens, cap ~25 nodes, short node IDs, one edge per line, always fence with `` ```mermaid ``); a note that `write_section`/`update_section` run an automatic syntax lint and reject broken diagrams (fix and resubmit); which diagram type for which content (flowchart default, sequenceDiagram for party interactions, mindmap for topic breakdowns); a worked correct example; `classDef`-based highlighting restrained to 2-3 accent classes; sparse, heading-only emoji usage. |
@@ -593,20 +596,24 @@ interview process now.") streams as `text_delta`s, persisted as one assistant me
 with the `complete_phase` tool call attached. Loop continues (no HITL gate fired).
 
 **4. `deep_research` phase runs for several iterations.** Each iteration: the model
-issues a batch of diverse `web_search` calls (covering the 6 coverage areas from
-`research_phase.md`) used only for relevance triage; every promising result then gets a
-mandatory `fetch_url` call (SSRF-guarded) — useful pages get distilled into
-`save_research_note` calls from the fetched full text (long, comprehensive summaries),
-each writing a `curricula/{curId}/research/{noteId}` doc; a failed fetch means the source
-is skipped rather than noted from its snippet. Periodically the model calls
-`list_research_notes` to self-check coverage. Once every relevant coverage area has
-solid fetched-and-distilled notes and new searches hit diminishing returns (no fixed
-note-count target), it calls `complete_phase("outline_planning",
+issues diverse `web_search` calls (covering the 6 coverage areas from
+`research_phase.md`) and triages the returned snippets; promising results get a
+mandatory `fetch_url` call (SSRF-guarded, full page as Markdown). After reading, the
+model calls `save_sources(query, sources=[{url, summary}, ...])` with its own
+≤5-sentence summary per keeper — each is written to a
+`curricula/{curId}/sources/{sourceId}` doc (URL-hash id, so duplicates are impossible;
+unfetched URLs are rejected with `not_fetched`) and its summary appears in the "Saved
+research sources" working-memory block from the next iteration on. Re-fetching any URL
+later auto-strips the older copy of its content from the conversation (latest fetch
+wins). The saved-sources block doubles as the coverage ledger. Once every relevant
+coverage area has solid saved sources and new searches hit diminishing returns (no
+fixed source-count target), it calls `complete_phase("outline_planning",
 ...)` → state `phase="outline_planning"`, curriculum `status="planning"`, WS
 `phase_change{label: "Planning the curriculum"}`.
 
-**5. `outline_planning` phase**: the model calls `search_research_notes`/
-`list_research_notes` to review its evidence base, drafts an outline sized to what the
+**5. `outline_planning` phase**: the model reviews its evidence base via the
+saved-source summaries in its working-memory block (re-fetching any URL it needs in
+full), drafts an outline sized to what the
 research and the user's goals warrant (no fixed module/section count) and personalized
 to the user's profile — one task per section, ids `m{X}-s{Y}`, `outline_markdown`
 labeling every section `Section X.Y: <title>` — then calls
@@ -636,8 +643,10 @@ sets state `phase="writing"`, `current_task_id` = first task, sets curriculum
 `progress` event when the plan has tasks) via the `emit` callable threaded into
 `_apply_plan_decision`. *Then* the iteration loop starts fresh in the `writing` phase.
 
-**7. `writing` phase runs one task at a time.** Per task: `search_research_notes` pulls
-relevant notes; occasionally a targeted top-up `web_search`+`save_research_note`; then
+**7. `writing` phase runs one task at a time.** Per task: the model scans its
+saved-source summaries, calls `fetch_url` on the saved URLs relevant to this section to
+pull their full content back into context, and — encouraged whenever saved coverage is
+thin — runs further targeted `web_search`→`fetch_url`→`save_sources` rounds; then
 `write_section(module_id, section_id, title, content_markdown, citations)`. Each
 `write_section` call first runs the target guard (`_validate_write_target`): in
 `writing`, `module_id`/`section_id` must already exist as a materialized stub, else an

@@ -8,7 +8,7 @@ correctly, while dropping everything it doesn't.
 This summary will be injected as a system-level "summary of earlier conversation" block
 in future turns, replacing the raw messages you're summarizing. Anything you drop is
 effectively forgotten by the agent (though the underlying curriculum data — sections,
-research notes, plan — remains safely in Firestore regardless, since this only
+saved research sources, plan — remains safely in Firestore regardless, since this only
 compacts the *conversation*, not the actual work product).
 
 ## What to preserve (be thorough here — err on the side of keeping detail)
@@ -29,10 +29,9 @@ compacts the *conversation*, not the actual work product).
 ## What to drop
 
 - Pleasantries, greetings, acknowledgments ("Sounds good!", "Thanks!").
-- Superseded tool call details — if a search was run and then the resulting note was
+- Superseded tool call details — if a search was run and its useful sources were then
   saved, you don't need to preserve the raw search results, just that research happened
-  and what it led to (which lives in research notes anyway, retrievable by the agent on
-  demand).
+  and what it led to (saved sources stay pinned in the agent's working memory anyway).
 - Verbose intermediate reasoning that didn't lead anywhere or was later corrected.
 - Full text of long tool outputs — reference that the tool was called and its gist, not
   its full payload.
