@@ -439,7 +439,10 @@ provider adapters expect (Gemini's adapter further translates this into its own
 ### Auto-compaction algorithm (`memory/compaction.py` + the tail of `build_context`)
 
 After assembling the full message list once, `build_context` estimates its token count
-(`estimate_tokens`, §below) over the joined content of every assembled `ChatMessage`.
+(`estimate_tokens`, §below) over every assembled `ChatMessage`, via `_chat_message_text`
+— `content` plus, for assistant messages with `tool_calls`, each call's serialized
+`function.name`/`function.arguments` (a separate dataclass field from `content`, easy to
+undercount if you only join `.content`).
 If `tokens_before > COMPACTION_TRIGGER_FRACTION (0.8) * settings.context_token_limit`
 **and** a `small_llm` was passed **and** there are more than 2 candidate messages:
 

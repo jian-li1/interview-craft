@@ -318,7 +318,7 @@ class MemoryManager:
             return chat_messages
 
         assembled = _assemble(candidate_messages)
-        total_text = "\n".join(m.content for m in assembled if m.content)
+        total_text = "\n".join(t for m in assembled if (t := _chat_message_text(m)))
         tokens_before = estimate_tokens(total_text)
         limit = self._settings.context_token_limit
 
@@ -352,7 +352,9 @@ class MemoryManager:
                 system_blocks = system_blocks[:-1] if existing_summary else system_blocks
                 system_blocks.append(f"Summary of earlier conversation:\n\n{new_summary}")
                 assembled = _assemble(remaining)
-                tokens_after = estimate_tokens("\n".join(m.content for m in assembled if m.content))
+                tokens_after = estimate_tokens(
+                    "\n".join(t for m in assembled if (t := _chat_message_text(m)))
+                )
                 if on_compaction:
                     preview = new_summary[:300]
                     await on_compaction(preview, tokens_before, tokens_after)
@@ -360,6 +362,28 @@ class MemoryManager:
 
         fs.update_conversation(conversation_id, {"token_estimate": tokens_before})
         return assembled
+
+
+def _chat_message_text(m: ChatMessage) -> str:
+    """Return all LLM-bound text of a `ChatMessage` for token estimation.
+
+    `m.content` alone misses assistant `tool_calls` — the function name + JSON
+    arguments are a separate dataclass field, but they're still serialized and sent to
+    the provider, so omitting them understates `token_estimate` (notably for
+    multi-tool-call turns with large arguments, e.g. `save_sources`).
+
+    Args:
+        m (ChatMessage): The message to extract text from.
+
+    Returns:
+        str: `content` plus the serialized name/arguments of each tool call, newline-joined.
+    """
+    parts = [m.content] if m.content else []
+    for tc in m.tool_calls or []:
+        func = tc.get("function", {})
+        parts.append(func.get("name", ""))
+        parts.append(func.get("arguments", ""))
+    return "\n".join(p for p in parts if p)
 
 
 def _message_to_chat_messages(msg: dict[str, Any]) -> list[ChatMessage]:
