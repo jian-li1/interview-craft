@@ -226,6 +226,7 @@ on change or unmount) and contains the **entire WS-event-to-store dispatch table
 | `phase_change` | `setPhase(phase, label)` | |
 | `progress` | `setProgress(completed, total, detail)` | |
 | `plan_proposed` | `proposePlan(plan)` | sets `plan`, `planAwaitingDecision: true` |
+| `user_input_requested` | `askQuestion(question, options)` | sets `pendingQuestion: { question, options }` |
 | `curriculum_updated` | `useCurriculumStore.refetch({scope, moduleId, sectionId})` | a *different* store — refetches the full curriculum from REST |
 | `compaction` | none (chat store untouched) | `toast.info(...)` only |
 | `agent_done` | `setAgentRunning(false)` | |
@@ -248,6 +249,7 @@ phase, phaseLabel: string | null
 progress: { completed, total, detail } | null
 plan: ProposedPlan | null            // { outline_markdown, tasks, version }
 planAwaitingDecision: boolean
+pendingQuestion: PendingQuestion | null  // { question, options } — request_user_input HITL gate
 agentRunning: boolean
 activity: ActivityItem[]             // capped at 30, most-recent-first
 connectionState: "idle" | "connecting" | "open" | "reconnecting" | "closed"
@@ -260,7 +262,9 @@ own message arrives), `hydrateHistory(messages)` (maps `MessageOut[]` from `GET
 repopulates the chat on page load/refresh), `resolvePlan()` (clears
 `planAwaitingDecision` when the user submits a decision — a store-local action, **not**
 triggered by any WS event, since the actual pause-lift only happens once the backend
-starts a new turn), `reset()` (clears everything except the ids), `setConnectionState`.
+starts a new turn), `resolveQuestion()` (same pattern as `resolvePlan()`, clears
+`pendingQuestion` once the user answers the question card), `reset()` (clears everything
+except the ids), `setConnectionState`.
 
 **`stores/useCurriculumStore.ts`** shape: `{ curriculum: CurriculumFull | null, currentId:
 string | null, loading, error, lastUpdatedScope: {scope, moduleId?, sectionId?} | null }`.
@@ -283,11 +287,12 @@ can arrive during the initial fetch. `CurriculumPanel` resets its local `view`/
   historyError, prefillText?, onPrefillConsumed? }`. Manages the composer draft and
   auto-scroll (tracks whether the user scrolled up more than 80px from the bottom to
   decide whether to show `ScrollToBottomPill` instead of auto-scrolling).
-  `composerDisabled = planAwaitingDecision || connectionState !== "open"`. Render order:
-  `PhaseBanner` → a reconnecting banner (if `connectionState === "reconnecting"`) →
-  message list (empty/loading/error states, else an `AnimatePresence` list of
-  `MessageBubble`s) → `PlanApprovalCard` (when a plan awaits a decision) →
-  `ScrollToBottomPill` → `Composer`.
+  `composerDisabled = planAwaitingDecision || pendingQuestion !== null ||
+  connectionState !== "open"`. Render order: `PhaseBanner` → a reconnecting banner (if
+  `connectionState === "reconnecting"`) → message list (empty/loading/error states, else
+  an `AnimatePresence` list of `MessageBubble`s) → `PlanApprovalCard` (when a plan awaits
+  a decision) → `QuestionCard` (when a `request_user_input` gate awaits an answer and no
+  plan card is showing) → `ScrollToBottomPill` → `Composer`.
 - **`Composer.tsx`** — auto-growing textarea (height capped at 200px), Enter sends
   (Shift+Enter inserts a newline), swaps to a stop button while `running`.
 - **`MessageBubble.tsx`** (`memo`-wrapped) — renders an avatar, `ReasoningBlock` (if
@@ -303,6 +308,15 @@ can arrive during the initial fetch. `CurriculumPanel` resets its local `view`/
   a task checklist (checkmark when `status === "done"`); toggles between an idle
   [Approve & build]/[Request changes] row and a feedback-textarea row, calling
   `onDecision(decision, feedback)` which the page wires to `socket.sendPlanDecision(...)`.
+- **`QuestionCard.tsx`** — same visual language as `PlanApprovalCard` (container styling,
+  entrance animation). Renders the question text, quick-pick option buttons (only if
+  `options` is non-empty — clicking one calls `onAnswer(option)` immediately), and —
+  always shown, even alongside options — a free-text `Input` + send button below them
+  (Enter or the button submits, disabled while empty/whitespace). `ChatPanel` wires
+  `onAnswer` to send the text through the same path as a normal composer message
+  (`addUserMessage` + `sendUserMessage` + `setAgentRunning(true)`) then calls
+  `resolveQuestion()` to clear the card locally — there's no dedicated WS frame for the
+  answer.
 - **`ReasoningBlock.tsx`** — collapsible, collapsed by default (`open` starts false,
   matching the tool-call cards). Header reads "Thinking…" (shimmer) while streaming or
   "Thought process" once done; renders `null` if there's no reasoning text.
@@ -436,7 +450,7 @@ API namespaces (all in `lib/api.ts`): `authApi` (`loginWithGoogle`, `logout`, `m
 
 `lib/types.ts` is a hand-maintained TypeScript mirror of every shape in spec 01 —
 notably the `ClientEvent` union (`user_message | plan_decision | stop | ping`) and the
-full `ServerEvent` union (all 14 event types) match the backend's WS protocol exactly.
+full `ServerEvent` union (all 15 event types) match the backend's WS protocol exactly.
 
 `lib/env.ts`'s `readEnv(name, fallback)` exposes exactly three values:
 `apiBaseUrl` (`NEXT_PUBLIC_API_BASE_URL`, default `http://localhost:8000`), `wsBaseUrl`

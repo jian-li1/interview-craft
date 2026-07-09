@@ -205,6 +205,18 @@ async def ws_chat(ws: WebSocket, conversation_id: str) -> None:
                     }
                 )
 
+        # Replay a pending request_user_input question card too, so a page refresh
+        # mid-HITL-pause restores it instead of leaving the user stuck with no prompt.
+        pending_question = (state or {}).get("pending_user_input")
+        if pending_question:
+            await emit(
+                {
+                    "type": "user_input_requested",
+                    "question": pending_question.get("question"),
+                    "options": pending_question.get("options"),
+                }
+            )
+
     try:
         while True:
             raw = await ws.receive_text()

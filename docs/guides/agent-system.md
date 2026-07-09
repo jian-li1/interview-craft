@@ -38,8 +38,10 @@ stateDiagram-v2
     intake --> deep_research: complete_phase
     deep_research --> outline_planning: complete_phase
     outline_planning --> awaiting_approval: propose_task_plan HITL gate
-    awaiting_approval --> outline_planning: plan_decision equals modify
+    outline_planning --> deep_research: complete_phase, gap found mid-revision
     awaiting_approval --> writing: plan_decision equals approve
+    awaiting_approval --> outline_planning: complete_phase, after plan_decision equals modify
+    awaiting_approval --> deep_research: complete_phase, after plan_decision equals modify
     writing --> review: complete_phase, task queue empty
     review --> ready: complete_phase
     ready --> refinement: complete_phase
@@ -49,10 +51,13 @@ stateDiagram-v2
 This exact graph is enforced in code, not just convention: `CompletePhaseTool`
 (`app/agent/tools/control.py`) has a `_VALID_TRANSITIONS` map and rejects (returns an
 `{"error": ...}` observation, doesn't crash) any `complete_phase` call to a phase not
-listed as reachable from the current one. The `awaiting_approval → writing` and
-`awaiting_approval → outline_planning` edges are **not** driven by `complete_phase` at
-all — they're driven by the orchestrator's `_apply_plan_decision` handling an incoming
-`plan_decision` WS frame (see §7).
+listed as reachable from the current one. The `awaiting_approval → writing` edge is
+**not** driven by `complete_phase` at all — it's driven by the orchestrator's
+`_apply_plan_decision` handling an incoming `plan_decision` WS frame directly (see §7).
+On a `modify` decision, `_apply_plan_decision` only records feedback and leaves the
+phase at `awaiting_approval`; the `awaiting_approval → outline_planning` and
+`awaiting_approval → deep_research` edges are then driven by the agent's own
+`complete_phase` call on the next iteration, same as any other transition.
 
 Each phase has a dedicated instruction file composed into the system prompt (§6) and a
 tool allowlist (§3) restricting what the LLM can even attempt to call.
@@ -314,11 +319,15 @@ are not tools themselves — they're plain functions the tools above call.
 ### Control tools (`tools/control.py`)
 
 - **`request_user_input`** (HITL gate) — `question`, optional `options: list[str]`.
-  Notably this tool does **not** touch Firestore or emit a dedicated WS event at all —
-  it just returns `{"status": "awaiting_user_input", "question", "options",
-  "_hitl_gate": True}`. The question is expected to already be present as the model's
-  own visible chat text (streamed via `text_delta` in the same turn); the frontend is
-  responsible for rendering the *message* as a question card, not this tool's output.
+  Persists `{"question", "options"}` as `pending_user_input` on the state doc (so a
+  reconnecting client can restore the card — see `app/ws/chat.py`'s resume snapshot) and
+  returns `{"status": "awaiting_user_input", "question", "options", "_hitl_gate": True,
+  "_ws_event": {"type": "user_input_requested", "question", "options"}}`. The
+  orchestrator pops `_ws_event` and forwards it (same mechanism as `complete_phase`'s
+  `phase_change`), so the frontend renders a dedicated question card from that event
+  rather than inferring it from the model's chat text. `pending_user_input` is cleared
+  by the orchestrator (`app/agent/orchestrator.py`, `_run_turn_inner`) the moment the
+  next plain-`str` `user_input` arrives — see §7.
 - **`update_scratchpad`** — overwrites `curricula/{id}/state/main.scratchpad` in one
   shot (not append — full overwrite each time, so the model must include everything
   worth keeping, not just a delta).
@@ -518,15 +527,17 @@ runs synchronously before the iteration loop starts:
   `writing`, and instructing the model to begin the first task immediately without
   asking for confirmation again — this is what lets the very next iteration's model turn
   see that the approval already happened instead of re-asking the user.
-- **`modify`**: appends `feedback` (if given) to the plan's `user_feedback` list, sets
-  `plan.status = "revising"`, sets agent state back to `phase="outline_planning"`, sets
-  curriculum `status="planning"`, emits a live `phase_change{phase: "outline_planning"}`
-  WS event, then appends a synthetic `role:"system"` message restating the user's
-  feedback text and instructing the model to revise the outline and re-propose via
-  `propose_task_plan`. The next iteration's `outline_planning` prompt (which includes the
-  full accumulated `user_feedback` via working memory / `get_task_plan`, plus this system
-  message) guides the model to revise and call `propose_task_plan` again (which
-  auto-increments `version`).
+- **`modify`**: appends `feedback` (if given) to the plan's `user_feedback` list and sets
+  `plan.status = "revising"` — that's it for state mutation; the phase stays
+  `awaiting_approval` and no `phase_change` is emitted here. It then appends a synthetic
+  `role:"system"` message restating the user's feedback text and instructing the model
+  that it is still in `awaiting_approval` and MUST now call `complete_phase` itself,
+  choosing `deep_research` if the feedback needs topics/depth its saved sources don't
+  cover, else `outline_planning`, and then revise the outline and re-propose via
+  `propose_task_plan`. The next iteration's prompt (whichever phase the model picked,
+  including the full accumulated `user_feedback` via working memory / `get_task_plan`,
+  plus this system message) guides the model to call `complete_phase`, do any needed
+  research, revise, and call `propose_task_plan` again (which auto-increments `version`).
 
 Both branches take `conversation_id` (threaded through from `_run_turn_inner`) precisely
 so `_apply_plan_decision` can append these messages — the model has no other way to know
@@ -534,10 +545,16 @@ a plan decision was applied, since `plan_decision` frames don't produce an ordin
 message of their own.
 
 **Resuming a clarifying question**: the client just sends an ordinary
-`{"type": "user_message", "content": "..."}` frame with the user's answer — there's no
+`{"type": "user_message", "content": "..."}` frame with the user's answer (either a
+clicked quick-pick option's text or free text from the question card) — there's no
 special decision type for this gate; it's handled identically to any other chat turn,
 relying on the working-memory/conversation-history context (including the assistant's
-own question text) for the model to understand what it's responding to.
+own question text) for the model to understand what it's responding to. The one extra
+side effect: because `user_input` is a plain `str` here, `_run_turn_inner` also clears
+`pending_user_input` on the state doc (via `fs.set_agent_state(curriculum_id,
+{"pending_user_input": None})`) right after appending the message — this is what makes
+the question card disappear from a reconnecting client's resume snapshot once it's been
+answered.
 
 ## 8. Prompt files — what each does and how they compose
 
@@ -549,7 +566,7 @@ All eleven files live in `backend/app/agent/prompts/` and are treated as code (p
 | `base_system.md` | 131 | Every phase (always layer 1) | Identity, the internal-reasoning ReAct convention, tool-error adaptation rules, tone, the "no fabricated citations" hard rule, the personalization mandate, phase discipline, HITL gate etiquette, scratchpad hygiene, tool-call efficiency guidance. |
 | `intake_phase.md` | 57 | `intake` | What to figure out (interview type, scope, constraints) from the user's message + profile; strict guidance on when to ask a clarifying question vs. proceed (err toward proceeding); curriculum naming; exit via `complete_phase("deep_research")`. |
 | `research_phase.md` | ~135 | `deep_research` | The search→fetch→read→save rhythm (`web_search` snippets are relevance triage only; `fetch_url` is the mandatory reading step for every keeper — re-fetching is safe since older copies are auto-stripped; `save_sources(query, sources)` pins a ≤5-sentence agent-written summary per keeper into working memory, full content re-fetchable on demand); summary-writing standards (name the page's concrete assets, not vague praise); the 6 query-diversification coverage areas (format/stages; foundational skills; real sample questions; sample answers/frameworks; prep roadmaps; company/domain specifics); fetch-vs-skip triage rules; source-quality heuristics judged from the FETCHED content; qualitative stop criteria (all relevant areas covered by saved sources, diminishing returns — no numeric source-count target; the saved-sources block is the coverage ledger); anti-patterns (never save unfetched URLs, no vague summaries, don't retry failed fetches, don't re-search covered topics). |
-| `planning_phase.md` | 109 | `outline_planning`, `awaiting_approval` | The beginner→interview-ready module arc (foundations → core skills → question drills → mock/strategy); no fixed module/section count — scope driven by researched material and user goals, timeline respected via priority ordering rather than a count cap; every module needs a sample-Q&A section; the binding task-plan id contract (`m{X}-s{Y}` ids, required `module_ref`, exactly one task per section, no overview task, `outline_markdown` must label every section `Section X.Y` for the server-side cross-check); how `propose_task_plan` behaves as a HITL gate (and rejects the whole plan on any contract violation); how to incorporate `modify` feedback on revision (read all feedback, targeted changes, top-up research if needed). |
+| `planning_phase.md` | 109 | `outline_planning`, `awaiting_approval` | The beginner→interview-ready module arc (foundations → core skills → question drills → mock/strategy); no fixed module/section count — scope driven by researched material and user goals, timeline respected via priority ordering rather than a count cap; every module needs a sample-Q&A section; the binding task-plan id contract (`m{X}-s{Y}` ids, required `module_ref`, exactly one task per section, no overview task, `outline_markdown` must label every section `Section X.Y` for the server-side cross-check); how `propose_task_plan` behaves as a HITL gate (and rejects the whole plan on any contract violation); how to incorporate `modify` feedback on revision (choose `outline_planning` vs. `deep_research` via `complete_phase` first, then read all feedback, targeted changes, top-up research if needed). |
 | `writing_phase.md` | 114 | `writing` | A strongly-worded "only write what was planned" subsection (module_id/section_id come verbatim from the approved plan, never invented; the overview is never a section); per-task workflow (scan saved-source summaries → `fetch_url` the relevant saved URLs for full content → further targeted `web_search`→`fetch_url`→`save_sources` top-ups explicitly encouraged when saved coverage is thin → `write_section`); markdown/Mermaid/table/callout formatting standards; sample-Q&A authoring standard (personalize to the user's actual background); 800-2000 word/section length guidance; "ground everything in research first" mandate; resumability via `update_scratchpad`; exit via `complete_phase("review")` when the task queue is empty — validated server-side against pending tasks/planned sections. |
 | `review_phase.md` | 56 | `review` | Structured quality pass over the whole draft: `list_curriculum_structure` then `read_section` module-by-module against a checklist (citations, diagrams, sample-Q&A coverage, 800-2000 word length, coherence, module status); fix failures directly via `write_section` overwrite (full corrected markdown + citations, never a fragment); `update_scratchpad` tracks which modules are already reviewed for resumability; the already-saved source pool is the only one (re-read via `fetch_url`, no new searching); after all modules pass, `write_curriculum_overview`, then exit via `complete_phase("ready")` — validated server-side (all sections complete + overview written). |
 | `refinement_phase.md` | 74 | `ready`, `refinement` | Three request types and how to handle each: edits (read-before-write, minimal targeted changes, preserve citations, `change_note`), explanations (teach in chat, never silently modify content), additions/deep-dives (scoped targeted research, not a full re-run of `deep_research`; new sections/modules must use the next sequential id — `s{K+1}`/`m{N+1}` — arbitrary slugs are rejected server-side). |

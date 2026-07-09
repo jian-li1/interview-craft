@@ -13,11 +13,13 @@ from app.services import firestore as fs
 _VALID_PHASES = set(get_args(AgentPhase))
 
 # Allowed forward/backward transitions, mirroring the state machine in spec 02 §2.
+# outline_planning and awaiting_approval may both bounce back to deep_research: after a
+# plan "modify" decision the agent picks its own path, and a gap can also surface mid-revision.
 _VALID_TRANSITIONS: dict[str, set[str]] = {
     "intake": {"deep_research"},
     "deep_research": {"outline_planning"},
-    "outline_planning": {"awaiting_approval", "outline_planning"},
-    "awaiting_approval": {"writing", "outline_planning"},
+    "outline_planning": {"awaiting_approval", "outline_planning", "deep_research"},
+    "awaiting_approval": {"writing", "outline_planning", "deep_research"},
     "writing": {"review"},
     "review": {"ready"},
     "ready": {"refinement"},
@@ -73,17 +75,29 @@ class RequestUserInputTool(Tool):
 
         Returns:
             dict[str, Any]: `{"status": "awaiting_user_input", "question", "options",
-                "_hitl_gate": True}` — the `_hitl_gate` flag causes the orchestrator to
-                pause the loop after this call.
+                "_hitl_gate": True, "_ws_event": {...}}` — the `_hitl_gate` flag causes
+                the orchestrator to pause the loop after this call, and `_ws_event` is a
+                `user_input_requested` event (popped and forwarded by the orchestrator)
+                that renders the question card client-side.
         """
-        # No WS event is emitted directly by this tool; the orchestrator streams the
-        # question as ordinary assistant text (rendered as a question card by the
-        # frontend based on message shape) and pauses the loop via the `_hitl_gate` flag.
+        # Persist the pending question so a reconnecting client can restore the card
+        # (replayed by app/ws/chat.py's resume snapshot); cleared by the orchestrator
+        # once the next ordinary user_message frame answers/dismisses it.
+        fs.set_agent_state(
+            ctx.curriculum_id, {"pending_user_input": {"question": input.question, "options": input.options}}
+        )
         return {
             "status": "awaiting_user_input",
             "question": input.question,
             "options": input.options,
             "_hitl_gate": True,
+            # Dedicated WS event so the frontend renders an interactive question card
+            # instead of the question being buried in the generic tool_call_result JSON.
+            "_ws_event": {
+                "type": "user_input_requested",
+                "question": input.question,
+                "options": input.options,
+            },
         }
 
 
@@ -139,7 +153,11 @@ class CompletePhaseTool(Tool):
         "met: writing->review requires every planned task done and no section left 'planned' "
         "(finish writing every planned section via write_section first); review->ready requires "
         "every section 'complete' and the curriculum overview written (via "
-        "write_curriculum_overview)."
+        "write_curriculum_overview). Revision loop-backs are also allowed: from "
+        "awaiting_approval, after the user requests plan changes, you may transition back to "
+        "outline_planning to revise the plan directly, or to deep_research to gather more "
+        "sources first; outline_planning may also drop back to deep_research if a gap becomes "
+        "apparent mid-revision."
     )
     input_model = CompletePhaseInput
 

@@ -116,6 +116,18 @@ queries and summaries to see which areas are covered and which are thin. If cove
 some area is thin, run 1-2 more targeted queries for just that area rather than broadly
 re-searching everything.
 
+## Re-entering this phase to address plan feedback
+
+If you land back here from `awaiting_approval` or `outline_planning` because the user
+requested plan changes that need real research, do NOT redo the full 6-area sweep — your
+"Saved research sources" working-memory block still holds everything from the first
+pass. Instead:
+- Run only targeted queries for what the feedback actually asks for (e.g. a new topic,
+  more depth on one area) — not a broad re-search of areas already covered.
+- Save the keepers with summaries as usual (`save_sources`, same quality bar as above).
+- Once the gap is covered, call `complete_phase("outline_planning")` and re-propose the
+  revised plan — don't linger here once the specific feedback is addressed.
+
 ## Anti-patterns to avoid
 
 - Don't save a source you never fetched — `save_sources` rejects it, and a snippet

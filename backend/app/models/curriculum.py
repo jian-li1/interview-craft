@@ -12,7 +12,7 @@ Mirrors the Firestore collections described in docs/specs/01-architecture-and-co
 from __future__ import annotations
 
 import datetime as dt
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import Field
 
@@ -296,6 +296,9 @@ class AgentState(ApiModel):
         current_task_id (str | None): Id of the task currently being worked on, if any.
         scratchpad (str): Free-text working memory the agent uses between iterations.
         iteration_count (int): Number of ReAct loop iterations executed so far.
+        pending_user_input (dict[str, Any] | None): Pending `request_user_input`
+            question/options awaiting the user's answer, replayed to a reconnecting
+            client and cleared on the next `user_message` frame.
         updated_at (dt.datetime | None): Timestamp of the most recent state update.
     """
 
@@ -304,4 +307,8 @@ class AgentState(ApiModel):
     current_task_id: str | None = None
     scratchpad: str = ""
     iteration_count: int = 0
+    # {"question": str, "options": list[str] | None} or None; kept as a loose dict
+    # (mirrors RequestUserInputInput) rather than a typed sub-model since it's only
+    # ever read back verbatim for WS replay, never validated/consumed structurally here.
+    pending_user_input: dict[str, Any] | None = None
     updated_at: dt.datetime | None = None

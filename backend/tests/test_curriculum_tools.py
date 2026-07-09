@@ -5,7 +5,9 @@ complete_phase persist progress onto the curriculum doc for REST readers;
 write_section/update_section reject broken Mermaid diagrams at write time;
 write_section's target guard rejects invented module/section ids in writing/review and
 enforces next-sequential-id creation in refinement; complete_phase's writing->review and
-review->ready completeness gates block premature phase exits.
+review->ready completeness gates block premature phase exits; complete_phase also allows
+the plan-revision loop-backs awaiting_approval->deep_research and
+outline_planning->deep_research.
 """
 
 from __future__ import annotations
@@ -257,6 +259,55 @@ async def test_complete_phase_review_to_ready_sets_status_and_progress(fake_fs):
     # completed_tasks/total_tasks carry over untouched from the pre-existing progress blob.
     assert updated_curriculum["progress"]["completed_tasks"] == 3
     assert updated_curriculum["progress"]["total_tasks"] == 3
+
+
+@pytest.mark.asyncio
+async def test_complete_phase_awaiting_approval_to_deep_research_allowed(fake_fs):
+    """complete_phase("deep_research") from "awaiting_approval" must succeed — the
+    agent's own revision-loop-back path when a plan-modify request needs new research.
+    """
+    conv = fake_fs.fs.create_conversation("uid1", "New conversation", curriculum_id=None)
+    curriculum = fake_fs.fs.create_curriculum(
+        "uid1", "prep for a system design interview", "prep for a system design interview", conversation_id=conv["id"]
+    )
+    fake_fs.fs.update_conversation(conv["id"], {"curriculum_id": curriculum["id"]})
+
+    tool = CompletePhaseTool()
+    ctx = _make_ctx(curriculum["id"], conv["id"])
+    ctx.phase = "awaiting_approval"  # transition validation requires this as the current phase
+
+    result = await tool.execute(
+        CompletePhaseInput(next_phase="deep_research", reason="feedback needs new topics"), ctx
+    )
+
+    assert result["status"] == "transitioned"
+    assert result["_ws_event"] == {"type": "phase_change", "phase": "deep_research", "label": "Researching"}
+    updated_curriculum = fake_fs.fs.get_curriculum(curriculum["id"])
+    assert updated_curriculum["status"] == "researching"
+
+
+@pytest.mark.asyncio
+async def test_complete_phase_outline_planning_to_deep_research_allowed(fake_fs):
+    """complete_phase("deep_research") from "outline_planning" must succeed — allows
+    bouncing back to research if a gap becomes apparent mid-revision.
+    """
+    conv = fake_fs.fs.create_conversation("uid1", "New conversation", curriculum_id=None)
+    curriculum = fake_fs.fs.create_curriculum(
+        "uid1", "prep for a system design interview", "prep for a system design interview", conversation_id=conv["id"]
+    )
+    fake_fs.fs.update_conversation(conv["id"], {"curriculum_id": curriculum["id"]})
+
+    tool = CompletePhaseTool()
+    ctx = _make_ctx(curriculum["id"], conv["id"])
+    ctx.phase = "outline_planning"  # transition validation requires this as the current phase
+
+    result = await tool.execute(
+        CompletePhaseInput(next_phase="deep_research", reason="gap surfaced mid-revision"), ctx
+    )
+
+    assert result["status"] == "transitioned"
+    updated_curriculum = fake_fs.fs.get_curriculum(curriculum["id"])
+    assert updated_curriculum["status"] == "researching"
 
 
 @pytest.mark.asyncio

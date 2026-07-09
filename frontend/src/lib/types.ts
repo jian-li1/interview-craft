@@ -335,6 +335,17 @@ export interface CurriculumUpdatedEvent {
   section_id?: string;
 }
 
+/**
+ * Emitted by the `request_user_input` HITL gate tool (via its `_ws_event`) and
+ * replayed in the reconnect snapshot when the agent state doc has a truthy
+ * `pending_user_input`. `options` is null/empty when only free-text is offered.
+ */
+export interface UserInputRequestedEvent {
+  type: "user_input_requested";
+  question: string;
+  options: string[] | null;
+}
+
 export interface CompactionEvent {
   type: "compaction";
   summary_preview: string;
@@ -373,6 +384,7 @@ export type ServerEvent =
   | PhaseChangeEvent
   | ProgressEvent
   | PlanProposedEvent
+  | UserInputRequestedEvent
   | CurriculumUpdatedEvent
   | CompactionEvent
   | AgentDoneEvent

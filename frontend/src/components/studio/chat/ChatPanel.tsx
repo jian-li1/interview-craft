@@ -6,6 +6,7 @@ import { Loader2, MessageCircle, WifiOff } from "lucide-react";
 import { MessageBubble } from "@/components/studio/chat/MessageBubble";
 import { PhaseBanner } from "@/components/studio/chat/PhaseBanner";
 import { PlanApprovalCard } from "@/components/studio/chat/PlanApprovalCard";
+import { QuestionCard } from "@/components/studio/chat/QuestionCard";
 import { Composer } from "@/components/studio/chat/Composer";
 import { ScrollToBottomPill } from "@/components/studio/chat/ScrollToBottomPill";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -32,6 +33,8 @@ interface ChatPanelProps {
  *    (the native reasoning stream) and `ToolCallGroup`/`ToolCallCard`.
  *  - `PlanApprovalCard` — rendered inline in the transcript when a HITL plan
  *    is awaiting approve/modify.
+ *  - `QuestionCard` — rendered inline in the transcript when a
+ *    `request_user_input` HITL gate is awaiting an answer.
  *  - `ScrollToBottomPill` — floating affordance shown once the user has
  *    scrolled away from the bottom while new messages keep arriving.
  *  - `Composer` — the input box pinned to the bottom.
@@ -55,10 +58,12 @@ export function ChatPanel({
   const progress = useChatStore((s) => s.progress);
   const plan = useChatStore((s) => s.plan);
   const planAwaitingDecision = useChatStore((s) => s.planAwaitingDecision);
+  const pendingQuestion = useChatStore((s) => s.pendingQuestion);
   const agentRunning = useChatStore((s) => s.agentRunning);
   const connectionState = useChatStore((s) => s.connectionState);
   const addUserMessage = useChatStore((s) => s.addUserMessage);
   const resolvePlan = useChatStore((s) => s.resolvePlan);
+  const resolveQuestion = useChatStore((s) => s.resolveQuestion);
   const setAgentRunning = useChatStore((s) => s.setAgentRunning);
 
   const [draft, setDraft] = useState("");
@@ -140,10 +145,30 @@ export function ChatPanel({
     resolvePlan();
   }
 
-  // The composer is disabled while a plan decision is pending (the user must
-  // resolve the plan card first) or while the socket isn't open (nothing to
-  // send to).
-  const composerDisabled = planAwaitingDecision || connectionState !== "open";
+  // Answers a pending request_user_input question via the exact same path as a
+  // normal composer message — there is no dedicated "answer" WS frame type, the
+  // orchestrator just treats the next user_message as the reply (see backend
+  // app/agent/CLAUDE.md "HITL gate mechanics"). Clears the card immediately
+  // rather than waiting on a round-trip, mirroring handlePlanDecision.
+  function handleQuestionAnswer(text: string) {
+    addUserMessage(text);
+    setAgentRunning(true);
+    socketRef.current?.sendUserMessage(text);
+    resolveQuestion();
+  }
+
+  // The composer is disabled while a plan decision or a clarifying question is
+  // pending (the user must resolve the inline card first) or while the socket
+  // isn't open (nothing to send to).
+  const composerDisabled = planAwaitingDecision || pendingQuestion !== null || connectionState !== "open";
+
+  // Name the actual blocker in the disabled composer's placeholder — checked in the
+  // same precedence order as composerDisabled's clauses above.
+  const composerDisabledPlaceholder = planAwaitingDecision
+    ? "Waiting on plan approval…"
+    : pendingQuestion !== null
+      ? "Answer the question above…"
+      : "Connecting…";
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -184,6 +209,17 @@ export function ChatPanel({
 
           {plan && planAwaitingDecision && (
             <PlanApprovalCard plan={plan} disabled={false} onDecision={handlePlanDecision} />
+          )}
+
+          {/* Only shown when no plan card is up — the two HITL gates never overlap
+              (propose_task_plan and request_user_input can't both be pending at once). */}
+          {!planAwaitingDecision && pendingQuestion && (
+            <QuestionCard
+              question={pendingQuestion.question}
+              options={pendingQuestion.options}
+              disabled={false}
+              onAnswer={handleQuestionAnswer}
+            />
           )}
 
           <div ref={bottomRef} />

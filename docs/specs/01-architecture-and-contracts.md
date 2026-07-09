@@ -198,6 +198,10 @@ curricula/{id}/sources/{sourceId}
 
 curricula/{id}/state/main       # agent working memory (see spec 02)
   phase, task_queue, current_task_id, scratchpad, iteration_count, updated_at
+  pending_user_input: {question: str, options: [str]|null} | null
+                                 # set by request_user_input, replayed on WS reconnect
+                                 # as a user_input_requested event, cleared on the next
+                                 # user_message frame (see §7)
 
 conversations/{convId}
   owner_uid, curriculum_id: str|null, title
@@ -285,6 +289,9 @@ immediately after reconnecting to a still-running turn.
 {type:"phase_change", phase, label: str}                 # e.g. "deep_research" → "Researching"
 {type:"progress", completed: int, total: int, detail: str}
 {type:"plan_proposed", plan: {outline_markdown, tasks:[...], version}}  # HITL gate
+{type:"user_input_requested", question: str, options: [str]|null}       # HITL gate
+      # emitted by request_user_input via its _ws_event; answered via an ordinary
+      # user_message frame (no dedicated "answer" frame type)
 {type:"curriculum_updated", curriculum_id, scope:"overview"|"module"|"section"|"curriculum",
       module_id?: str, section_id?: str}                 # frontend refetches affected part
       # scope:"curriculum" — emitted by set_curriculum_title (title/emoji rename); refetch
@@ -303,7 +310,9 @@ phase is still `"intake"`, i.e. nothing has happened yet), a `progress` event de
 from the plan's task counts (only if a plan exists and has at least one task), and a
 `plan_proposed` event replaying the current plan (only if the plan's `status` is still
 `"proposed"`, i.e. still awaiting a `plan_decision`) — this restores the HITL approval
-card after a page refresh or navigation away and back. Also note that only the most
+card after a page refresh or navigation away and back, and (if the state doc's
+`pending_user_input` is truthy) a `user_input_requested` event replaying that question's
+`question`/`options`, restoring the clarifying-question card the same way. Also note that only the most
 recently connected socket per conversation ("live-socket registry") receives streamed
 events; if a client reconnects while a turn is still running (e.g. the user navigated
 away and back), the in-flight run keeps streaming to the new connection rather than the
@@ -311,7 +320,11 @@ old, now-dead one.
 
 Frontend behavior: on `plan_proposed`, render an interactive approval card in the chat and
 the plan in the right panel; agent run pauses until `plan_decision` arrives (HITL). On
-`curriculum_updated`, refetch that scope via REST and animate it into the right panel.
+`user_input_requested`, render an interactive question card (quick-pick options, if any,
+plus an always-present free-text input) in the chat and disable the composer; the answer
+(option click or free text) is sent as an ordinary `user_message` frame, which also clears
+`pending_user_input` server-side. On `curriculum_updated`, refetch that scope via REST and
+animate it into the right panel.
 
 Handling `plan_decision`: in addition to mutating the plan/state/curriculum docs
 (materializing module/section stubs on approve, or recording feedback on modify), the
@@ -321,11 +334,14 @@ very next iteration, that the approval/feedback already happened instead of re-a
 user to confirm.
 
 Note that `phase_change`/`progress` are not emitted *only* by `complete_phase` and the
-reconnect snapshot above — the two plan-gate transitions emit them live too, so a
-connected client never has to wait for a reload to see the current phase: `propose_task_plan`
-emits `phase_change` (awaiting_approval) and `progress` before `plan_proposed`; and
-`plan_decision` resumption emits `phase_change` (writing, plus a `progress` event) on
-approve or `phase_change` (outline_planning) on modify.
+reconnect snapshot above — `propose_task_plan` and an approved `plan_decision` emit them
+live too, so a connected client never has to wait for a reload to see the current phase:
+`propose_task_plan` emits `phase_change` (awaiting_approval) and `progress` before
+`plan_proposed`; `plan_decision` resumption emits `phase_change` (writing, plus a
+`progress` event) on approve. On modify, the orchestrator emits neither — it only
+records feedback and sets the plan's status to `revising`, leaving phase at
+`awaiting_approval`; the agent itself picks the next phase (`outline_planning` or
+`deep_research`) via `complete_phase`, which emits its own `phase_change` once it does.
 
 ## 8. Security requirements
 

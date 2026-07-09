@@ -37,6 +37,13 @@ export interface ProposedPlan {
   version: number;
 }
 
+/** A clarifying question posed by the agent's `request_user_input` tool, awaiting an answer (HITL flow). */
+export interface PendingQuestion {
+  question: string;
+  /** Quick-pick choices, or null when only free-text is offered. */
+  options: string[] | null;
+}
+
 /**
  * One entry in the live "what is the agent doing" activity feed, derived
  * from tool-call start/result WS events. Distinct from `ToolCallRecord`
@@ -72,6 +79,8 @@ interface ChatState {
   progress: { completed: number; total: number; detail: string } | null;
   plan: ProposedPlan | null;
   planAwaitingDecision: boolean;
+  /** Set while a `request_user_input` HITL gate is awaiting an answer; null otherwise. */
+  pendingQuestion: PendingQuestion | null;
   agentRunning: boolean;
   /** Most-recent-first feed of tool-call activity, capped at 30 entries — see `startToolCall`/`pushActivity` for why. */
   activity: ActivityItem[];
@@ -118,6 +127,10 @@ interface ChatState {
   proposePlan: (plan: ProposedPlan) => void;
   /** Clears `planAwaitingDecision` once the user has sent an approve/modify decision. */
   resolvePlan: () => void;
+  /** Records a newly-asked clarifying question so the UI shows the question card. */
+  askQuestion: (question: string, options: string[] | null) => void;
+  /** Clears `pendingQuestion` once the user has answered (option click or free text). */
+  resolveQuestion: () => void;
   setAgentRunning: (running: boolean) => void;
   setConnectionState: (state: ChatState["connectionState"]) => void;
   /** Directly pushes an activity entry (prepended, capped at 30) without touching any message's tool_calls — used for activity not tied to a specific message. */
@@ -171,6 +184,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   progress: null,
   plan: null,
   planAwaitingDecision: false,
+  pendingQuestion: null,
   agentRunning: false,
   activity: [],
   connectionState: "idle",
@@ -221,6 +235,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       progress: null,
       plan: null,
       planAwaitingDecision: false,
+      pendingQuestion: null,
       agentRunning: false,
       activity: [],
     }),
@@ -349,6 +364,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   setProgress: (completed, total, detail) => set({ progress: { completed, total, detail } }),
   proposePlan: (plan) => set({ plan, planAwaitingDecision: true }),
   resolvePlan: () => set({ planAwaitingDecision: false }),
+  askQuestion: (question, options) => set({ pendingQuestion: { question, options } }),
+  resolveQuestion: () => set({ pendingQuestion: null }),
   setAgentRunning: (running) => set({ agentRunning: running }),
   setConnectionState: (connectionState) => set({ connectionState }),
   pushActivity: (item) =>

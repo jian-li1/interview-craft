@@ -15,8 +15,9 @@ WS event protocol in spec 01 §7. Human-in-the-loop gates pause the loop for use
 
 ```
 intake ──► deep_research ──► outline_planning ──► awaiting_approval ──► writing ──► review ──► ready ──► refinement (steady state)
-                                     ▲                    │ (modify + feedback)
-                                     └────────────────────┘
+              ▲       │              ▲                     │
+              └───────┘              └── modify + feedback ┘  (agent picks outline_planning or
+           (gap found mid-revision)                            deep_research via complete_phase)
 ```
 
 - **intake**: Understand the user's request; read user profile memory; ask clarifying
@@ -58,8 +59,12 @@ intake ──► deep_research ──► outline_planning ──► awaiting_app
   prefix, e.g. task `m1-s2` → section doc `s2` under module doc `m1`; legacy task ids
   without that prefix fall back to using the full id verbatim), status=writing, go to
   writing, emit live `phase_change` (writing) + `progress` WS events. modify → feedback
-  appended, return to outline_planning to revise (increment plan version), emit a live
-  `phase_change` (outline_planning) WS event.
+  appended, plan status set to `revising`; the orchestrator does NOT force a phase — it
+  stays `awaiting_approval` and the agent itself calls `complete_phase` to choose
+  `outline_planning` (revise directly from saved sources) or `deep_research` (gather
+  more sources first, when the feedback needs topics/depth not already covered); no
+  orchestrator-emitted `phase_change` on modify — `complete_phase` emits its own once
+  the agent transitions.
 - **writing**: Pop tasks from the queue one at a time. For each: scan the saved-source
   summaries in working memory, `fetch_url` the relevant saved URLs to pull full content
   back into context, and — explicitly encouraged when saved coverage is thin for the
@@ -130,10 +135,14 @@ Key requirements:
   resumed model can see the decision already happened instead of re-asking the user:
   approve → a message stating the plan was APPROVED, stubs materialized, phase is now
   `writing`, and to begin the first task immediately without asking for confirmation;
-  modify → a message stating the user's feedback text and instructing the model to revise
-  and re-propose via `propose_task_plan`. Both branches also emit a live `phase_change`
-  WS event (approve → `writing`, plus a `progress` event; modify → `outline_planning`) so
-  the client's phase banner updates immediately rather than only on the next reconnect.
+  modify → a message stating the user's feedback text and instructing the model it is
+  still in `awaiting_approval` and MUST choose its next phase via `complete_phase`
+  (`deep_research` if the feedback needs uncovered topics/depth, else
+  `outline_planning`), then revise and re-propose via `propose_task_plan`. The approve
+  branch also emits a live `phase_change` (`writing`) + `progress` WS event so the
+  client's phase banner updates immediately rather than only on the next reconnect; the
+  modify branch emits no `phase_change` — `complete_phase` emits its own once the agent
+  picks a target phase.
 
 ## 4. Tool catalog (`agent/tools/`)
 
@@ -185,7 +194,7 @@ during writing-only refinements, etc. — keep filtering simple: a phase→allow
 - `set_module_status / internal helpers` as needed; emits `curriculum_updated` (scope `module`).
 
 **Control tools**
-- `request_user_input(question, options[]?)` → HITL gate for clarifying questions (pauses loop, question rendered as chat card).
+- `request_user_input(question, options[]?)` → HITL gate for clarifying questions: persists `pending_user_input` on the state doc, emits `user_input_requested` (question rendered as an interactive chat card, quick-pick options plus always-present free text), pauses loop. Replayed on WS reconnect if still pending; cleared on the next `user_message` frame (the ordinary reply, no dedicated "answer" frame type).
 - `update_scratchpad(content)` → overwrite agent scratchpad in state doc (agent's own working notes: what's done, what's next, open questions).
 - `complete_phase(next_phase, reason)` → validated transition; updates state + curriculum status; emits `phase_change`. Two transitions carry an additional completeness gate (error observation, no transition applied, if unmet): `writing`→`review` requires every module_ref-bearing plan task `"done"` and no section doc left `"planned"`; `review`→`ready` requires every section `"complete"` and the curriculum `overview` non-empty.
 
@@ -240,13 +249,16 @@ detailed, high-quality instruction document (not a stub). Required files:
   content; judge by the FETCHED content, not the snippet), stop criteria (purely
   qualitative coverage checklist + diminishing returns, no numeric source-count
   target), anti-patterns (never save unfetched URLs, no vague summaries, don't retry
-  failed fetches, don't re-search covered topics).
+  failed fetches, don't re-search covered topics), and guidance for re-entering the
+  phase after a plan-modify decision (targeted queries only for the feedback gap, not a
+  full re-sweep, then `complete_phase("outline_planning")`).
 - `planning_phase.md` — Outline design principles: beginner→interview-ready arc,
   module sequencing (foundations → core skills → question drills → mock/strategy),
   every module must include sample-questions-with-model-answers sections, no fixed
   module/section count limit (scope driven by researched material and user goals, with
   timeline respected via priority ordering rather than capping count), task plan format,
-  how to incorporate `modify` feedback on revision.
+  how to incorporate `modify` feedback on revision (choosing `outline_planning` vs.
+  `deep_research` via `complete_phase` before revising).
 - `writing_phase.md` — Section authoring standards: rich GitHub-flavored Markdown; use
   Mermaid diagrams (flowchart/sequence/mindmap) wherever a process/relationship is
   explained; tables for comparisons; callout blockquotes; concrete examples; sample

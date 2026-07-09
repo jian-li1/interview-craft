@@ -28,6 +28,7 @@ export function useChatSocket(conversationId: string | null) {
   const setPhase = useChatStore((s) => s.setPhase);
   const setProgress = useChatStore((s) => s.setProgress);
   const proposePlan = useChatStore((s) => s.proposePlan);
+  const askQuestion = useChatStore((s) => s.askQuestion);
   const setAgentRunning = useChatStore((s) => s.setAgentRunning);
   const refetchCurriculum = useCurriculumStore((s) => s.refetch);
 
@@ -113,6 +114,10 @@ export function useChatSocket(conversationId: string | null) {
           break;
         case "plan_proposed":
           proposePlan(event.plan);
+          break;
+        case "user_input_requested":
+          // Renders the QuestionCard inline (mirrors plan_proposed -> proposePlan).
+          askQuestion(event.question, event.options);
           break;
         case "curriculum_updated":
           void refetchCurriculum({

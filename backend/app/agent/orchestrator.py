@@ -243,7 +243,9 @@ class Orchestrator:
             user_input (str | PlanDecision | None): A plain user chat message, a
                 `PlanDecision` (resuming a `propose_task_plan` HITL gate), or None (e.g.
                 resuming after a `request_user_input` gate via an ordinary message is
-                still a str — None covers other resume paths with no new input to record).
+                still a str — None covers other resume paths with no new input to
+                record). A str value also clears any persisted `pending_user_input` on
+                the agent state doc, since it answers/dismisses that gate if one was open.
             emit (Emitter): Async callable used to stream WS events to the client for
                 this turn.
             llm_provider_override (str | None): Optional per-call override of the LLM
@@ -337,6 +339,11 @@ class Orchestrator:
         # no new chat message of its own — it's handled as a synthetic tool observation).
         if isinstance(user_input, str):
             fs.append_message(conversation_id, {"role": "user", "content": user_input})
+            # A plain string user_input is either a normal chat message or the reply to a
+            # pending request_user_input question (option click or free text both arrive
+            # this way) — either way, clear the persisted question so a reconnecting
+            # client stops replaying an already-answered card.
+            fs.set_agent_state(curriculum_id, {"pending_user_input": None})
         elif isinstance(user_input, PlanDecision):
             await self._apply_plan_decision(conversation_id, curriculum_id, user_input, emit)
             await emit({"type": "curriculum_updated", "curriculum_id": curriculum_id, "scope": "curriculum"})
@@ -692,10 +699,14 @@ class Orchestrator:
             curriculum_id (str): The curriculum whose plan/state/status are updated.
             decision (PlanDecision): The user's decision — "approve" (materialize
                 modules/sections, jump to the "writing" phase) or "modify" (record
-                feedback, return to "outline_planning" for a re-proposal).
+                feedback and leave the phase at "awaiting_approval"; the agent itself
+                chooses, via `complete_phase`, whether to revise directly from
+                `outline_planning` or gather more sources first via `deep_research`).
             emit (Emitter): Async callable used to stream `phase_change`/`progress`
                 events live to the client — previously this transition only surfaced on
-                the next reconnect snapshot, leaving the sticky phase banner stale.
+                the next reconnect snapshot, leaving the sticky phase banner stale. On
+                "modify" no phase_change is emitted here; `complete_phase` emits its own
+                once the agent picks a target phase.
 
         Returns:
             None: Mutates Firestore state and appends a message; does not return a value.
@@ -753,25 +764,26 @@ class Orchestrator:
                 },
             )
         else:
+            # Record feedback and mark the plan revising, but leave phase/status alone —
+            # the agent now picks its own path (outline_planning vs. deep_research) via
+            # complete_phase, which handles status + phase_change itself once it decides.
             feedback_list = plan.get("user_feedback", [])
             if decision.feedback:
                 feedback_list.append(decision.feedback)
             fs.set_plan(curriculum_id, {"status": "revising", "user_feedback": feedback_list})
-            fs.set_agent_state(curriculum_id, {"phase": "outline_planning"})
-            fs.update_curriculum(curriculum_id, {"status": "planning"})
-            # Live phase_change so the client banner reflects the bounce back to
-            # outline_planning immediately, instead of staying on "awaiting_approval".
-            await emit(
-                {"type": "phase_change", "phase": "outline_planning", "label": PHASE_LABELS["outline_planning"]}
-            )
             fs.append_message(
                 conversation_id,
                 {
                     "role": "system",
                     "content": (
                         f"The user requested changes to the task plan with this feedback: "
-                        f"{decision.feedback!r}. Revise the outline accordingly and re-propose "
-                        f"with propose_task_plan."
+                        f"{decision.feedback!r}. You are still in the 'awaiting_approval' phase "
+                        f"and MUST now choose your next phase with complete_phase: if the "
+                        f"feedback asks for topics or depth your saved sources do not cover, "
+                        f"call complete_phase('deep_research') to research them first; "
+                        f"otherwise call complete_phase('outline_planning'). Then revise the "
+                        f"outline to address ALL accumulated feedback and re-propose it with "
+                        f"propose_task_plan."
                     ),
                 },
             )

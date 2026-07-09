@@ -81,6 +81,15 @@ switcher (unaffected by the divider).
 - **Plan approval card (HITL)**: on `plan_proposed`, render a rich card: outline preview,
   task checklist, textarea for change requests, [Approve & build] / [Request changes]
   buttons → send `plan_decision`. Disable input while awaiting.
+- **Question card (HITL)**: on `user_input_requested`, render an inline card (same visual
+  language as the plan approval card): question text, quick-pick option buttons if
+  `options` is non-empty (clicking one submits that option's text), and — always shown,
+  even alongside options — a free-text input below them for a custom answer (Enter or a
+  send button submits; disabled while empty/whitespace). Both answer paths send the chosen
+  text as an ordinary `user_message` frame (there is no dedicated "answer" frame type) and
+  then clear the card locally. Composer is disabled while the card is showing, mirroring
+  the plan card. The card is restored on reconnect if the state doc's `pending_user_input`
+  is still set (see spec 01 §7).
 - Composer: auto-growing textarea, Enter=send Shift+Enter=newline, stop button while agent
   is running (sends `stop`, which aborts promptly — see spec 01 §7 — rather than waiting
   for the current LLM stream chunk or tool call to finish on its own), disabled states,

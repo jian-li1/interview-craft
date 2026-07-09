@@ -90,22 +90,31 @@ panel already.
 
 ## Incorporating `modify` feedback on revision
 
-If the user chooses `modify`, you'll be re-entered into `outline_planning` with
-accumulated `user_feedback` entries visible in the plan/working memory. Before proposing
-again:
+If the user chooses `modify`, you're re-entered still in `awaiting_approval` with the new
+`user_feedback` entry recorded in the plan/working memory. FIRST decide your path with
+`complete_phase`, since the phase does not move on its own:
+- `complete_phase('deep_research')` when the feedback needs substantial new research —
+  new topics, or more sources to meaningfully enrich the curriculum — that your saved
+  sources don't cover.
+- `complete_phase('outline_planning')` when your existing saved sources already cover
+  what the feedback asks for and you can revise directly.
+
+Once in the chosen phase, before proposing again:
 - Read ALL feedback entries, not just the latest.
 - Make targeted changes that address the feedback — don't regenerate the whole outline
   from scratch unless the feedback effectively asks for that.
 - Increment the plan version (handled by `propose_task_plan` automatically via the tool
   implementation — just call it again with the revised outline/tasks).
-- If feedback implies a research gap (e.g. "I also want AWS-specific system design
-  content" and your saved sources have nothing on that), do a couple of targeted
-  `web_search` → `fetch_url` → `save_sources` rounds before re-proposing, rather than
-  fabricating content to match the request.
+- A small gap can still be topped up inline in `outline_planning` with a couple of
+  targeted `web_search` → `fetch_url` → `save_sources` rounds rather than fabricating
+  content to match the request — you don't have to have chosen `deep_research` upfront
+  for that. `outline_planning → deep_research` is also allowed if a bigger gap only
+  becomes apparent mid-revision.
 
 ## Exit criteria
 
 This phase ends when the user approves the plan (handled by the orchestrator, which
 transitions to `writing` and materializes module/section stubs) — you do not call
 `complete_phase` yourself for the approve path. You only actively loop within this phase
-when revising after a `modify` decision.
+when revising after a `modify` decision — or leave it via `complete_phase('deep_research')`
+when a revision needs substantial new research (see the feedback section above).

@@ -10,10 +10,12 @@ interface ComposerProps {
   onChange: (value: string) => void;
   onSend: () => void;
   onStop: () => void;
-  /** True while a plan decision is pending or the socket isn't connected — see ChatPanel's composerDisabled. */
+  /** True while a plan decision/question is pending or the socket isn't connected — see ChatPanel's composerDisabled. */
   disabled: boolean;
   /** True while the agent is actively running; swaps the send button for a stop button. */
   running: boolean;
+  /** Cause-specific placeholder shown while disabled (e.g. plan vs. question gate); falls back to a generic one. */
+  disabledPlaceholder?: string;
 }
 
 /**
@@ -28,7 +30,7 @@ interface ComposerProps {
  * plan decision is awaiting the user, per ChatPanel's composerDisabled) and
  * swaps the placeholder to explain why input is blocked.
  */
-export function Composer({ value, onChange, onSend, onStop, disabled, running }: ComposerProps) {
+export function Composer({ value, onChange, onSend, onStop, disabled, running, disabledPlaceholder }: ComposerProps) {
   const ref = useRef<HTMLTextAreaElement>(null);
 
   // Auto-grow the textarea to fit its content on every value change, capped
@@ -67,7 +69,13 @@ export function Composer({ value, onChange, onSend, onStop, disabled, running }:
           disabled={disabled}
           rows={1}
           aria-label="Message"
-          placeholder={disabled ? "Waiting on plan approval…" : "Ask anything, or describe what to change…"}
+          placeholder={
+            // Disabled placeholder names the actual blocker (plan card, question card,
+            // or connection) — the parent knows the cause, we just render it.
+            disabled
+              ? (disabledPlaceholder ?? "Waiting…")
+              : "Ask anything, or describe what to change…"
+          }
           className="max-h-[200px] flex-1 resize-none bg-transparent px-2 py-1.5 text-sm outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed"
         />
         {running ? (

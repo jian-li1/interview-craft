@@ -184,6 +184,86 @@ async def test_run_turn_pauses_on_hitl_gate_tool_call(monkeypatch, fake_fs, orch
 
 
 @pytest.mark.asyncio
+async def test_run_turn_request_user_input_emits_event_and_persists_state(monkeypatch, fake_fs, orchestrator):
+    """Verify calling `request_user_input` emits a `user_input_requested` WS event
+    carrying question+options, persists `pending_user_input` in the agent state doc,
+    and still pauses the turn as PAUSED (the HITL gate).
+    """
+    conv, curriculum = _setup_conversation(fake_fs, phase="intake")
+
+    scripted = ScriptedLLM(
+        [
+            TextDelta(text="I need to clarify something first."),
+            ToolCallDelta(
+                id="call_1",
+                name="request_user_input",
+                arguments={"question": "Which language track?", "options": ["Python", "Java"]},
+            ),
+            Done(),
+        ]
+    )
+    monkeypatch.setattr("app.agent.orchestrator.get_llm_provider", lambda *a, **k: scripted)
+    monkeypatch.setattr("app.agent.orchestrator.get_search_provider", lambda *a, **k: StubSearch())
+
+    events = []
+
+    async def emit(event):
+        events.append(event)
+
+    result = await orchestrator.run_turn(
+        conversation_id=conv["id"],
+        curriculum_id=curriculum["id"],
+        owner_uid="uid1",
+        user_input="I'm not sure which track to pick",
+        emit=emit,
+    )
+
+    assert result.outcome == TurnOutcome.PAUSED
+
+    # Dedicated WS event, not just a generic tool_call_result, carries the question card data.
+    question_events = [e for e in events if e["type"] == "user_input_requested"]
+    assert len(question_events) == 1
+    assert question_events[0]["question"] == "Which language track?"
+    assert question_events[0]["options"] == ["Python", "Java"]
+
+    # Persisted so a reconnecting client can restore the card.
+    state = fake_fs.fs.get_agent_state(curriculum["id"])
+    assert state["pending_user_input"] == {"question": "Which language track?", "options": ["Python", "Java"]}
+
+
+@pytest.mark.asyncio
+async def test_run_turn_string_input_clears_pending_user_input(monkeypatch, fake_fs, orchestrator):
+    """Verify a subsequent `run_turn` with a plain string `user_input` clears
+    `pending_user_input` from the agent state — the user's reply answers/dismisses
+    a previously-pending `request_user_input` question.
+    """
+    conv, curriculum = _setup_conversation(fake_fs, phase="intake")
+    # Seed a pending question as if a prior turn had paused on request_user_input.
+    fake_fs.fs.set_agent_state(
+        curriculum["id"], {"pending_user_input": {"question": "Which language track?", "options": None}}
+    )
+
+    scripted = ScriptedLLM([TextDelta(text="Got it, thanks."), Done()])
+    monkeypatch.setattr("app.agent.orchestrator.get_llm_provider", lambda *a, **k: scripted)
+    monkeypatch.setattr("app.agent.orchestrator.get_search_provider", lambda *a, **k: StubSearch())
+
+    async def emit(event):
+        pass
+
+    result = await orchestrator.run_turn(
+        conversation_id=conv["id"],
+        curriculum_id=curriculum["id"],
+        owner_uid="uid1",
+        user_input="Python please",
+        emit=emit,
+    )
+
+    assert result.outcome == TurnOutcome.DONE
+    state = fake_fs.fs.get_agent_state(curriculum["id"])
+    assert state["pending_user_input"] is None
+
+
+@pytest.mark.asyncio
 async def test_run_turn_plain_text_answer_completes_done(monkeypatch, fake_fs, orchestrator):
     """Verify a plain-text LLM response (no tool calls) completes the turn as DONE,
     with provider-native reasoning and user-facing content saved separately in the message.
@@ -380,8 +460,9 @@ async def test_plan_decision_approve_appends_system_message_with_approved(monkey
 
 @pytest.mark.asyncio
 async def test_plan_decision_modify_appends_system_message_with_feedback(monkeypatch, fake_fs, orchestrator):
-    """Verify requesting plan modifications appends a system message containing the
-    user's feedback text, and still fires `curriculum_updated` to keep the client in sync.
+    """Verify requesting plan modifications records feedback, leaves the phase at
+    `awaiting_approval` (the agent picks its own next phase via `complete_phase`), appends
+    a system message instructing that choice, and still fires `curriculum_updated`.
     """
     conv, curriculum = _setup_conversation(fake_fs, phase="awaiting_approval")
     fake_fs.fs.set_plan(
@@ -417,17 +498,29 @@ async def test_plan_decision_modify_appends_system_message_with_feedback(monkeyp
     system_msgs = [m for m in messages if m["role"] == "system"]
     assert len(system_msgs) == 1
     assert "Add more system design content" in system_msgs[0]["content"]
+    # System message must instruct the agent to pick its own next phase — not force one.
+    assert "deep_research" in system_msgs[0]["content"]
+    assert "outline_planning" in system_msgs[0]["content"]
 
-    # curriculum_updated fires on modify too (harmless — keeps client status in sync).
+    # curriculum_updated fires on modify too (harmless — keeps client status in sync);
+    # this is unconditional in run_turn, independent of the modify branch's own updates.
     curriculum_updated_events = [e for e in events if e["type"] == "curriculum_updated"]
     assert len(curriculum_updated_events) == 1
     assert curriculum_updated_events[0]["curriculum_id"] == curriculum["id"]
 
-    # phase_change must be emitted live so the banner bounces back to "Planning the
-    # curriculum" immediately instead of staying on "Awaiting your approval".
+    # The orchestrator no longer forces a phase on modify — no phase_change is emitted
+    # here; the agent emits its own once it calls complete_phase in a later turn.
     phase_change_events = [e for e in events if e["type"] == "phase_change"]
-    assert len(phase_change_events) == 1
-    assert phase_change_events[0]["phase"] == "outline_planning"
+    assert len(phase_change_events) == 0
+
+    # Phase stays at awaiting_approval until the agent itself transitions via complete_phase.
+    agent_state = fake_fs.fs.get_agent_state(curriculum["id"])
+    assert agent_state["phase"] == "awaiting_approval"
+
+    # Plan status recorded as revising with the feedback appended.
+    plan = fake_fs.fs.get_plan(curriculum["id"])
+    assert plan["status"] == "revising"
+    assert "Add more system design content" in plan["user_feedback"]
 
 
 @pytest.mark.asyncio

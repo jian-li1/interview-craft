@@ -81,6 +81,9 @@ iteration — a `complete_phase` call takes effect next iteration, not next turn
 `HITL_GATE_TOOLS` as a registry backstop) — the orchestrator pauses if any call this
 step was a successful gate call, even mid-`max_iterations`. Resumption is the next WS
 frame: `plan_decision` is handled specially by `_apply_plan_decision` (approve →
-materialize stubs, jump to `writing`; modify → record feedback, return to
-`outline_planning`); a clarifying question resumes via an ordinary `user_message`
-frame — no dedicated "answer" type.
+materialize stubs, jump to `writing`; modify → record feedback and leave phase at
+`awaiting_approval` — the agent itself picks `outline_planning` or `deep_research` via
+`complete_phase`); a clarifying question emits `user_input_requested` and persists
+`pending_user_input` on the state doc (replayed on WS reconnect so a refresh restores the
+card; cleared the moment the next `user_message` frame arrives) — resumption is still an
+ordinary `user_message` frame, no dedicated "answer" type.
