@@ -124,7 +124,14 @@ Two views, toggle: **Workflow** and **Reader**.
   active section directly rather than scrolling to it. Content: module context header
   (module title/order/status) above the section title + body, rendered via react-markdown +
   remark-gfm + rehype-highlight; **Mermaid** code fences rendered as diagrams (client
-  component, re-render on theme change); citations: `[^n]` footnotes rendered, plus a
+  component, re-render on theme change) — an interactive viewer (react-zoom-pan-pinch)
+  with wheel-zoom/drag-pan plus a zoom-in/zoom-out/reset/copy-source/full-screen overlay
+  control cluster, a near-full-viewport full-screen popup modal (rendered through a
+  portal to `document.body` so transformed ancestors can't clip it; Escape and backdrop
+  click close it) hosting the same shared viewer, and a post-render contrast pass that
+  recolors labels sitting on hardcoded
+  light/dark `classDef`/`style` fills so agent-generated diagrams stay legible in dark
+  mode; citations: `[^n]` footnotes rendered, plus a
   Sources card at the section end (favicon, title, url, external-link). `"planned"` sections
   show a "Not written yet" placeholder. Previous/Next buttons at the bottom of the content
   area traverse the flattened section order across module boundaries (disabled at the ends,

@@ -357,7 +357,30 @@ switches to `"reader"`.
   gracefully instead of showing a destructive error box: it renders the raw `chart`
   source as a plain code block (styled like the loading state) with a small muted note
   that the diagram couldn't render; the actual parser error is only logged via
-  `console.warn`, not shown in the UI.
+  `console.warn`, not shown in the UI. Before the SVG is stored in state, a
+  `fixLabelContrastForHardcodedFills` post-processing pass walks it on a detached DOM:
+  for every `g.node`/`g.cluster` whose shape has an *explicit* fill (agent-authored
+  `classDef`/`style`, e.g. `fill:#e0f2e0`), it computes relative luminance and forces
+  that group's label text/HTML to near-black or near-white ink via `!important` —
+  otherwise mermaid's `dark` theme paints every label a uniform light-gray regardless of
+  the node's own background, producing light-on-light text. Theme-default nodes (no
+  explicit fill) are left untouched. The successful-render state renders a shared
+  `DiagramViewer` subcomponent wrapping the SVG in `react-zoom-pan-pinch`'s
+  `TransformWrapper`/`TransformComponent` (statically imported —
+  it's a plain React component, not a DOM-touching library like mermaid, so the
+  `ssr:false` rule doesn't apply to it) for wheel-zoom (no modifier key) and drag-to-pan,
+  plus an absolutely-positioned top-right overlay of icon buttons (zoom in/out, reset
+  view, copy source — the last flips to a checkmark for ~1.5s via a `copied` state and
+  timeout) styled to match `ui/Button.tsx`'s ghost/icon treatment. A fifth overlay button
+  (`Maximize2`) opens a GitHub-style full-screen popup: a near-full-viewport panel
+  hosting a second, fresh `DiagramViewer` instance (so its transform starts at scale 1 —
+  no zoom-state syncing) whose expand slot becomes an `X` close control. The modal
+  follows `ConfirmDialog.tsx`'s conventions (AnimatePresence fade backdrop, scale/fade
+  panel, Escape bound only while open, backdrop click closes with panel clicks stopped)
+  but is rendered via `createPortal(..., document.body)` — `MermaidDiagram` sits inside
+  Framer-Motion-transformed ancestors, and a CSS transform would make the panel's
+  `position: fixed` resolve against that ancestor instead of the viewport — and locks
+  body scroll while open (restoring the previous `overflow` value on close).
 - **`ReaderView.tsx`** — single-section paging, not an all-sections scroll. A left
   mini-TOC (module/section tree with status icons: `Circle`/`Loader2`/`CheckCircle2` for
   planned/writing/complete) rendered as a sidebar at `lg+`; below `lg` the same tree is
