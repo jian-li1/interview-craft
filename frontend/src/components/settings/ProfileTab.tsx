@@ -108,7 +108,8 @@ export function ProfileTab() {
           <CardDescription>What the agent remembers about you.</CardDescription>
         </CardHeader>
         <CardContent>
-          <p className="text-sm leading-relaxed text-muted-foreground">
+          {/* Preserve newlines in the profile text by rendering them as line breaks */}
+          <p className="whitespace-pre-line text-sm leading-relaxed text-muted-foreground">
             {profile.synthesized_profile || "Not generated yet — visit onboarding to create it."}
           </p>
         </CardContent>

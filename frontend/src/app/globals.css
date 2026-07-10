@@ -128,6 +128,12 @@
     outline: 2px solid var(--ring);
     outline-offset: 2px;
   }
+  /* Tailwind v4 preflight no longer sets pointer on buttons — restore it for enabled controls */
+  button:not(:disabled),
+  [role="button"]:not(:disabled),
+  select:not(:disabled) {
+    cursor: pointer;
+  }
 }
 
 @layer utilities {

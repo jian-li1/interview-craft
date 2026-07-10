@@ -36,7 +36,8 @@ async def put_settings(
     Requires the `X-Requested-With` CSRF header (enforced by the router-level
     dependency). Only fields explicitly set on `body` are merged into the stored
     settings (`exclude_unset=True`), so omitted fields are left untouched rather than
-    reset to their model defaults.
+    reset to their model defaults. Fields explicitly sent as null clear the stored
+    override back to the server default.
 
     Args:
         body (UserSettingsUpdate): Partial settings update; unset fields are ignored.

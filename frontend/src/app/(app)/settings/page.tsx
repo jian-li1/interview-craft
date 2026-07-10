@@ -17,9 +17,11 @@ import { AccountTab } from "@/components/settings/AccountTab";
  * - `PreferencesTab` — agent/LLM behavior preferences.
  * - `AppearanceTab` — theme/display preferences.
  * - `AccountTab` — account-level info/actions (e.g. sign out, danger zone).
- * `TabsContent` mounts/unmounts (or hides, per the `Tabs` primitive's
- * implementation) each panel based on the active `value`, matching the
- * `TabsTrigger` values above.
+ * All four `TabsContent` panels use `forceMount` so they stay mounted at once
+ * (each tab's own data fetch runs in parallel on page load, and switching
+ * tabs never re-triggers a fetch or shows a loading spinner); inactive
+ * panels are hidden via the `hidden` attribute rather than unmounted,
+ * matching the `TabsTrigger` values above.
  */
 export default function SettingsPage() {
   return (
@@ -38,16 +40,17 @@ export default function SettingsPage() {
         </TabsList>
 
         <div className="mt-6">
-          <TabsContent value="profile">
+          {/* forceMount keeps all four panels mounted so their fetches fire in parallel and tab switches are instant */}
+          <TabsContent value="profile" forceMount>
             <ProfileTab />
           </TabsContent>
-          <TabsContent value="preferences">
+          <TabsContent value="preferences" forceMount>
             <PreferencesTab />
           </TabsContent>
-          <TabsContent value="appearance">
+          <TabsContent value="appearance" forceMount>
             <AppearanceTab />
           </TabsContent>
-          <TabsContent value="account">
+          <TabsContent value="account" forceMount>
             <AccountTab />
           </TabsContent>
         </div>

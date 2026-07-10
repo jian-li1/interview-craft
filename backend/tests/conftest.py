@@ -142,9 +142,10 @@ def fake_fs(monkeypatch) -> FakeFirestore:
         return data
 
     def update_user_settings(uid, partial):
-        """Fake for `firestore.update_user_settings` — merge non-None fields in."""
+        """Fake for `firestore.update_user_settings` — merge fields; explicit None clears one."""
         current = store.users.setdefault(uid, {}).get("settings", {})
-        merged = {**current, **{k: v for k, v in partial.items() if v is not None}}
+        # mirror prod semantics: None means "clear back to server default", so drop the key
+        merged = {k: v for k, v in {**current, **partial}.items() if v is not None}
         store.users[uid]["settings"] = merged
         return merged
 

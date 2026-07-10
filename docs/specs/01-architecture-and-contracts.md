@@ -255,7 +255,7 @@ FRONTEND_ORIGIN with credentials. All mutating routes require header
 | POST | /api/conversations | `{curriculum_prompt: str|null}` → `{conversation_id}` (new chat) |
 | GET  | /api/conversations/{id}/messages | → `[MessageOut]` (full history for rendering) |
 | GET  | /api/settings | → settings obj |
-| PUT  | /api/settings | partial settings → settings obj |
+| PUT  | /api/settings | partial settings → settings obj (explicit null clears an override back to server default) |
 | GET  | /api/healthz | → `{status: "ok"}` (no auth) |
 
 `UserOut = {uid, email, name, picture, settings, onboarding_completed}`

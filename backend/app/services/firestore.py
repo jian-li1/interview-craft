@@ -157,23 +157,35 @@ def upsert_user_login(
 def update_user_settings(uid: str, partial: dict[str, Any]) -> dict[str, Any]:
     """Merge a partial settings update into `users/{uid}.settings`.
 
-    Keys whose value is None are dropped from the update so callers can pass a fully
-    populated model without accidentally clearing existing settings (e.g. a user's
-    provider override) with an unset field.
+    An explicit None value for a key means "clear this override back to the server
+    default": that key is deleted from the stored settings map (via
+    `firestore.DELETE_FIELD`) rather than being written as null. Keys with non-None
+    values merge in as usual. Keys the caller omits entirely are left untouched — the
+    `settings` API route already filters those out via `exclude_unset=True` before
+    calling this function.
 
     Args:
         uid (str): The Firebase Auth uid identifying the user document.
-        partial (dict[str, Any]): Settings fields to merge in; None values are ignored.
+        partial (dict[str, Any]): Settings fields to merge in; a None value clears that
+            key back to the server default instead of storing a null.
 
     Returns:
-        dict[str, Any]: The fully merged settings dict now stored on the user document.
+        dict[str, Any]: The fully merged settings dict now stored on the user document,
+            with any explicitly-cleared keys absent.
     """
     db = get_firestore_client()
     ref = db.collection("users").document(uid)
     snap = ref.get()
     current = (snap.to_dict() or {}).get("settings", {}) if snap.exists else {}
-    merged = {**current, **{k: v for k, v in partial.items() if v is not None}}
-    ref.set({"settings": merged}, merge=True)
+    # Split the partial into real updates vs. explicit clears (None) so each can be
+    # applied with the right Firestore semantics in a single merge write.
+    updates = {k: v for k, v in partial.items() if v is not None}
+    cleared = [k for k, v in partial.items() if v is None]
+    # DELETE_FIELD actually removes the field from the document (unlike writing None).
+    write_payload = {**updates, **{k: firestore.DELETE_FIELD for k in cleared}}
+    ref.set({"settings": write_payload}, merge=True)
+    # Compute the resulting in-memory dict to return: apply updates, then drop cleared keys.
+    merged = {k: v for k, v in {**current, **updates}.items() if k not in cleared}
     return merged
 
 

@@ -20,8 +20,10 @@ const TabsContext = createContext<TabsContextValue | null>(null);
  * shared animated active-tab background using a Framer Motion `layoutId`
  * scoped by `useId()` so multiple `Tabs` instances on one page don't
  * collide), and `TabsContent` (renders its children only when its `value`
- * matches the active tab). `TabsTrigger`/`TabsContent` must be rendered
- * inside a `Tabs` provider or they throw.
+ * matches the active tab, unless `forceMount` is set — then it stays
+ * mounted always and is just hidden via the `hidden` attribute when
+ * inactive, so panel state/fetches survive tab switches). `TabsTrigger`/
+ * `TabsContent` must be rendered inside a `Tabs` provider or they throw.
  */
 export function Tabs({
   defaultValue,
@@ -85,14 +87,16 @@ export function TabsTrigger({
       onClick={() => ctx.setValue(value)}
       className={cn(
         "relative z-0 rounded-md px-3 py-1.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-        active ? "text-accent-foreground" : "text-muted-foreground hover:text-foreground",
+        // Label must contrast with bg-card pill in both light and dark themes; text-foreground ensures visibility
+        active ? "text-foreground" : "text-muted-foreground hover:text-foreground",
         className
       )}
     >
       {active && (
         <motion.span
           layoutId={`tabs-active-${ctx.name}`}
-          className="absolute inset-0 -z-10 rounded-md bg-card shadow-sm"
+          // dark:bg-foreground/10 layers a subtle overlay so the pill reads against bg-muted (both are near-black in dark mode otherwise)
+          className="absolute inset-0 -z-10 rounded-md bg-card shadow-sm dark:bg-foreground/10"
           transition={{ type: "spring", duration: 0.4, bounce: 0.2 }}
         />
       )}
@@ -105,16 +109,20 @@ export function TabsContent({
   value,
   children,
   className,
+  forceMount,
 }: {
   value: string;
   children: React.ReactNode;
   className?: string;
+  forceMount?: boolean; // when true, stay mounted always and hide via the `hidden` attribute instead of unmounting
 }) {
   const ctx = useContext(TabsContext);
   if (!ctx) throw new Error("TabsContent must be used within Tabs");
-  if (ctx.value !== value) return null;
+  const active = ctx.value === value;
+  // Without forceMount, preserve the original unmount-when-inactive behavior other consumers rely on.
+  if (!forceMount && !active) return null;
   return (
-    <div role="tabpanel" className={className}>
+    <div role="tabpanel" className={className} hidden={forceMount ? !active : undefined}>
       {children}
     </div>
   );
