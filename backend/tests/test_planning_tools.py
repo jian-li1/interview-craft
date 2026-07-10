@@ -1,9 +1,9 @@
 """propose_task_plan: binding id contract validation (`_validate_plan`).
 
 Covers each rejection path (bad id format, module_ref mismatch, duplicate ids,
-non-contiguous module/section numbering, missing/mismatched outline "Section X.Y"
-labels) plus the accept path for a fully valid plan — asserting both the error
-observation shape and that no plan is persisted on rejection.
+non-contiguous module/section numbering, invalid `modules` list, missing/mismatched
+outline "Section X.Y" labels) plus the accept path for a fully valid plan — asserting
+both the error observation shape and that no plan is persisted on rejection.
 """
 
 from __future__ import annotations
@@ -11,7 +11,12 @@ from __future__ import annotations
 import pytest
 
 from app.agent.tools.base import AgentContext
-from app.agent.tools.planning import PlanTaskInput, ProposeTaskPlanInput, ProposeTaskPlanTool
+from app.agent.tools.planning import (
+    PlanModuleInput,
+    PlanTaskInput,
+    ProposeTaskPlanInput,
+    ProposeTaskPlanTool,
+)
 from app.core.config import get_settings
 
 
@@ -60,13 +65,29 @@ def _valid_tasks() -> list[dict]:
     ]
 
 
-async def _run(fake_fs, outline_markdown: str, tasks: list[dict]):
+def _modules_for(tasks: list[dict]) -> list[dict]:
+    """Auto-derive a valid `modules` list (one placeholder-titled entry per distinct
+    module_ref, in first-appearance order) matching the module set used by `tasks` —
+    keeps tests that aren't specifically about `modules` validation from tripping it.
+    """
+    seen: dict[str, None] = {}
+    for t in tasks:
+        ref = t.get("module_ref")
+        if ref and ref not in seen:
+            seen[ref] = None
+    return [{"id": ref, "title": f"Module Title {ref}"} for ref in seen]
+
+
+async def _run(fake_fs, outline_markdown: str, tasks: list[dict], modules: list[dict] | None = None):
     """Set up a curriculum/conversation and execute propose_task_plan with the given input.
 
     Args:
         fake_fs: The `fake_fs` fixture (in-memory Firestore fake).
         outline_markdown (str): The outline_markdown to submit.
         tasks (list[dict]): Raw task dicts to submit as `PlanTaskInput`s.
+        modules (list[dict] | None): Raw module dicts to submit as `PlanModuleInput`s;
+            defaults to `_modules_for(tasks)` when omitted so tests unrelated to
+            `modules` validation don't need to construct it manually.
 
     Returns:
         tuple: (result dict from tool.execute, curriculum_id) for further assertions.
@@ -83,6 +104,7 @@ async def _run(fake_fs, outline_markdown: str, tasks: list[dict]):
         ProposeTaskPlanInput(
             outline_markdown=outline_markdown,
             tasks=[PlanTaskInput(**t) for t in tasks],
+            modules=[PlanModuleInput(**m) for m in (modules if modules is not None else _modules_for(tasks))],
         ),
         ctx,
     )
@@ -187,3 +209,55 @@ async def test_propose_task_plan_rejects_missing_module_ref():
     """
     with pytest.raises(Exception):
         PlanTaskInput(id="m1-s1", title="Overview", description="", module_ref=None)
+
+
+@pytest.mark.asyncio
+async def test_propose_task_plan_rejects_modules_missing_a_module(fake_fs):
+    """A `modules` list missing an entry for a module_ref used by tasks (m2) is rejected."""
+    tasks = _valid_tasks()  # spans m1, m2
+    modules = [{"id": "m1", "title": "Foundations"}]  # missing m2 entirely
+    result, curriculum_id = await _run(fake_fs, _valid_outline(), tasks, modules)
+    assert "error" in result
+    assert fake_fs.fs.get_plan(curriculum_id) is None
+
+
+@pytest.mark.asyncio
+async def test_propose_task_plan_rejects_modules_wrong_order(fake_fs):
+    """A `modules` list with the right ids but out of module-number order is rejected."""
+    tasks = _valid_tasks()  # spans m1, m2
+    modules = [{"id": "m2", "title": "Practice"}, {"id": "m1", "title": "Foundations"}]
+    result, curriculum_id = await _run(fake_fs, _valid_outline(), tasks, modules)
+    assert "error" in result
+    assert fake_fs.fs.get_plan(curriculum_id) is None
+
+
+@pytest.mark.asyncio
+async def test_propose_task_plan_rejects_blank_module_title(fake_fs):
+    """A `modules` entry with a whitespace-only title is rejected."""
+    tasks = [{"id": "m1-s1", "title": "Intro", "module_ref": "m1"}]
+    modules = [{"id": "m1", "title": "   "}]
+    result, curriculum_id = await _run(fake_fs, "Section 1.1: Intro", tasks, modules)
+    assert "error" in result
+    assert fake_fs.fs.get_plan(curriculum_id) is None
+
+
+@pytest.mark.asyncio
+async def test_propose_task_plan_rejects_module_title_too_long(fake_fs):
+    """A `modules` entry with a title over 80 chars is rejected."""
+    tasks = [{"id": "m1-s1", "title": "Intro", "module_ref": "m1"}]
+    modules = [{"id": "m1", "title": "x" * 81}]
+    result, curriculum_id = await _run(fake_fs, "Section 1.1: Intro", tasks, modules)
+    assert "error" in result
+    assert fake_fs.fs.get_plan(curriculum_id) is None
+
+
+@pytest.mark.asyncio
+async def test_propose_task_plan_accepted_plan_persists_modules(fake_fs):
+    """A valid plan with a proper `modules` list persists `modules` verbatim on the plan doc."""
+    tasks = _valid_tasks()
+    modules = [{"id": "m1", "title": "Foundations"}, {"id": "m2", "title": "Practice Drills"}]
+    result, curriculum_id = await _run(fake_fs, _valid_outline(), tasks, modules)
+    assert result["status"] == "proposed"
+    saved_plan = fake_fs.fs.get_plan(curriculum_id)
+    assert saved_plan is not None
+    assert saved_plan["modules"] == modules

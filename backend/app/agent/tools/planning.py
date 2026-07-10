@@ -47,6 +47,30 @@ class PlanTaskInput(BaseModel):
     status: Literal["pending", "in_progress", "done"] = "pending"
 
 
+class PlanModuleInput(BaseModel):
+    """A single module's structural identity (id + real display title) within a proposed plan."""
+
+    id: str = Field(
+        ...,
+        description=(
+            "Module id in the form 'm{X}' (e.g. 'm1'), matching the module numbering used by "
+            "the `id`/`module_ref` fields of this module's tasks."
+        ),
+    )
+    title: str = Field(
+        ...,
+        description=(
+            "The module's human-readable display title, exactly as it appears in the outline "
+            "(e.g. for outline heading 'Module 3: System Design Fundamentals' this is "
+            "'System Design Fundamentals' — WITHOUT the leading 'Module X:' numbering prefix). "
+            "Non-empty, at most 80 characters. This exact string is persisted verbatim as the "
+            "module document's display title once the plan is approved, so it must be the real "
+            "module-level title — never a copy of one of its section titles, and never the bare "
+            "module id."
+        ),
+    )
+
+
 class ProposeTaskPlanInput(BaseModel):
     """Input schema for `ProposeTaskPlanTool`."""
 
@@ -60,6 +84,16 @@ class ProposeTaskPlanInput(BaseModel):
         ),
     )
     tasks: list[PlanTaskInput] = Field(..., description="The full task list for this plan version.")
+    modules: list[PlanModuleInput] = Field(
+        ...,
+        description=(
+            "One entry per distinct module referenced by `tasks`, in module-number order "
+            "(m1, m2, ...). The set of ids here must exactly match the set of `module_ref`s used "
+            "across `tasks` (same ids, same order) — propose_task_plan rejects the plan if they "
+            "don't align. This is the only place module display titles are captured; they are "
+            "persisted onto the module documents when the plan is approved."
+        ),
+    )
 
 
 def _validate_plan(input: ProposeTaskPlanInput) -> str | None:
@@ -67,11 +101,14 @@ def _validate_plan(input: ProposeTaskPlanInput) -> str | None:
 
     Checks (in order, first failure wins): tasks non-empty; every task's `id`/
     `module_ref` match the `m{X}-s{Y}`/`m{X}` format with a consistent prefix; task ids
-    are unique; module numbering is contiguous from m1 in first-appearance order;
-    section numbering is contiguous from s1 per module in task-list order; and the
-    `outline_markdown`'s `Section X.Y` labels exactly match the task id set. Designed to
-    catch the failure modes seen in practice: invented ids, missing module_ref, and an
-    outline that describes more sections than the task list actually covers.
+    are unique; module numbering is contiguous from m1 in first-appearance order; the
+    `modules` list's ids exactly match that module set (same ids, same order) and every
+    module has a non-empty, <=80-char title; section numbering is contiguous from s1 per
+    module in task-list order; and the `outline_markdown`'s `Section X.Y` labels exactly
+    match the task id set. Designed to catch the failure modes seen in practice: invented
+    ids, missing module_ref, a module list that doesn't cover the tasks' modules (or
+    reuses a section title as the module title), and an outline that describes more
+    sections than the task list actually covers.
 
     Args:
         input (ProposeTaskPlanInput): The plan input as submitted to `propose_task_plan`.
@@ -121,6 +158,26 @@ def _validate_plan(input: ProposeTaskPlanInput) -> str | None:
             f"ascending order; got modules in first-appearance order {module_first_seen}, "
             f"expected {expected_modules}."
         )
+
+    # Structured module list: ids must exactly cover expected_modules (same set, same
+    # order) so every module gets a real display title captured for materialization.
+    module_ids = [m.id for m in input.modules]
+    if module_ids != expected_modules:
+        return (
+            f"modules must list exactly one entry per module in order m1..m{len(expected_modules)} "
+            f"matching the module_refs used by tasks; got module ids {module_ids}, expected "
+            f"{expected_modules}."
+        )
+    # Every module needs a real, non-empty, bounded-length display title — this is what
+    # becomes the module doc's title at materialization, so a blank/oversized value is
+    # rejected here rather than silently persisted.
+    for m in input.modules:
+        if not m.title.strip() or len(m.title) > 80:
+            return (
+                f"module {m.id!r} has an invalid title {m.title!r} — provide the module's real "
+                f"display title as it appears in the outline (not a section title, not a bare "
+                f"id), non-empty and at most 80 characters."
+            )
 
     # Section numbering: contiguous from s1 per module, in task-list order within that module.
     sections_by_module: dict[str, list[int]] = {}
@@ -173,10 +230,12 @@ class ProposeTaskPlanTool(Tool):
     description = (
         "HITL GATE — propose the curriculum outline and task plan to the user for approval. "
         "Validates the plan first (task id format 'm{X}-s{Y}', module_ref prefix match, "
-        "contiguous module/section numbering, and that outline_markdown's 'Section X.Y' labels "
-        "match tasks 1:1) — returns an error observation and saves nothing if the plan fails any "
-        "check. Saves the plan, sets curriculum status to 'awaiting_approval', emits phase_change, "
-        "progress, and plan_proposed events to the client, and PAUSES your loop until the user "
+        "contiguous module/section numbering, that modules' ids exactly cover the tasks' module "
+        "set with a real non-empty <=80-char title per module, and that outline_markdown's "
+        "'Section X.Y' labels match tasks 1:1) — returns an error observation and saves nothing "
+        "if the plan fails any check. Saves the plan, sets curriculum status to 'awaiting_approval', "
+        "emits phase_change, progress, and plan_proposed events to the client (the modules list is "
+        "saved but NOT included in the plan_proposed payload), and PAUSES your loop until the user "
         "responds with approve or modify. Call this alone, with no other tool calls in the same "
         "step. Use this both for the initial proposal and for re-proposing after incorporating "
         "'modify' feedback (the plan version increments automatically)."
@@ -192,8 +251,9 @@ class ProposeTaskPlanTool(Tool):
         `plan_decision` WS frame (handled by `Orchestrator._apply_plan_decision`).
 
         Args:
-            input (ProposeTaskPlanInput): The validated outline markdown and full task
-                list for this plan version.
+            input (ProposeTaskPlanInput): The validated outline markdown, full task
+                list, and structured module list (id + display title, one per module)
+                for this plan version.
             ctx (AgentContext): The current agent run's context; `ctx.curriculum_id`
                 scopes the plan document.
 
@@ -202,10 +262,13 @@ class ProposeTaskPlanTool(Tool):
                 "_ws_events": [...], "_hitl_gate": True}` — `_ws_events` carries, in
                 order, a `phase_change` (awaiting_approval), a `progress` event (task
                 counts, only when there are tasks), and the `plan_proposed` event (with
-                the full outline/tasks/version) for the client to render an approval card.
-                `{"error": "..."}` instead, with no writes performed at all, if
-                `_validate_plan` finds the plan violates the id/module_ref/outline
-                contract (invented ids, non-contiguous numbering, outline/tasks mismatch).
+                the full outline/tasks/version — `modules` is persisted to the plan doc
+                but intentionally omitted from this client-facing payload) for the
+                client to render an approval card. `{"error": "..."}` instead, with no
+                writes performed at all, if `_validate_plan` finds the plan violates the
+                id/module_ref/modules/outline contract (invented ids, non-contiguous
+                numbering, a modules list that doesn't cover the tasks' modules or has
+                an invalid title, outline/tasks mismatch).
         """
         # Reject a malformed plan before any write — an invented id or an outline that
         # over-promises relative to tasks corrupts materialization downstream, so this
@@ -225,6 +288,10 @@ class ProposeTaskPlanTool(Tool):
             "version": next_version,
             "outline_markdown": input.outline_markdown,
             "tasks": [t.model_dump() for t in input.tasks],
+            # Structured module titles (id + real display title) — the source of truth
+            # for module doc titles at materialization (see orchestrator.py); NOT
+            # mirrored into the plan_proposed WS payload below (frontend contract unchanged).
+            "modules": [m.model_dump() for m in input.modules],
             "status": "proposed",
             "user_feedback": user_feedback,
         }

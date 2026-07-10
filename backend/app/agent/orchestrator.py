@@ -806,9 +806,14 @@ class Orchestrator:
     async def _materialize_modules_and_sections(self, curriculum_id: str, plan: dict[str, Any]) -> None:
         """Create module/section stub docs from the approved plan's tasks.
 
-        Groups tasks by `module_ref`; each distinct module_ref becomes a module doc (title
-        derived from the first task referencing it, refined later by the agent if needed),
-        and each task becomes a "planned" section stub the writing phase will fill in. The
+        Groups tasks by `module_ref`; each distinct module_ref becomes a module doc. Its
+        title is taken from the plan's structured `modules` list (`{id, title}`, added by
+        `propose_task_plan`'s `modules` field) — the module's real outline-authored
+        display title, truncated to 80 chars for safety — when a matching non-empty entry
+        exists. Legacy plans that predate the `modules` field (or that omit an entry for a
+        given module_ref) fall back to the original heuristic: deriving the title from the
+        first task referencing that module, truncated at any ':' separator and 80 chars.
+        Each task becomes a "planned" section stub the writing phase will fill in. The
         section doc id is derived from the task id: under the binding `m{X}-s{Y}` id
         contract (see `tools/planning.py`'s `_validate_plan`), stripping the `m{X}-`
         prefix yields the section doc id (e.g. task `m1-s2` -> module doc `m1`, section
@@ -821,7 +826,9 @@ class Orchestrator:
         Args:
             curriculum_id (str): The curriculum to create module/section stubs under.
             plan (dict[str, Any]): The approved plan document, whose `tasks` list
-                (each with `id`, `title`, optional `module_ref`) drives stub creation.
+                (each with `id`, `title`, optional `module_ref`) drives stub creation,
+                and whose optional `modules` list (`{id, title}`) supplies each module's
+                real display title.
 
         Returns:
             None: Creates Firestore module/section documents as a side effect.
@@ -830,16 +837,27 @@ class Orchestrator:
         module_order: dict[str, int] = {}
         module_titles: dict[str, str] = {}
 
+        # Structured titles keyed by module id, from the plan's `modules` list — the
+        # source of truth for module doc titles; entries with a missing/blank title are
+        # dropped so that module_ref falls through to the legacy heuristic below.
+        structured_titles = {
+            m["id"]: m["title"] for m in plan.get("modules", []) or [] if m.get("title")
+        }
+
         # First pass: discover distinct module_refs in task order, assigning each a
-        # stable order index and deriving its title from the first task that references
-        # it (truncated at any ':' separator and 80 chars, matching module doc limits).
+        # stable order index and resolving its title — prefer the structured plan title;
+        # legacy plans without a matching `modules` entry fall back to deriving it from
+        # the first task that references this module (truncated at any ':' separator).
         for t in tasks:
             module_ref = t.get("module_ref")
             if not module_ref:
                 continue
             if module_ref not in module_order:
                 module_order[module_ref] = len(module_order)
-                module_titles[module_ref] = t.get("title", module_ref).split(":")[0][:80]
+                structured = structured_titles.get(module_ref)
+                module_titles[module_ref] = (
+                    structured[:80] if structured else t.get("title", module_ref).split(":")[0][:80]
+                )
 
         # Only create modules that don't already exist — re-approving a plan (or a
         # partially-completed prior materialization) must not duplicate/reset modules.

@@ -232,21 +232,25 @@ precisely or if the profile changed mid-run.
 ### Planning tools (`tools/planning.py`)
 
 - **`propose_task_plan`** (HITL gate) — `outline_markdown`, `tasks: [{id, title,
-  description, module_ref, status}]`. **Validates first** (`_validate_plan` in
-  `tools/planning.py`, called before any write): every task's `id` must match
-  `m{X}-s{Y}` and `module_ref` must match `m{X}` with the same prefix (module_ref is
-  required — never null; there is no overview task); task ids must be unique; module
-  numbering contiguous from `m1` in first-appearance order; section numbering
-  contiguous from `s1` per module in task-list order; and `outline_markdown`'s
+  description, module_ref, status}]`, `modules: [{id, title}]`. **Validates first**
+  (`_validate_plan` in `tools/planning.py`, called before any write): every task's `id`
+  must match `m{X}-s{Y}` and `module_ref` must match `m{X}` with the same prefix
+  (module_ref is required — never null; there is no overview task); task ids must be
+  unique; module numbering contiguous from `m1` in first-appearance order; `modules`'
+  ids must exactly equal that module set (same ids, same order), and every module's
+  `title` must be non-empty and <=80 chars (this is the ONLY place a module's real
+  display title is captured — not derived from any task/section title); section
+  numbering contiguous from `s1` per module in task-list order; and `outline_markdown`'s
   `Section X.Y: <title>` labels (extracted via regex) must exactly match the derived
   `m{X}-s{Y}` task id set, reporting any ids missing from either side. Any violation
   returns `{"error": "..."}` with **no plan saved at all**. On success: reads the
   existing plan (if any) to compute `next_version = existing.version + 1` and preserve
-  accumulated `user_feedback`, writes `curricula/{id}/plan/main`, sets curriculum
-  `status="awaiting_approval"` plus a persisted `progress` blob (`phase`,
+  accumulated `user_feedback`, writes `curricula/{id}/plan/main` (including `modules`),
+  sets curriculum `status="awaiting_approval"` plus a persisted `progress` blob (`phase`,
   `completed_tasks`, `total_tasks`, `detail`), sets agent state
   `phase="awaiting_approval"`, and returns an output dict carrying `_ws_events:
-  [phase_change(awaiting_approval), progress(if any tasks), plan_proposed]` and
+  [phase_change(awaiting_approval), progress(if any tasks), plan_proposed]` (the
+  `plan_proposed` payload is unchanged — `modules` is not mirrored into it) and
   `_hitl_gate: True`. The orchestrator strips the underscored keys before building
   the client-visible `tool_call_result` preview, forwards each queued WS event in order,
   and uses `_hitl_gate` to know to pause after this tool executes.
@@ -513,8 +517,11 @@ no chat message is appended — instead `_apply_plan_decision(curriculum_id, dec
 runs synchronously before the iteration loop starts:
 - **`approve`**: sets `plan.status = "approved"`, calls
   `_materialize_modules_and_sections` (creates `curricula/{id}/modules/{moduleId}` docs
-  grouped by each task's `module_ref` — title derived from the first task's title up to
-  its first `:`, truncated to 80 chars — and `curricula/{id}/modules/{mid}/sections/
+  grouped by each task's `module_ref` — title taken from the plan's structured
+  `modules[]` entry for that module_ref (the real outline-authored display title,
+  truncated to 80 chars); legacy plans lacking a matching `modules` entry fall back to
+  deriving the title from the first task's title up to its first `:`, truncated to 80
+  chars — and `curricula/{id}/modules/{mid}/sections/
   {sectionId}` stub docs, one per task, `status="planned"`, skipping any that already
   exist so re-approval after a crash doesn't duplicate; `sectionId` is derived by
   stripping the task id's `m{X}-` module prefix, e.g. task `m1-s2` → section doc `s2`
@@ -570,7 +577,7 @@ All eleven files live in `backend/app/agent/prompts/` and are treated as code (p
 | `base_system.md` | 131 | Every phase (always layer 1) | Identity, the internal-reasoning ReAct convention, tool-error adaptation rules, tone, the "no fabricated citations" hard rule, the personalization mandate, phase discipline, HITL gate etiquette, scratchpad hygiene, tool-call efficiency guidance. |
 | `intake_phase.md` | 57 | `intake` | What to figure out (interview type, scope, constraints) from the user's message + profile; strict guidance on when to ask a clarifying question vs. proceed (err toward proceeding); curriculum naming; exit via `transition_phase("deep_research")`. |
 | `research_phase.md` | ~135 | `deep_research` | The search→fetch→read→save rhythm (`web_search` snippets are relevance triage only; `fetch_url` is the mandatory reading step for every keeper — re-fetching is safe since older copies are auto-stripped; `save_sources(query, sources)` pins a ≤5-sentence agent-written summary per keeper into working memory, full content re-fetchable on demand); summary-writing standards (name the page's concrete assets, not vague praise); the 6 query-diversification coverage areas (format/stages; foundational skills; real sample questions; sample answers/frameworks; prep roadmaps; company/domain specifics); fetch-vs-skip triage rules; source-quality heuristics judged from the FETCHED content; qualitative stop criteria (all relevant areas covered by saved sources, diminishing returns — no numeric source-count target; the saved-sources block is the coverage ledger); anti-patterns (never save unfetched URLs, no vague summaries, don't retry failed fetches, don't re-search covered topics). |
-| `planning_phase.md` | 109 | `outline_planning`, `awaiting_approval` | The beginner→interview-ready module arc (foundations → core skills → question drills → mock/strategy); no fixed module/section count — scope driven by researched material and user goals, timeline respected via priority ordering rather than a count cap; every module needs a sample-Q&A section; the binding task-plan id contract (`m{X}-s{Y}` ids, required `module_ref`, exactly one task per section, no overview task, `outline_markdown` must label every section `Section X.Y` for the server-side cross-check); how `propose_task_plan` behaves as a HITL gate (and rejects the whole plan on any contract violation); how to incorporate `modify` feedback on revision (choose `outline_planning` vs. `deep_research` via `transition_phase` first, then read all feedback, targeted changes, top-up research if needed). |
+| `planning_phase.md` | 132 | `outline_planning`, `awaiting_approval` | The beginner→interview-ready module arc (foundations → core skills → question drills → mock/strategy); no fixed module/section count — scope driven by researched material and user goals, timeline respected via priority ordering rather than a count cap; every module needs a sample-Q&A section; the binding task-plan id contract (`m{X}-s{Y}` ids, required `module_ref`, exactly one task per section, no overview task, `outline_markdown` must label every section `Section X.Y` for the server-side cross-check); the `modules[]` list (id + real display title per module, never a copy of a section title — the only source of module doc titles at materialization); how `propose_task_plan` behaves as a HITL gate (and rejects the whole plan on any contract violation); how to incorporate `modify` feedback on revision (choose `outline_planning` vs. `deep_research` via `transition_phase` first, then read all feedback, targeted changes, top-up research if needed). |
 | `writing_phase.md` | 114 | `writing` | A strongly-worded "only write what was planned" subsection (module_id/section_id come verbatim from the approved plan, never invented; the overview is never a section); per-task workflow (scan saved-source summaries → `fetch_url` the relevant saved URLs for full content → further targeted `web_search`→`fetch_url`→`save_sources` top-ups explicitly encouraged when saved coverage is thin → `write_section`); markdown/Mermaid/table/callout formatting standards; sample-Q&A authoring standard (personalize to the user's actual background); 800-2000 word/section length guidance; "ground everything in research first" mandate; resumability via `update_scratchpad`; exit via `transition_phase("review")` when the task queue is empty — validated server-side against pending tasks/planned sections. |
 | `review_phase.md` | 56 | `review` | Structured quality pass over the whole draft: `list_curriculum_structure` then `read_section` module-by-module against a checklist (citations, diagrams, sample-Q&A coverage, 800-2000 word length, coherence, module status); fix failures directly via `write_section` overwrite (full corrected markdown + citations, never a fragment); `update_scratchpad` tracks which modules are already reviewed for resumability; the already-saved source pool is the only one (re-read via `fetch_url`, no new searching); after all modules pass, `write_curriculum_overview`, then exit via `transition_phase("ready")` — validated server-side (all sections complete + overview written). |
 | `refinement_phase.md` | 74 | `ready`, `refinement` | Three request types and how to handle each: edits (read-before-write, minimal targeted changes, preserve citations, `change_note`), explanations (teach in chat, never silently modify content), additions/deep-dives (scoped targeted research, not a full re-run of `deep_research`; new sections/modules must use the next sequential id — `s{K+1}`/`m{N+1}` — arbitrary slugs are rejected server-side). |
@@ -639,12 +646,13 @@ fixed source-count target), it calls `transition_phase("outline_planning",
 saved-source summaries in its working-memory block (re-fetching any URL it needs in
 full), drafts an outline sized to what the
 research and the user's goals warrant (no fixed module/section count) and personalized
-to the user's profile — one task per section, ids `m{X}-s{Y}`, `outline_markdown`
+to the user's profile — one task per section, ids `m{X}-s{Y}`, a `modules[]` entry
+(id + real display title) per module, `outline_markdown`
 labeling every section `Section X.Y: <title>` — then calls
-`propose_task_plan(outline_markdown, tasks=[...])` — **alone**, per prompt instruction.
-`_validate_plan` checks the id/module_ref format, numbering contiguity, and the
-outline↔tasks cross-check first; a violation returns `{"error": ...}` with nothing
-persisted. On success this writes
+`propose_task_plan(outline_markdown, tasks=[...], modules=[...])` — **alone**, per prompt
+instruction. `_validate_plan` checks the id/module_ref format, numbering contiguity, the
+`modules` list's coverage/titles, and the outline↔tasks cross-check first; a violation
+returns `{"error": ...}` with nothing persisted. On success this writes
 `curricula/{curId}/plan/main` (`version: 1, status: "proposed"`), sets curriculum
 `status="awaiting_approval"` plus a persisted `progress` blob, sets state
 `phase="awaiting_approval"`, and the tool's output carries `_ws_events:
@@ -658,9 +666,10 @@ payload; the composer is disabled while awaiting a decision.
 **6. User clicks "Approve & build."** Frontend sends `{"type": "plan_decision",
 "decision": "approve", "feedback": null}`. A new `run_turn` starts;
 `_apply_plan_decision` runs before any LLM call: `plan.status = "approved"`,
-`_materialize_modules_and_sections` creates the module docs (grouped by `module_ref`)
-and section stub docs (`status: "planned"`, one per task, doc id = task id with its
-`m{X}-` module prefix stripped, e.g. task `m1-s2` → section doc `s2`) under
+`_materialize_modules_and_sections` creates the module docs (grouped by `module_ref`,
+title from the plan's structured `modules[]` entry, with the first-task-title heuristic
+as a legacy fallback) and section stub docs (`status: "planned"`, one per task, doc id =
+task id with its `m{X}-` module prefix stripped, e.g. task `m1-s2` → section doc `s2`) under
 `curricula/{curId}/modules/...`, computes `task_queue` from all non-`done` task ids,
 sets state `phase="writing"`, `current_task_id` = first task, sets curriculum
 `status="writing"`, and emits a live `phase_change{phase: "writing"}` WS event (plus a

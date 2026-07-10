@@ -179,6 +179,13 @@ curricula/{id}/plan/main
             # all of this server-side (format, uniqueness, contiguity, and the
             # outline_markdown <-> tasks cross-check) and rejects the whole plan with an
             # error observation (no partial save) on any violation.
+  modules: [{id: str, title: str}]
+            # module display titles, one per distinct module_ref used by tasks (ids must
+            # exactly cover that set, same order); propose_task_plan validates coverage and
+            # title (non-empty, <=80 chars) server-side. Source of truth for module doc
+            # titles at materialization (legacy plans lacking this field, or a module_ref
+            # missing an entry, fall back to deriving the title from that module's first
+            # task title). NOT mirrored into the plan_proposed WS event below.
   status: "proposed"|"approved"|"revising"
   user_feedback: [str]
 

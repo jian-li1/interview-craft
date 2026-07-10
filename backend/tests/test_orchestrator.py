@@ -122,6 +122,8 @@ async def test_run_turn_pauses_on_hitl_gate_tool_call(monkeypatch, fake_fs, orch
                     # cross-check matches this against task id "m1-s1".
                     "outline_markdown": "# Outline\n\n## Module 1\n\nSection 1.1: Intro",
                     "tasks": [{"id": "m1-s1", "title": "Intro", "module_ref": "m1"}],
+                    # Required structured module list — must cover the tasks' module set.
+                    "modules": [{"id": "m1", "title": "Module One"}],
                 },
             ),
             Done(),
@@ -308,7 +310,8 @@ async def test_run_turn_plain_text_answer_completes_done(monkeypatch, fake_fs, o
 @pytest.mark.asyncio
 async def test_run_turn_applies_plan_decision_approve_and_materializes(monkeypatch, fake_fs, orchestrator):
     """Verify approving a proposed plan transitions the curriculum/state to "writing",
-    materializes modules from the plan's tasks, emits a `curriculum_updated` event, and
+    materializes modules from the plan's tasks using the plan's structured `modules`
+    titles (NOT the first section's title), emits a `curriculum_updated` event, and
     seeds the curriculum doc's persisted `progress` counters from the plan's tasks.
     """
     conv, curriculum = _setup_conversation(fake_fs, phase="awaiting_approval")
@@ -321,6 +324,9 @@ async def test_run_turn_applies_plan_decision_approve_and_materializes(monkeypat
                 {"id": "m1-s1", "title": "Intro", "module_ref": "m1", "status": "pending"},
                 {"id": "m1-s2", "title": "Basics", "module_ref": "m1", "status": "pending"},
             ],
+            # Structured module title, distinct from the first task's title ("Intro") —
+            # asserts materialization prefers this over the legacy first-task heuristic.
+            "modules": [{"id": "m1", "title": "Foundations of Interviewing"}],
             "status": "proposed",
             "user_feedback": [],
         },
@@ -358,7 +364,9 @@ async def test_run_turn_applies_plan_decision_approve_and_materializes(monkeypat
     assert state["task_queue"] == ["m1-s1", "m1-s2"]
 
     modules = fake_fs.fs.list_modules(curriculum["id"])
-    assert any(m["id"] == "m1" for m in modules)
+    m1 = next(m for m in modules if m["id"] == "m1")
+    # Title must come from plan.modules, not the first task's title ("Intro").
+    assert m1["title"] == "Foundations of Interviewing"
 
     curriculum_updated_events = [e for e in events if e["type"] == "curriculum_updated"]
     assert len(curriculum_updated_events) == 1
@@ -381,10 +389,11 @@ async def test_run_turn_applies_plan_decision_approve_and_materializes(monkeypat
 
 @pytest.mark.asyncio
 async def test_materialize_modules_and_sections_derives_section_ids_from_task_ids(fake_fs, orchestrator):
-    """Approved tasks m1-s1, m1-s2, m2-s1 must materialize module docs m1/m2 and, under
-    each, section docs whose ids are the task id's suffix after stripping "m{X}-"
-    (s1/s2 under m1, s1 under m2) — not the full task id. Also verifies idempotency:
-    calling materialization twice does not duplicate or reset anything.
+    """Approved tasks m1-s1, m1-s2, m2-s1 must materialize module docs m1/m2 with their
+    distinct structured `modules` titles (NOT the first task's title) and, under each,
+    section docs whose ids are the task id's suffix after stripping "m{X}-" (s1/s2 under
+    m1, s1 under m2) — not the full task id. Also verifies idempotency: calling
+    materialization twice does not duplicate or reset anything.
     """
     plan = {
         "version": 1,
@@ -394,14 +403,22 @@ async def test_materialize_modules_and_sections_derives_section_ids_from_task_id
             {"id": "m1-s2", "title": "Basics", "module_ref": "m1", "status": "pending"},
             {"id": "m2-s1", "title": "Practice", "module_ref": "m2", "status": "pending"},
         ],
+        # Distinct real module titles, each different from any of their tasks' titles.
+        "modules": [
+            {"id": "m1", "title": "Interview Foundations"},
+            {"id": "m2", "title": "Hands-On Practice"},
+        ],
         "status": "approved",
     }
     curriculum = fake_fs.fs.create_curriculum("uid1", "Test", "prep me", conversation_id="conv1")
 
     await orchestrator._materialize_modules_and_sections(curriculum["id"], plan)
 
-    modules = {m["id"] for m in fake_fs.fs.list_modules(curriculum["id"])}
-    assert modules == {"m1", "m2"}
+    modules = {m["id"]: m["title"] for m in fake_fs.fs.list_modules(curriculum["id"])}
+    assert set(modules) == {"m1", "m2"}
+    # Titles come from plan.modules, not the first task in each module.
+    assert modules["m1"] == "Interview Foundations"
+    assert modules["m2"] == "Hands-On Practice"
 
     m1_sections = {s["id"] for s in fake_fs.fs.list_sections(curriculum["id"], "m1")}
     assert m1_sections == {"s1", "s2"}
@@ -416,6 +433,32 @@ async def test_materialize_modules_and_sections_derives_section_ids_from_task_id
     assert len(fake_fs.fs.list_modules(curriculum["id"])) == 2
     assert len(fake_fs.fs.list_sections(curriculum["id"], "m1")) == 2
     assert len(fake_fs.fs.list_sections(curriculum["id"], "m2")) == 1
+
+
+@pytest.mark.asyncio
+async def test_materialize_modules_and_sections_legacy_plan_without_modules_falls_back(
+    fake_fs, orchestrator
+):
+    """A plan dict with no `modules` key at all (pre-dating the structured field) must
+    still materialize, falling back to the legacy heuristic: title = first task's title
+    referencing that module, split at the first ':' and truncated to 80 chars.
+    """
+    plan = {
+        "version": 1,
+        "outline_markdown": "# Outline",
+        "tasks": [
+            {"id": "m1-s1", "title": "Intro: Getting Started", "module_ref": "m1", "status": "pending"},
+        ],
+        # No "modules" key — simulates a plan proposed before this field existed.
+        "status": "approved",
+    }
+    curriculum = fake_fs.fs.create_curriculum("uid1", "Test", "prep me", conversation_id="conv1")
+
+    await orchestrator._materialize_modules_and_sections(curriculum["id"], plan)
+
+    modules = {m["id"]: m["title"] for m in fake_fs.fs.list_modules(curriculum["id"])}
+    # Legacy heuristic: first task's title truncated at its first ':'.
+    assert modules["m1"] == "Intro"
 
 
 @pytest.mark.asyncio

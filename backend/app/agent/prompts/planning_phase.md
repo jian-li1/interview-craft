@@ -69,6 +69,18 @@ plan (no partial save) with a specific error if you violate it, so get it right:
   `id`'s `m{X}-` prefix exactly (e.g. `module_ref: "m1"` for `id: "m1-s2"`). Never null.
 - `status`: `"pending"` for all tasks at proposal time.
 
+`propose_task_plan` ALSO takes a `modules` list — this is the ONLY place a module's real
+display title is captured, so get it right:
+- One entry per distinct module, in module-number order (`m1`, `m2`, ...) — the set of
+  ids must exactly match the set of `module_ref`s used across `tasks`, or the call is
+  rejected.
+- `id`: the module id, `m{X}`.
+- `title`: the module's real display title — what your outline calls it after "Module
+  X:" (e.g. outline heading `Module 3: System Design Fundamentals` → `title: "System
+  Design Fundamentals"`, no leading "Module X:" numbering). This exact string becomes the
+  module's display title in the curriculum once the plan is approved — it must NOT be a
+  copy of one of that module's section titles, and never the bare id.
+
 The `outline_markdown` should be a clean, human-readable rendering of the same structure
 (module titles + summaries + section titles) — this is what's shown to the user in the
 approval card, so make it scannable and inviting, not just a dry list. It is ALSO

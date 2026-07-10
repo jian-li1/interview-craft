@@ -48,17 +48,21 @@ intake ──► deep_research ──► outline_planning ──► awaiting_app
   task; the overview is written later in `review` via `write_curriculum_overview`).
   Personalize using the synthesized user profile. Call `propose_task_plan` → the tool
   first validates the plan server-side (task id format `m{X}-s{Y}`, `module_ref`
-  prefix match, contiguous module/section numbering, and that `outline_markdown`'s
-  `Section X.Y` labels match `tasks` 1:1) and returns an error observation with no
-  writes performed on any violation. On success it emits `phase_change`
+  prefix match, contiguous module/section numbering, that `modules[]` ids exactly cover
+  the tasks' module set with a real non-empty <=80-char title per module, and that
+  `outline_markdown`'s `Section X.Y` labels match `tasks` 1:1) and returns an error
+  observation with no writes performed on any violation. On success it emits `phase_change`
   (awaiting_approval), `progress` (task counts, if any tasks), and `plan_proposed` WS
   events (in that order), sets curriculum status=awaiting_approval and persists the
-  progress blob, and **pauses the loop**.
+  progress blob (including `modules` on the plan doc), and **pauses the loop**.
 - **awaiting_approval (HITL)**: Resumes on `plan_decision`. approve → materialize modules/
-  sections stubs in Firestore (section doc id = task id minus its `m{X}-` module
-  prefix, e.g. task `m1-s2` → section doc `s2` under module doc `m1`; legacy task ids
-  without that prefix fall back to using the full id verbatim), status=writing, go to
-  writing, emit live `phase_change` (writing) + `progress` WS events. modify → feedback
+  sections stubs in Firestore (module doc title comes from the plan's structured
+  `modules[]` entry for that module_ref — legacy plans lacking a matching entry fall
+  back to deriving the title from the module's first task title; section doc id = task
+  id minus its `m{X}-` module prefix, e.g. task `m1-s2` → section doc `s2` under module
+  doc `m1`; legacy task ids without that prefix fall back to using the full id
+  verbatim), status=writing, go to writing, emit live `phase_change` (writing) +
+  `progress` WS events. modify → feedback
   appended, plan status set to `revising`; the orchestrator does NOT force a phase — it
   stays `awaiting_approval` and the agent itself calls `transition_phase` to choose
   `outline_planning` (revise directly from saved sources) or `deep_research` (gather
@@ -176,7 +180,7 @@ during writing-only refinements, etc. — keep filtering simple: a phase→allow
 - `get_user_profile()` → synthesized_profile + structured fields (target roles, experience level, learning style, timeline).
 
 **Planning tools**
-- `propose_task_plan(outline_markdown, tasks[])` → HITL GATE: validates the plan first (task id `m{X}-s{Y}`, `module_ref` prefix match, contiguous module/section numbering, `outline_markdown`'s `Section X.Y` labels matching `tasks` 1:1) — error observation, no writes, if invalid; on success saves plan, sets status awaiting_approval, emits `phase_change` + `progress` + `plan_proposed`, pauses loop.
+- `propose_task_plan(outline_markdown, tasks[], modules[])` → HITL GATE: validates the plan first (task id `m{X}-s{Y}`, `module_ref` prefix match, contiguous module/section numbering, `modules[]` ids exactly covering the tasks' module set with a non-empty <=80-char title per module, `outline_markdown`'s `Section X.Y` labels matching `tasks` 1:1) — error observation, no writes, if invalid; on success saves plan (including `modules`), sets status awaiting_approval, emits `phase_change` + `progress` + `plan_proposed` (unchanged payload — `modules` is not mirrored into it), pauses loop.
 - `get_task_plan()` → current plan + task statuses.
 
 **Curriculum tools**
