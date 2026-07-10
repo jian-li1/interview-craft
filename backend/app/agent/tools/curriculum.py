@@ -9,7 +9,6 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from app.agent.mermaid_lint import lint_markdown_mermaid
 from app.agent.tools.base import AgentContext, Tool
 from app.core.logging import get_logger
 from app.services import firestore as fs
@@ -121,22 +120,18 @@ class WriteSectionTool(Tool):
         "Validates that citations are non-empty for research-based content (raises an error "
         "observation if you submit substantial content with zero citations — add citations or "
         "explicitly keep the section citation-free only when it truly makes no factual claims). "
-        "Also syntax-checks any ```mermaid blocks and rejects the write with an error observation "
-        "if a diagram is broken (unknown type, unbalanced brackets, unquoted risky labels, "
-        "unclosed fence) — fix the diagram per visual_guidelines.md and resubmit. Marks "
-        "the corresponding task done if one exists, marks the section/module status, and "
+        "Marks the corresponding task done if one exists, marks the section/module status, and "
         "emits curriculum_updated + progress events to the client."
     )
     input_model = WriteSectionInput
 
     async def execute(self, input: WriteSectionInput, ctx: AgentContext) -> dict[str, Any]:
-        """Create or overwrite a section's content, enforcing citations and Mermaid syntax.
+        """Create or overwrite a section's content, enforcing citations.
 
-        This is a main code-level enforcement point for citations and diagram syntax
-        (per `app/agent/CLAUDE.md`): content over 400 stripped characters with no
-        citations, or content containing a broken ```mermaid block, is rejected with an
-        error observation rather than being written, forcing the model to fix the issue
-        and resubmit the full corrected content.
+        This is the main code-level enforcement point for citations (per
+        `app/agent/CLAUDE.md`): content over 400 stripped characters with no
+        citations is rejected with an error observation rather than being written,
+        forcing the model to fix the issue and resubmit the full corrected content.
 
         Args:
             input (WriteSectionInput): The validated section fields (module_id,
@@ -154,13 +149,13 @@ class WriteSectionTool(Tool):
                 content) via `_refresh_module_status`, and persists task progress onto
                 the curriculum doc's `progress` field via `_refresh_curriculum_progress`
                 (so REST readers like the dashboard see it, not just live WS clients).
-                On the citation-guard failure or a Mermaid lint failure, `{"error":
-                "..."}` instead (no write performed). Also `{"error": "..."}` if the
-                target guard rejects module_id/section_id (see `_validate_write_target`)
-                — a wrong target is checked first since it invalidates everything else.
+                On the citation-guard failure, `{"error": "..."}` instead (no write
+                performed). Also `{"error": "..."}` if the target guard rejects
+                module_id/section_id (see `_validate_write_target`) — a wrong target
+                is checked first since it invalidates everything else.
         """
         # Target guard: catch invented/phantom module or section ids before any other
-        # check, since writing to the wrong target invalidates citations/mermaid work too.
+        # check, since writing to the wrong target invalidates citation work too.
         target_error = _validate_write_target(ctx.curriculum_id, ctx.phase, input.module_id, input.section_id, input.title)
         if target_error:
             return {"error": target_error}
@@ -172,19 +167,6 @@ class WriteSectionTool(Tool):
                     "Research-grounded content must cite sources (see citation_guidelines.md). "
                     "If this section truly makes no factual claims, keep it much shorter or "
                     "explicitly note why no citation is needed."
-                )
-            }
-
-        # Reject broken Mermaid diagrams before writing so the ReAct loop self-corrects
-        # instead of persisting a block that fails to parse in the browser.
-        mermaid_problems = lint_markdown_mermaid(input.content_markdown)
-        if mermaid_problems:
-            return {
-                "error": (
-                    f"content_markdown contains invalid Mermaid syntax and was NOT written: "
-                    f"{mermaid_problems} Fix the diagram(s) per visual_guidelines.md (quote every "
-                    f"label containing spaces or punctuation, keep node IDs short) and resubmit "
-                    f"the FULL corrected content."
                 )
             }
 
@@ -291,10 +273,7 @@ class UpdateSectionTool(Tool):
     description = (
         "Update an existing section's content during refinement. Use for targeted edits after "
         "reading the current content with read_section. Provide a clear change_note describing "
-        "what changed — this is surfaced to the user as a changelog entry. Also syntax-checks "
-        "any ```mermaid blocks and rejects the update with an error observation if a diagram is "
-        "broken (unknown type, unbalanced brackets, unquoted risky labels, unclosed fence) — "
-        "fix the diagram per visual_guidelines.md and resubmit the full revised content."
+        "what changed — this is surfaced to the user as a changelog entry."
     )
     input_model = UpdateSectionInput
 
@@ -316,25 +295,12 @@ class UpdateSectionTool(Tool):
                 event for the orchestrator to forward. Also refreshes the parent
                 module's derived `status`/`estimated_minutes` via
                 `_refresh_module_status`, since edited content changes reading time.
-                `{"error": "..."}` if the section doesn't exist yet, or if
-                `content_markdown` contains a broken ```mermaid block (no update
-                performed in either failure case).
+                `{"error": "..."}` if the section doesn't exist yet (no update
+                performed).
         """
         existing = fs.get_section(ctx.curriculum_id, input.module_id, input.section_id)
         if not existing:
             return {"error": f"section {input.section_id} not found in module {input.module_id}"}
-
-        # Same Mermaid guard as WriteSectionTool — reject before touching prior content.
-        mermaid_problems = lint_markdown_mermaid(input.content_markdown)
-        if mermaid_problems:
-            return {
-                "error": (
-                    f"content_markdown contains invalid Mermaid syntax and was NOT written: "
-                    f"{mermaid_problems} Fix the diagram(s) per visual_guidelines.md (quote every "
-                    f"label containing spaces or punctuation, keep node IDs short) and resubmit "
-                    f"the FULL corrected content."
-                )
-            }
 
         now = dt.datetime.now(dt.timezone.utc)
         citations = [

@@ -592,7 +592,7 @@ class Orchestrator:
                 if tc.name == "fetch_url" and result.status == "ok":
                     any_fetch_succeeded = True
                 # write/update inputs carry full section content even on error (e.g. a rejected
-                # Mermaid lint); a read only adds content when it succeeds.
+                # citation guard); a read only adds content when it succeeds.
                 if tc.name in ("write_section", "update_section") or (
                     tc.name == "read_section" and result.status == "ok"
                 ):

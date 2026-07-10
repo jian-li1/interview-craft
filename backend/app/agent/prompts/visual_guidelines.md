@@ -26,13 +26,11 @@ correctness here matters as much as content quality.
 7. **Test complexity mentally before emitting** — if you can't clearly picture how the
    diagram renders, simplify it. A correct, simple diagram beats an ambitious, broken one.
 
-## Automatic syntax linting
+## You are solely responsible for syntax correctness
 
-`write_section`/`update_section` run a heuristic Mermaid syntax lint before writing.
-Content containing a broken ```mermaid block (unknown diagram type, unbalanced
-brackets, unquoted risky labels, unclosed fence) is REJECTED with an error observation
-— nothing is written. If you see this error, fix ONLY the flagged diagram(s) per the
-guardrails above and resubmit the FULL corrected section content (not a fragment).
+There is no server-side syntax check — a broken ```mermaid block is written as-is and
+fails to render for the user (it degrades to a plain code block in the UI). Re-read
+every diagram against the guardrails above before submitting section content.
 
 ## Which diagram type to use when
 

@@ -258,8 +258,8 @@ precisely or if the profile changed mid-run.
 - **`list_curriculum_structure`** — nested `{modules: [{id, order, title, status,
   sections: [{id, order, title, status}]}]}`, no content bodies — cheap orientation.
 - **`write_section`** — `module_id, section_id, title, content_markdown, citations[]`.
-  **Target guard runs first** (`_validate_write_target`, before the citation/mermaid
-  checks — a wrong target invalidates everything else): in `writing`/`review`,
+  **Target guard runs first** (`_validate_write_target`, before the citation check —
+  a wrong target invalidates everything else): in `writing`/`review`,
   `module_id` must already exist (else error listing existing module ids from
   `list_modules`) and `section_id` must already exist under it (else error listing that
   module's existing section ids/titles/statuses, and noting the overview must go
@@ -275,12 +275,7 @@ precisely or if the profile changed mid-run.
   regardless of phase. **Then validates**: if `content_markdown` is over 400 stripped
   characters and `citations` is empty, returns an error observation instructing the
   model to add citations or shorten the section — this is the concrete enforcement of
-  the "citations are non-negotiable" rule. Also runs `mermaid_lint.lint_markdown_mermaid`
-  over `content_markdown` and, if any ```mermaid block fails the heuristic syntax check
-  (unknown diagram type, unbalanced brackets, unquoted risky labels, unclosed fence),
-  returns an error observation naming each broken block with **no write performed** —
-  the model fixes the diagram per `visual_guidelines.md` and resubmits the full
-  content. On success: stamps `accessed_at` (server `utcnow()`) onto every
+  the "citations are non-negotiable" rule. On success: stamps `accessed_at` (server `utcnow()`) onto every
   citation, creates or updates the section doc (preserving `order` if the section
   already existed), marks the matching plan task `"done"` and pops it from the agent
   state's `task_queue` (via the internal `_mark_task_done` helper, matching either the
@@ -294,10 +289,8 @@ precisely or if the profile changed mid-run.
   refinement prompt mandates calling this before any `update_section`.
 - **`update_section`** — like `write_section` but requires the section to already exist,
   takes a `change_note` (surfaced to the user as a changelog line), does **not** run the
-  400-char citation-required check that `write_section` does, but runs the same
-  `mermaid_lint.lint_markdown_mermaid` guard (error observation + no write on a broken
-  diagram), and emits only `curriculum_updated` (no `progress` event, since this isn't
-  task-queue-driven).
+  400-char citation-required check that `write_section` does, and emits only
+  `curriculum_updated` (no `progress` event, since this isn't task-queue-driven).
 - After any batch containing a `write_section`/`update_section` call or a successful
   `read_section` call, the orchestrator runs `strip_stale_section_content(conversation_id)`:
   for each `(module_id, section_id)`, only the latest content-bearing occurrence keeps its
@@ -582,7 +575,7 @@ All eleven files live in `backend/app/agent/prompts/` and are treated as code (p
 | `review_phase.md` | 56 | `review` | Structured quality pass over the whole draft: `list_curriculum_structure` then `read_section` module-by-module against a checklist (citations, diagrams, sample-Q&A coverage, 800-2000 word length, coherence, module status); fix failures directly via `write_section` overwrite (full corrected markdown + citations, never a fragment); `update_scratchpad` tracks which modules are already reviewed for resumability; the already-saved source pool is the only one (re-read via `fetch_url`, no new searching); after all modules pass, `write_curriculum_overview`, then exit via `transition_phase("ready")` — validated server-side (all sections complete + overview written). |
 | `refinement_phase.md` | 74 | `ready`, `refinement` | Three request types and how to handle each: edits (read-before-write, minimal targeted changes, preserve citations, `change_note`), explanations (teach in chat, never silently modify content), additions/deep-dives (scoped targeted research, not a full re-run of `deep_research`; new sections/modules must use the next sequential id — `s{K+1}`/`m{N+1}` — arbitrary slugs are rejected server-side). |
 | `citation_guidelines.md` | 79 | Every phase (always layer 3) | The exact `[^n]` marker mechanics, the `## Sources` footnote section format, the `citations` array contract (must mirror footnotes exactly), the hard "no fabricated URLs" rule, and a checklist of what does/doesn't need a citation. |
-| `visual_guidelines.md` | 92 | Every phase (always layer 4) | Mermaid syntax guardrails (always quote labels, avoid unquoted parens, cap ~25 nodes, short node IDs, one edge per line, always fence with `` ```mermaid ``); a note that `write_section`/`update_section` run an automatic syntax lint and reject broken diagrams (fix and resubmit); which diagram type for which content (flowchart default, sequenceDiagram for party interactions, mindmap for topic breakdowns); a worked correct example; `classDef`-based highlighting restrained to 2-3 accent classes; sparse, heading-only emoji usage. |
+| `visual_guidelines.md` | 90 | Every phase (always layer 4) | Mermaid syntax guardrails (always quote labels, avoid unquoted parens, cap ~25 nodes, short node IDs, one edge per line, always fence with `` ```mermaid ``); a note that there is no server-side syntax check — a broken diagram degrades to a plain code block in the UI, so the agent must self-check before writing; which diagram type for which content (flowchart default, sequenceDiagram for party interactions, mindmap for topic breakdowns); a worked correct example; `classDef`-based highlighting restrained to 2-3 accent classes; sparse, heading-only emoji usage. |
 | `profile_synthesis.md` | 63 | Onboarding `/api/onboarding/synthesize` endpoint only (small model, no tools) | Transforms raw onboarding fields + resume text into a 200-350 word third-person profile covering background, strengths, gaps vs. target roles, learning style translated into content-design guidance, and 2-4 concrete personalization hooks. Explicitly: no fabrication, no meta-commentary, plain prose only. |
 | `compaction.md` | 76 | `MemoryManager`'s auto-compaction only (small model, no tools) | What to preserve (key decisions, user preferences/corrections, curriculum/plan state, open threads) vs. drop (pleasantries, superseded tool detail, dead-end reasoning, full tool payloads); fixed-heading structured markdown output contract (`## Key Decisions` / `## User Preferences & Corrections` / `## Curriculum & Plan State` / `## Open Threads`); how to merge with an existing rolling summary (later decision wins, trim oldest/least-actionable first). |
 
@@ -683,9 +676,8 @@ thin — runs further targeted `web_search`→`fetch_url`→`save_sources` round
 `writing`, `module_id`/`section_id` must already exist as a materialized stub, else an
 error listing the existing ids (no invented ids like the `beyond-star`/`overview_mod`
 phantoms this guard exists to catch). Then it validates non-empty citations for
-substantial content, syntax-lints any ```mermaid blocks (rejecting the write with an
-error observation if a diagram is broken — see `mermaid_lint.py`), writes/overwrites the
-section doc, marks the task `done` in the plan (matching `module_id-section_id` or, for
+substantial content, writes/overwrites the section doc, marks the task `done` in the
+plan (matching `module_id-section_id` or, for
 legacy docs, `section_id` alone) and pops it from
 `task_queue` (updating `current_task_id`), refreshes `module_count`/`section_count` on
 the curriculum, and emits both `curriculum_updated{scope:"section", module_id,
