@@ -1,4 +1,4 @@
-"""Control tools: request_user_input (HITL gate), update_scratchpad, complete_phase."""
+"""Control tools: request_user_input (HITL gate), update_scratchpad, transition_phase."""
 
 from __future__ import annotations
 
@@ -134,15 +134,15 @@ class UpdateScratchpadTool(Tool):
         return {"status": "updated"}
 
 
-class CompletePhaseInput(BaseModel):
-    """Input schema for `CompletePhaseTool`."""
+class TransitionPhaseInput(BaseModel):
+    """Input schema for `TransitionPhaseTool`."""
 
     next_phase: str = Field(..., description="The phase to transition into.")
     reason: str = Field(..., description="Brief reason for this transition (for logging/debugging).")
 
 
-class CompletePhaseTool(Tool):
-    name = "complete_phase"
+class TransitionPhaseTool(Tool):
+    name = "transition_phase"
     description = (
         "Transition the agent to the next phase in the state machine (intake -> deep_research "
         "-> outline_planning -> awaiting_approval -> writing -> review -> ready -> refinement). "
@@ -159,9 +159,9 @@ class CompletePhaseTool(Tool):
         "sources first; outline_planning may also drop back to deep_research if a gap becomes "
         "apparent mid-revision."
     )
-    input_model = CompletePhaseInput
+    input_model = TransitionPhaseInput
 
-    async def execute(self, input: CompletePhaseInput, ctx: AgentContext) -> dict[str, Any]:
+    async def execute(self, input: TransitionPhaseInput, ctx: AgentContext) -> dict[str, Any]:
         """Validate and apply a phase transition, updating state/curriculum status.
 
         Note that `ctx.phase` reflects the phase as of the start of this orchestrator
@@ -172,7 +172,7 @@ class CompletePhaseTool(Tool):
         so REST readers never see a stale phase.
 
         Args:
-            input (CompletePhaseInput): The validated target phase and a reason string
+            input (TransitionPhaseInput): The validated target phase and a reason string
                 (used for logging/debugging, not shown in the response beyond echoing
                 it back).
             ctx (AgentContext): The current agent run's context; `ctx.phase` is the
@@ -292,7 +292,7 @@ def _writing_exit_blockers(curriculum_id: str) -> str | None:
     return (
         "Cannot leave the writing phase yet — " + "; ".join(parts) + ". "
         "Finish writing every planned section via write_section before calling "
-        "complete_phase(\"review\")."
+        "transition_phase(\"review\")."
     )
 
 
@@ -331,5 +331,5 @@ def _review_exit_blockers(curriculum_id: str) -> str | None:
     return (
         "Cannot leave the review phase yet — " + "; ".join(parts) + ". "
         "Fix remaining sections via write_section and call write_curriculum_overview "
-        "before calling complete_phase(\"ready\")."
+        "before calling transition_phase(\"ready\")."
     )

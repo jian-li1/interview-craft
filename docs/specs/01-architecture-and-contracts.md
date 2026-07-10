@@ -333,7 +333,7 @@ the decision (see §5) before resuming the ReAct loop — this lets the model se
 very next iteration, that the approval/feedback already happened instead of re-asking the
 user to confirm.
 
-Note that `phase_change`/`progress` are not emitted *only* by `complete_phase` and the
+Note that `phase_change`/`progress` are not emitted *only* by `transition_phase` and the
 reconnect snapshot above — `propose_task_plan` and an approved `plan_decision` emit them
 live too, so a connected client never has to wait for a reload to see the current phase:
 `propose_task_plan` emits `phase_change` (awaiting_approval) and `progress` before
@@ -341,7 +341,7 @@ live too, so a connected client never has to wait for a reload to see the curren
 `progress` event) on approve. On modify, the orchestrator emits neither — it only
 records feedback and sets the plan's status to `revising`, leaving phase at
 `awaiting_approval`; the agent itself picks the next phase (`outline_planning` or
-`deep_research`) via `complete_phase`, which emits its own `phase_change` once it does.
+`deep_research`) via `transition_phase`, which emits its own `phase_change` once it does.
 
 ## 8. Security requirements
 

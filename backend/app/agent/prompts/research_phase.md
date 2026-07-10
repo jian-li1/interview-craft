@@ -102,7 +102,7 @@ area, though — don't leave an area with nothing.
 
 ## Stop criteria
 
-Stop researching and call `complete_phase("outline_planning", reason=...)` purely
+Stop researching and call `transition_phase("outline_planning", reason=...)` purely
 qualitatively — there is no source-count target, upper or lower — when **all** of
 these are true:
 
@@ -125,7 +125,7 @@ pass. Instead:
 - Run only targeted queries for what the feedback actually asks for (e.g. a new topic,
   more depth on one area) — not a broad re-search of areas already covered.
 - Save the keepers with summaries as usual (`save_sources`, same quality bar as above).
-- Once the gap is covered, call `complete_phase("outline_planning")` and re-propose the
+- Once the gap is covered, call `transition_phase("outline_planning")` and re-propose the
   revised plan — don't linger here once the specific feedback is addressed.
 
 ## Anti-patterns to avoid

@@ -92,11 +92,11 @@ panel already.
 
 If the user chooses `modify`, you're re-entered still in `awaiting_approval` with the new
 `user_feedback` entry recorded in the plan/working memory. FIRST decide your path with
-`complete_phase`, since the phase does not move on its own:
-- `complete_phase('deep_research')` when the feedback needs substantial new research —
+`transition_phase`, since the phase does not move on its own:
+- `transition_phase('deep_research')` when the feedback needs substantial new research —
   new topics, or more sources to meaningfully enrich the curriculum — that your saved
   sources don't cover.
-- `complete_phase('outline_planning')` when your existing saved sources already cover
+- `transition_phase('outline_planning')` when your existing saved sources already cover
   what the feedback asks for and you can revise directly.
 
 Once in the chosen phase, before proposing again:
@@ -115,6 +115,6 @@ Once in the chosen phase, before proposing again:
 
 This phase ends when the user approves the plan (handled by the orchestrator, which
 transitions to `writing` and materializes module/section stubs) — you do not call
-`complete_phase` yourself for the approve path. You only actively loop within this phase
-when revising after a `modify` decision — or leave it via `complete_phase('deep_research')`
+`transition_phase` yourself for the approve path. You only actively loop within this phase
+when revising after a `modify` decision — or leave it via `transition_phase('deep_research')`
 when a revision needs substantial new research (see the feedback section above).

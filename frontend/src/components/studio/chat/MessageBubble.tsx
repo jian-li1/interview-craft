@@ -58,7 +58,10 @@ function MessageBubbleImpl({ message }: { message: ChatMessage }) {
           <ToolCallGroup calls={message.tool_calls} />
         )}
 
-        {(message.content || message.contentStreaming) && (
+        {/* Bubble only when there's real text: `message_start` sets contentStreaming
+            before any text_delta, so gating on it alone showed an empty bubble while
+            the agent was still reasoning / running tools. */}
+        {message.content.trim().length > 0 && (
           <div
             className={cn(
               "rounded-2xl px-4 py-2.5 text-sm leading-relaxed",
@@ -71,8 +74,9 @@ function MessageBubbleImpl({ message }: { message: ChatMessage }) {
               <p className="whitespace-pre-wrap">{message.content}</p>
             ) : (
               <div className="prose-chat">
+                {/* content is guaranteed non-empty by the render gate above */}
                 <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
-                  {message.content || " "}
+                  {message.content}
                 </ReactMarkdown>
                 {message.contentStreaming && (
                   <span className="blinking-caret" aria-hidden="true" />

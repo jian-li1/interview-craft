@@ -95,7 +95,7 @@ function ToolCallItem({ call }: { call: ToolCallRecord }) {
                 <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
                   Input
                 </p>
-                <pre className="mt-1 max-h-40 overflow-auto rounded-md bg-muted/60 p-2 text-[11px] leading-relaxed scrollbar-thin">
+                <pre className="mt-1 max-h-40 overflow-auto rounded-md bg-muted/60 p-2 text-[11px] leading-relaxed whitespace-pre-wrap scrollbar-thin">
                   {JSON.stringify(call.input, null, 2)}
                 </pre>
               </div>

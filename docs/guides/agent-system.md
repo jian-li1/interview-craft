@@ -35,29 +35,29 @@ turn:
 ```mermaid
 stateDiagram-v2
     [*] --> intake
-    intake --> deep_research: complete_phase
-    deep_research --> outline_planning: complete_phase
+    intake --> deep_research: transition_phase
+    deep_research --> outline_planning: transition_phase
     outline_planning --> awaiting_approval: propose_task_plan HITL gate
-    outline_planning --> deep_research: complete_phase, gap found mid-revision
+    outline_planning --> deep_research: transition_phase, gap found mid-revision
     awaiting_approval --> writing: plan_decision equals approve
-    awaiting_approval --> outline_planning: complete_phase, after plan_decision equals modify
-    awaiting_approval --> deep_research: complete_phase, after plan_decision equals modify
-    writing --> review: complete_phase, task queue empty
-    review --> ready: complete_phase
-    ready --> refinement: complete_phase
+    awaiting_approval --> outline_planning: transition_phase, after plan_decision equals modify
+    awaiting_approval --> deep_research: transition_phase, after plan_decision equals modify
+    writing --> review: transition_phase, task queue empty
+    review --> ready: transition_phase
+    ready --> refinement: transition_phase
     refinement --> refinement: steady state
 ```
 
-This exact graph is enforced in code, not just convention: `CompletePhaseTool`
+This exact graph is enforced in code, not just convention: `TransitionPhaseTool`
 (`app/agent/tools/control.py`) has a `_VALID_TRANSITIONS` map and rejects (returns an
-`{"error": ...}` observation, doesn't crash) any `complete_phase` call to a phase not
+`{"error": ...}` observation, doesn't crash) any `transition_phase` call to a phase not
 listed as reachable from the current one. The `awaiting_approval → writing` edge is
-**not** driven by `complete_phase` at all — it's driven by the orchestrator's
+**not** driven by `transition_phase` at all — it's driven by the orchestrator's
 `_apply_plan_decision` handling an incoming `plan_decision` WS frame directly (see §7).
 On a `modify` decision, `_apply_plan_decision` only records feedback and leaves the
 phase at `awaiting_approval`; the `awaiting_approval → outline_planning` and
 `awaiting_approval → deep_research` edges are then driven by the agent's own
-`complete_phase` call on the next iteration, same as any other transition.
+`transition_phase` call on the next iteration, same as any other transition.
 
 Each phase has a dedicated instruction file composed into the system prompt (§6) and a
 tool allowlist (§3) restricting what the LLM can even attempt to call.
@@ -73,7 +73,7 @@ tool allowlist (§3) restricting what the LLM can even attempt to call.
 | `ready` | `refinement_phase.md` | `ready` | full refinement toolset (below) |
 | `refinement` | `refinement_phase.md` | `ready` | `list_curriculum_structure`, `read_section`, `update_section`, `write_section`, `web_search`, `fetch_url`, `save_sources` |
 
-`_ALWAYS_AVAILABLE = ["get_user_profile", "update_scratchpad", "complete_phase",
+`_ALWAYS_AVAILABLE = ["get_user_profile", "update_scratchpad", "transition_phase",
 "request_user_input"]` is unioned into every phase's list in
 `backend/app/agent/tools/registry.py`'s `_PHASE_TOOLS` map. Note `ready`'s prompt file is actually `refinement_phase.md` (the
 `_PHASE_PROMPT_FILES` map in `memory/manager.py` reuses it for both `ready` and
@@ -111,7 +111,7 @@ tool allowlist (§3) restricting what the LLM can even attempt to call.
    - **Cancellation check** (top of loop): if the cancel event is set, persists
      `iteration_count`, emits `agent_done(status="cancelled")`, returns `CANCELLED`.
    - Re-reads the agent state fresh from Firestore every iteration (`phase` may have
-     changed due to a `complete_phase` call in the previous iteration).
+     changed due to a `transition_phase` call in the previous iteration).
    - Calls `MemoryManager.build_context(...)` (§5) to assemble the full message list,
      passing an `on_compaction` closure that emits the WS `compaction` event if
      compaction fires this iteration.
@@ -323,7 +323,7 @@ are not tools themselves — they're plain functions the tools above call.
   reconnecting client can restore the card — see `app/ws/chat.py`'s resume snapshot) and
   returns `{"status": "awaiting_user_input", "question", "options", "_hitl_gate": True,
   "_ws_event": {"type": "user_input_requested", "question", "options"}}`. The
-  orchestrator pops `_ws_event` and forwards it (same mechanism as `complete_phase`'s
+  orchestrator pops `_ws_event` and forwards it (same mechanism as `transition_phase`'s
   `phase_change`), so the frontend renders a dedicated question card from that event
   rather than inferring it from the model's chat text. `pending_user_input` is cleared
   by the orchestrator (`app/agent/orchestrator.py`, `_run_turn_inner`) the moment the
@@ -331,7 +331,7 @@ are not tools themselves — they're plain functions the tools above call.
 - **`update_scratchpad`** — overwrites `curricula/{id}/state/main.scratchpad` in one
   shot (not append — full overwrite each time, so the model must include everything
   worth keeping, not just a delta).
-- **`complete_phase`** — `next_phase`, `reason`. Validates `next_phase` is a real
+- **`transition_phase`** — `next_phase`, `reason`. Validates `next_phase` is a real
   `AgentPhase` literal and that the transition from `ctx.phase` is in
   `_VALID_TRANSITIONS` (§2). Two transitions carry an additional completeness gate,
   checked after transition validity but before any state mutation, returning
@@ -366,7 +366,7 @@ of which path produced it), `"ok"` otherwise — this is what streams to the cli
 ## 6. Memory & context management (`app/agent/memory/`)
 
 `MemoryManager.build_context(...)` (`memory/manager.py`) is called fresh on **every**
-ReAct iteration (not once per turn) — so a phase change mid-turn (via `complete_phase`)
+ReAct iteration (not once per turn) — so a phase change mid-turn (via `transition_phase`)
 is reflected in the very next iteration's prompt.
 
 ### Layer 1 — Static system prompt
@@ -531,12 +531,12 @@ runs synchronously before the iteration loop starts:
   `plan.status = "revising"` — that's it for state mutation; the phase stays
   `awaiting_approval` and no `phase_change` is emitted here. It then appends a synthetic
   `role:"system"` message restating the user's feedback text and instructing the model
-  that it is still in `awaiting_approval` and MUST now call `complete_phase` itself,
+  that it is still in `awaiting_approval` and MUST now call `transition_phase` itself,
   choosing `deep_research` if the feedback needs topics/depth its saved sources don't
   cover, else `outline_planning`, and then revise the outline and re-propose via
   `propose_task_plan`. The next iteration's prompt (whichever phase the model picked,
   including the full accumulated `user_feedback` via working memory / `get_task_plan`,
-  plus this system message) guides the model to call `complete_phase`, do any needed
+  plus this system message) guides the model to call `transition_phase`, do any needed
   research, revise, and call `propose_task_plan` again (which auto-increments `version`).
 
 Both branches take `conversation_id` (threaded through from `_run_turn_inner`) precisely
@@ -564,11 +564,11 @@ All eleven files live in `backend/app/agent/prompts/` and are treated as code (p
 | File | ~Lines | Used by | Purpose |
 |---|---|---|---|
 | `base_system.md` | 131 | Every phase (always layer 1) | Identity, the internal-reasoning ReAct convention, tool-error adaptation rules, tone, the "no fabricated citations" hard rule, the personalization mandate, phase discipline, HITL gate etiquette, scratchpad hygiene, tool-call efficiency guidance. |
-| `intake_phase.md` | 57 | `intake` | What to figure out (interview type, scope, constraints) from the user's message + profile; strict guidance on when to ask a clarifying question vs. proceed (err toward proceeding); curriculum naming; exit via `complete_phase("deep_research")`. |
+| `intake_phase.md` | 57 | `intake` | What to figure out (interview type, scope, constraints) from the user's message + profile; strict guidance on when to ask a clarifying question vs. proceed (err toward proceeding); curriculum naming; exit via `transition_phase("deep_research")`. |
 | `research_phase.md` | ~135 | `deep_research` | The search→fetch→read→save rhythm (`web_search` snippets are relevance triage only; `fetch_url` is the mandatory reading step for every keeper — re-fetching is safe since older copies are auto-stripped; `save_sources(query, sources)` pins a ≤5-sentence agent-written summary per keeper into working memory, full content re-fetchable on demand); summary-writing standards (name the page's concrete assets, not vague praise); the 6 query-diversification coverage areas (format/stages; foundational skills; real sample questions; sample answers/frameworks; prep roadmaps; company/domain specifics); fetch-vs-skip triage rules; source-quality heuristics judged from the FETCHED content; qualitative stop criteria (all relevant areas covered by saved sources, diminishing returns — no numeric source-count target; the saved-sources block is the coverage ledger); anti-patterns (never save unfetched URLs, no vague summaries, don't retry failed fetches, don't re-search covered topics). |
-| `planning_phase.md` | 109 | `outline_planning`, `awaiting_approval` | The beginner→interview-ready module arc (foundations → core skills → question drills → mock/strategy); no fixed module/section count — scope driven by researched material and user goals, timeline respected via priority ordering rather than a count cap; every module needs a sample-Q&A section; the binding task-plan id contract (`m{X}-s{Y}` ids, required `module_ref`, exactly one task per section, no overview task, `outline_markdown` must label every section `Section X.Y` for the server-side cross-check); how `propose_task_plan` behaves as a HITL gate (and rejects the whole plan on any contract violation); how to incorporate `modify` feedback on revision (choose `outline_planning` vs. `deep_research` via `complete_phase` first, then read all feedback, targeted changes, top-up research if needed). |
-| `writing_phase.md` | 114 | `writing` | A strongly-worded "only write what was planned" subsection (module_id/section_id come verbatim from the approved plan, never invented; the overview is never a section); per-task workflow (scan saved-source summaries → `fetch_url` the relevant saved URLs for full content → further targeted `web_search`→`fetch_url`→`save_sources` top-ups explicitly encouraged when saved coverage is thin → `write_section`); markdown/Mermaid/table/callout formatting standards; sample-Q&A authoring standard (personalize to the user's actual background); 800-2000 word/section length guidance; "ground everything in research first" mandate; resumability via `update_scratchpad`; exit via `complete_phase("review")` when the task queue is empty — validated server-side against pending tasks/planned sections. |
-| `review_phase.md` | 56 | `review` | Structured quality pass over the whole draft: `list_curriculum_structure` then `read_section` module-by-module against a checklist (citations, diagrams, sample-Q&A coverage, 800-2000 word length, coherence, module status); fix failures directly via `write_section` overwrite (full corrected markdown + citations, never a fragment); `update_scratchpad` tracks which modules are already reviewed for resumability; the already-saved source pool is the only one (re-read via `fetch_url`, no new searching); after all modules pass, `write_curriculum_overview`, then exit via `complete_phase("ready")` — validated server-side (all sections complete + overview written). |
+| `planning_phase.md` | 109 | `outline_planning`, `awaiting_approval` | The beginner→interview-ready module arc (foundations → core skills → question drills → mock/strategy); no fixed module/section count — scope driven by researched material and user goals, timeline respected via priority ordering rather than a count cap; every module needs a sample-Q&A section; the binding task-plan id contract (`m{X}-s{Y}` ids, required `module_ref`, exactly one task per section, no overview task, `outline_markdown` must label every section `Section X.Y` for the server-side cross-check); how `propose_task_plan` behaves as a HITL gate (and rejects the whole plan on any contract violation); how to incorporate `modify` feedback on revision (choose `outline_planning` vs. `deep_research` via `transition_phase` first, then read all feedback, targeted changes, top-up research if needed). |
+| `writing_phase.md` | 114 | `writing` | A strongly-worded "only write what was planned" subsection (module_id/section_id come verbatim from the approved plan, never invented; the overview is never a section); per-task workflow (scan saved-source summaries → `fetch_url` the relevant saved URLs for full content → further targeted `web_search`→`fetch_url`→`save_sources` top-ups explicitly encouraged when saved coverage is thin → `write_section`); markdown/Mermaid/table/callout formatting standards; sample-Q&A authoring standard (personalize to the user's actual background); 800-2000 word/section length guidance; "ground everything in research first" mandate; resumability via `update_scratchpad`; exit via `transition_phase("review")` when the task queue is empty — validated server-side against pending tasks/planned sections. |
+| `review_phase.md` | 56 | `review` | Structured quality pass over the whole draft: `list_curriculum_structure` then `read_section` module-by-module against a checklist (citations, diagrams, sample-Q&A coverage, 800-2000 word length, coherence, module status); fix failures directly via `write_section` overwrite (full corrected markdown + citations, never a fragment); `update_scratchpad` tracks which modules are already reviewed for resumability; the already-saved source pool is the only one (re-read via `fetch_url`, no new searching); after all modules pass, `write_curriculum_overview`, then exit via `transition_phase("ready")` — validated server-side (all sections complete + overview written). |
 | `refinement_phase.md` | 74 | `ready`, `refinement` | Three request types and how to handle each: edits (read-before-write, minimal targeted changes, preserve citations, `change_note`), explanations (teach in chat, never silently modify content), additions/deep-dives (scoped targeted research, not a full re-run of `deep_research`; new sections/modules must use the next sequential id — `s{K+1}`/`m{N+1}` — arbitrary slugs are rejected server-side). |
 | `citation_guidelines.md` | 79 | Every phase (always layer 3) | The exact `[^n]` marker mechanics, the `## Sources` footnote section format, the `citations` array contract (must mirror footnotes exactly), the hard "no fabricated URLs" rule, and a checklist of what does/doesn't need a citation. |
 | `visual_guidelines.md` | 92 | Every phase (always layer 4) | Mermaid syntax guardrails (always quote labels, avoid unquoted parens, cap ~25 nodes, short node IDs, one edge per line, always fence with `` ```mermaid ``); a note that `write_section`/`update_section` run an automatic syntax lint and reject broken diagrams (fix and resubmit); which diagram type for which content (flowchart default, sequenceDiagram for party interactions, mindmap for topic breakdowns); a worked correct example; `classDef`-based highlighting restrained to 2-3 accent classes; sparse, heading-only emoji usage. |
@@ -607,13 +607,13 @@ ordinary chat turn).
 `base_system.md + intake_phase.md + citation_guidelines.md + visual_guidelines.md` as
 layer 1, the user's synthesized profile as layer 2, the fresh state doc as layer 3. The
 model's native reasoning reasons about scope; since "Google SWE system design" is
-unambiguous, it proceeds without `request_user_input`, calls `complete_phase(
+unambiguous, it proceeds without `request_user_input`, calls `transition_phase(
 "deep_research", reason="scope is clear")`. This tool call: validates the transition,
 sets state `phase="deep_research"`, sets curriculum `status="researching"` (unchanged),
 emits WS `phase_change{phase: "deep_research", label: "Researching"}`. The assistant's
 visible text (something like "Great — I'll research Google's SWE system design
 interview process now.") streams as `text_delta`s, persisted as one assistant message
-with the `complete_phase` tool call attached. Loop continues (no HITL gate fired).
+with the `transition_phase` tool call attached. Loop continues (no HITL gate fired).
 
 **4. `deep_research` phase runs for several iterations.** Each iteration: the model
 issues diverse `web_search` calls (covering the 6 coverage areas from
@@ -627,7 +627,7 @@ research sources" working-memory block from the next iteration on. Re-fetching a
 later auto-strips the older copy of its content from the conversation (latest fetch
 wins). The saved-sources block doubles as the coverage ledger. Once every relevant
 coverage area has solid saved sources and new searches hit diminishing returns (no
-fixed source-count target), it calls `complete_phase("outline_planning",
+fixed source-count target), it calls `transition_phase("outline_planning",
 ...)` → state `phase="outline_planning"`, curriculum `status="planning"`, WS
 `phase_change{label: "Planning the curriculum"}`.
 
@@ -682,13 +682,13 @@ section_id}` and `progress{completed, total, detail}`. The frontend's Workflow v
 animates the corresponding module/section node on `curriculum_updated`; the phase
 banner and any progress bar update on `progress`. This repeats autonomously — no HITL
 pause — until `task_queue` is empty, at which point the model calls
-`complete_phase("review", ...)` — rejected server-side if any plan task is still
+`transition_phase("review", ...)` — rejected server-side if any plan task is still
 pending or any section doc is still `"planned"`.
 
 **8. `review` phase**: the model calls `list_curriculum_structure` to confirm every
 section is `complete`, spot-checks a few sections for citation coverage
 (`read_section`), calls `write_curriculum_overview(overview_markdown, emoji, tags)`
-(emits `curriculum_updated{scope:"overview"}`), then `complete_phase("ready", ...)` —
+(emits `curriculum_updated{scope:"overview"}`), then `transition_phase("ready", ...)` —
 rejected server-side if any section isn't `complete` or the overview is still empty —
 which on success sets state `phase="ready"`, curriculum `status="ready"`, WS
 `phase_change{label: "Ready"}`.

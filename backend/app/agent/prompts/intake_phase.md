@@ -62,5 +62,5 @@ framing, but don't obsess over it now — a good-enough specific title beats del
 
 Once you have a clear-enough interview type and scope (either from the initial message,
 the profile, or one round of clarification), create the curriculum doc and call
-`complete_phase("deep_research", reason=...)`. Do not begin searching the web during
+`transition_phase("deep_research", reason=...)`. Do not begin searching the web during
 `intake` — that belongs to `deep_research`.

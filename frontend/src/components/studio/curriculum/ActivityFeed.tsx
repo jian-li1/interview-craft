@@ -44,7 +44,8 @@ const TOOL_ACTION_LABELS: Record<string, string> = {
   set_module_status: "Updating module status",
   request_user_input: "Asking you a question",
   update_scratchpad: "Updating working notes",
-  complete_phase: "Moving to the next phase",
+  transition_phase: "Moving to the next phase",
+  complete_phase: "Moving to the next phase", // legacy records persisted under the old tool name
   get_user_profile: "Reading your profile",
   propose_task_plan: "Proposing the task plan",
   get_task_plan: "Checking the task plan",

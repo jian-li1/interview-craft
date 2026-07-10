@@ -23,7 +23,7 @@ ALL_TOOL_NAMES = {
     "set_module_status",
     "request_user_input",
     "update_scratchpad",
-    "complete_phase",
+    "transition_phase",
     "set_curriculum_title",
 }
 
@@ -78,7 +78,7 @@ def test_always_available_tools_present_in_every_phase(registry):
     always = {
         "get_user_profile",
         "update_scratchpad",
-        "complete_phase",
+        "transition_phase",
         "request_user_input",
         "set_curriculum_title",
     }
@@ -135,7 +135,7 @@ def test_unknown_phase_falls_back_to_always_available(registry):
     assert names == {
         "get_user_profile",
         "update_scratchpad",
-        "complete_phase",
+        "transition_phase",
         "request_user_input",
         "set_curriculum_title",
     }

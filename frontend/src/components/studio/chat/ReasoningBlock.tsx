@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { BrainCircuit, ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -30,6 +30,16 @@ export function ReasoningBlock({ reasoning, streaming }: ReasoningBlockProps) {
   // Collapsed by default, like tool-call cards. The shimmering "Thinking…" header
   // signals live reasoning; user can expand at any time (state independent of `streaming`).
   const [open, setOpen] = useState(false);
+  // Ref to the scroll-capped reasoning pane, used to pin the view to the latest tokens.
+  const scrollRef = useRef<HTMLParagraphElement>(null);
+
+  // Autoscroll to the bottom while reasoning streams in and the panel is open, so
+  // incoming tokens stay in view. Skipped once streaming ends so the user can scroll freely.
+  useEffect(() => {
+    if (!streaming || !open) return;
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [reasoning, streaming, open]);
 
   if (!reasoning) return null;
 
@@ -59,7 +69,10 @@ export function ReasoningBlock({ reasoning, streaming }: ReasoningBlockProps) {
             transition={{ duration: 0.2 }}
             className="overflow-hidden"
           >
-            <p className="whitespace-pre-wrap px-3 pb-3 text-xs leading-relaxed text-muted-foreground">
+            <p
+              ref={scrollRef}
+              className="max-h-60` overflow-y-auto whitespace-pre-wrap px-3 pb-3 text-xs leading-relaxed text-muted-foreground scrollbar-thin"
+            >
               {reasoning}
               {streaming && <span className="blinking-caret" aria-hidden="true" />}
             </p>

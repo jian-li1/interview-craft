@@ -461,7 +461,7 @@ async def test_plan_decision_approve_appends_system_message_with_approved(monkey
 @pytest.mark.asyncio
 async def test_plan_decision_modify_appends_system_message_with_feedback(monkeypatch, fake_fs, orchestrator):
     """Verify requesting plan modifications records feedback, leaves the phase at
-    `awaiting_approval` (the agent picks its own next phase via `complete_phase`), appends
+    `awaiting_approval` (the agent picks its own next phase via `transition_phase`), appends
     a system message instructing that choice, and still fires `curriculum_updated`.
     """
     conv, curriculum = _setup_conversation(fake_fs, phase="awaiting_approval")
@@ -509,11 +509,11 @@ async def test_plan_decision_modify_appends_system_message_with_feedback(monkeyp
     assert curriculum_updated_events[0]["curriculum_id"] == curriculum["id"]
 
     # The orchestrator no longer forces a phase on modify — no phase_change is emitted
-    # here; the agent emits its own once it calls complete_phase in a later turn.
+    # here; the agent emits its own once it calls transition_phase in a later turn.
     phase_change_events = [e for e in events if e["type"] == "phase_change"]
     assert len(phase_change_events) == 0
 
-    # Phase stays at awaiting_approval until the agent itself transitions via complete_phase.
+    # Phase stays at awaiting_approval until the agent itself transitions via transition_phase.
     agent_state = fake_fs.fs.get_agent_state(curriculum["id"])
     assert agent_state["phase"] == "awaiting_approval"
 

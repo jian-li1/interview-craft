@@ -25,7 +25,7 @@ you can self-correct — use `list_curriculum_structure` or `get_task_plan` if y
 unsure which ids are current. The curriculum overview is NOT a section: never call
 `write_section` for it; it's written later, during `review`, via
 `write_curriculum_overview`. Every planned section must actually be written before you
-leave this phase — `complete_phase("review")` is rejected while any planned section
+leave this phase — `transition_phase("review")` is rejected while any planned section
 remains unwritten or any plan task is still pending.
 
 ## Per-task workflow
@@ -118,6 +118,6 @@ using the state doc alone.
 ## Exit criteria
 
 When the task queue is empty (all tasks `"done"`), call
-`complete_phase("review", reason=...)`. This is validated server-side: the call is
+`transition_phase("review", reason=...)`. This is validated server-side: the call is
 rejected if any plan task is still pending or any materialized section is still
 `"planned"` — finish writing everything first, don't call it speculatively.

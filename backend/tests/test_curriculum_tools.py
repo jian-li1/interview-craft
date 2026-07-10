@@ -1,11 +1,11 @@
 """Curriculum tools: set_curriculum_title updates both curriculum + conversation;
 write_section/update_section auto-derive parent module status/estimated_minutes;
 set_module_status emits a curriculum_updated WS event; write_section and
-complete_phase persist progress onto the curriculum doc for REST readers;
+transition_phase persist progress onto the curriculum doc for REST readers;
 write_section/update_section reject broken Mermaid diagrams at write time;
 write_section's target guard rejects invented module/section ids in writing/review and
-enforces next-sequential-id creation in refinement; complete_phase's writing->review and
-review->ready completeness gates block premature phase exits; complete_phase also allows
+enforces next-sequential-id creation in refinement; transition_phase's writing->review and
+review->ready completeness gates block premature phase exits; transition_phase also allows
 the plan-revision loop-backs awaiting_approval->deep_research and
 outline_planning->deep_research.
 """
@@ -15,7 +15,7 @@ from __future__ import annotations
 import pytest
 
 from app.agent.tools.base import AgentContext
-from app.agent.tools.control import CompletePhaseInput, CompletePhaseTool
+from app.agent.tools.control import TransitionPhaseInput, TransitionPhaseTool
 from app.agent.tools.curriculum import (
     SetCurriculumTitleInput,
     SetCurriculumTitleTool,
@@ -229,8 +229,8 @@ async def test_write_section_persists_progress_onto_curriculum_doc(fake_fs):
 
 
 @pytest.mark.asyncio
-async def test_complete_phase_review_to_ready_sets_status_and_progress(fake_fs):
-    """complete_phase("ready") from "review" must set curriculum status to "ready" and
+async def test_transition_phase_review_to_ready_sets_status_and_progress(fake_fs):
+    """transition_phase("ready") from "review" must set curriculum status to "ready" and
     sync progress.phase/detail — this is the fix for the dashboard card stuck on
     "writing" forever, since review previously had no path to "ready" at all.
     """
@@ -245,11 +245,11 @@ async def test_complete_phase_review_to_ready_sets_status_and_progress(fake_fs):
         "progress": {"phase": "review", "completed_tasks": 3, "total_tasks": 3, "detail": "Wrote section: X"},
     })
 
-    tool = CompletePhaseTool()
+    tool = TransitionPhaseTool()
     ctx = _make_ctx(curriculum["id"], conv["id"])
     ctx.phase = "review"  # transition validation requires the current phase to be "review"
 
-    result = await tool.execute(CompletePhaseInput(next_phase="ready", reason="all sections reviewed"), ctx)
+    result = await tool.execute(TransitionPhaseInput(next_phase="ready", reason="all sections reviewed"), ctx)
 
     assert result["status"] == "transitioned"
     updated_curriculum = fake_fs.fs.get_curriculum(curriculum["id"])
@@ -262,8 +262,8 @@ async def test_complete_phase_review_to_ready_sets_status_and_progress(fake_fs):
 
 
 @pytest.mark.asyncio
-async def test_complete_phase_awaiting_approval_to_deep_research_allowed(fake_fs):
-    """complete_phase("deep_research") from "awaiting_approval" must succeed — the
+async def test_transition_phase_awaiting_approval_to_deep_research_allowed(fake_fs):
+    """transition_phase("deep_research") from "awaiting_approval" must succeed — the
     agent's own revision-loop-back path when a plan-modify request needs new research.
     """
     conv = fake_fs.fs.create_conversation("uid1", "New conversation", curriculum_id=None)
@@ -272,12 +272,12 @@ async def test_complete_phase_awaiting_approval_to_deep_research_allowed(fake_fs
     )
     fake_fs.fs.update_conversation(conv["id"], {"curriculum_id": curriculum["id"]})
 
-    tool = CompletePhaseTool()
+    tool = TransitionPhaseTool()
     ctx = _make_ctx(curriculum["id"], conv["id"])
     ctx.phase = "awaiting_approval"  # transition validation requires this as the current phase
 
     result = await tool.execute(
-        CompletePhaseInput(next_phase="deep_research", reason="feedback needs new topics"), ctx
+        TransitionPhaseInput(next_phase="deep_research", reason="feedback needs new topics"), ctx
     )
 
     assert result["status"] == "transitioned"
@@ -287,8 +287,8 @@ async def test_complete_phase_awaiting_approval_to_deep_research_allowed(fake_fs
 
 
 @pytest.mark.asyncio
-async def test_complete_phase_outline_planning_to_deep_research_allowed(fake_fs):
-    """complete_phase("deep_research") from "outline_planning" must succeed — allows
+async def test_transition_phase_outline_planning_to_deep_research_allowed(fake_fs):
+    """transition_phase("deep_research") from "outline_planning" must succeed — allows
     bouncing back to research if a gap becomes apparent mid-revision.
     """
     conv = fake_fs.fs.create_conversation("uid1", "New conversation", curriculum_id=None)
@@ -297,12 +297,12 @@ async def test_complete_phase_outline_planning_to_deep_research_allowed(fake_fs)
     )
     fake_fs.fs.update_conversation(conv["id"], {"curriculum_id": curriculum["id"]})
 
-    tool = CompletePhaseTool()
+    tool = TransitionPhaseTool()
     ctx = _make_ctx(curriculum["id"], conv["id"])
     ctx.phase = "outline_planning"  # transition validation requires this as the current phase
 
     result = await tool.execute(
-        CompletePhaseInput(next_phase="deep_research", reason="gap surfaced mid-revision"), ctx
+        TransitionPhaseInput(next_phase="deep_research", reason="gap surfaced mid-revision"), ctx
     )
 
     assert result["status"] == "transitioned"
@@ -608,7 +608,7 @@ async def test_write_section_refinement_rejects_non_sequential_new_module(fake_f
 
 
 @pytest.mark.asyncio
-async def test_complete_phase_writing_to_review_blocked_by_pending_task(fake_fs):
+async def test_transition_phase_writing_to_review_blocked_by_pending_task(fake_fs):
     """writing->review is blocked when a plan task with a module_ref is still pending,
     even if every materialized section happens to be complete.
     """
@@ -619,17 +619,17 @@ async def test_complete_phase_writing_to_review_blocked_by_pending_task(fake_fs)
         {"id": "m1-s1", "title": "Intro", "module_ref": "m1", "status": "pending"},
     ]})
 
-    tool = CompletePhaseTool()
+    tool = TransitionPhaseTool()
     ctx = _make_ctx(curriculum["id"], conv["id"])
     ctx.phase = "writing"
 
-    result = await tool.execute(CompletePhaseInput(next_phase="review", reason="done"), ctx)
+    result = await tool.execute(TransitionPhaseInput(next_phase="review", reason="done"), ctx)
     assert "error" in result
     assert fake_fs.fs.get_agent_state(curriculum["id"]) is None  # no transition applied
 
 
 @pytest.mark.asyncio
-async def test_complete_phase_writing_to_review_blocked_by_planned_section(fake_fs):
+async def test_transition_phase_writing_to_review_blocked_by_planned_section(fake_fs):
     """writing->review is blocked when a materialized section doc is still "planned",
     even if the plan's tasks all say "done" (a write_section call that never happened)."""
     conv = fake_fs.fs.create_conversation("uid1", "New conversation", curriculum_id=None)
@@ -641,16 +641,16 @@ async def test_complete_phase_writing_to_review_blocked_by_planned_section(fake_
     fake_fs.fs.create_module(curriculum["id"], "m1", {"order": 0, "title": "Module 1", "status": "planned", "estimated_minutes": 0})
     fake_fs.fs.create_section(curriculum["id"], "m1", "s1", {"order": 0, "title": "Intro", "content_markdown": "", "citations": [], "status": "planned"})
 
-    tool = CompletePhaseTool()
+    tool = TransitionPhaseTool()
     ctx = _make_ctx(curriculum["id"], conv["id"])
     ctx.phase = "writing"
 
-    result = await tool.execute(CompletePhaseInput(next_phase="review", reason="done"), ctx)
+    result = await tool.execute(TransitionPhaseInput(next_phase="review", reason="done"), ctx)
     assert "error" in result
 
 
 @pytest.mark.asyncio
-async def test_complete_phase_writing_to_review_allowed_when_all_done(fake_fs):
+async def test_transition_phase_writing_to_review_allowed_when_all_done(fake_fs):
     """writing->review succeeds once every task is done and no section is "planned"."""
     conv = fake_fs.fs.create_conversation("uid1", "New conversation", curriculum_id=None)
     curriculum = fake_fs.fs.create_curriculum("uid1", "prep", "prep", conversation_id=conv["id"])
@@ -661,18 +661,18 @@ async def test_complete_phase_writing_to_review_allowed_when_all_done(fake_fs):
     fake_fs.fs.create_module(curriculum["id"], "m1", {"order": 0, "title": "Module 1", "status": "complete", "estimated_minutes": 5})
     fake_fs.fs.create_section(curriculum["id"], "m1", "s1", {"order": 0, "title": "Intro", "content_markdown": "x", "citations": [], "status": "complete"})
 
-    tool = CompletePhaseTool()
+    tool = TransitionPhaseTool()
     ctx = _make_ctx(curriculum["id"], conv["id"])
     ctx.phase = "writing"
 
-    result = await tool.execute(CompletePhaseInput(next_phase="review", reason="done"), ctx)
+    result = await tool.execute(TransitionPhaseInput(next_phase="review", reason="done"), ctx)
     assert result["status"] == "transitioned"
     # Dashboard-facing status must be the distinct "reviewing" (not lumped into "writing").
     assert fake_fs.fs.get_curriculum(curriculum["id"])["status"] == "reviewing"
 
 
 @pytest.mark.asyncio
-async def test_complete_phase_review_to_ready_blocked_by_incomplete_section(fake_fs):
+async def test_transition_phase_review_to_ready_blocked_by_incomplete_section(fake_fs):
     """review->ready is blocked when a section doc isn't "complete", even if the
     overview has been written."""
     conv = fake_fs.fs.create_conversation("uid1", "New conversation", curriculum_id=None)
@@ -682,16 +682,16 @@ async def test_complete_phase_review_to_ready_blocked_by_incomplete_section(fake
     fake_fs.fs.create_module(curriculum["id"], "m1", {"order": 0, "title": "Module 1", "status": "writing", "estimated_minutes": 5})
     fake_fs.fs.create_section(curriculum["id"], "m1", "s1", {"order": 0, "title": "Intro", "content_markdown": "x", "citations": [], "status": "writing"})
 
-    tool = CompletePhaseTool()
+    tool = TransitionPhaseTool()
     ctx = _make_ctx(curriculum["id"], conv["id"])
     ctx.phase = "review"
 
-    result = await tool.execute(CompletePhaseInput(next_phase="ready", reason="done"), ctx)
+    result = await tool.execute(TransitionPhaseInput(next_phase="ready", reason="done"), ctx)
     assert "error" in result
 
 
 @pytest.mark.asyncio
-async def test_complete_phase_review_to_ready_blocked_by_missing_overview(fake_fs):
+async def test_transition_phase_review_to_ready_blocked_by_missing_overview(fake_fs):
     """review->ready is blocked when the curriculum overview is empty, even if every
     section is complete."""
     conv = fake_fs.fs.create_conversation("uid1", "New conversation", curriculum_id=None)
@@ -700,16 +700,16 @@ async def test_complete_phase_review_to_ready_blocked_by_missing_overview(fake_f
     fake_fs.fs.create_module(curriculum["id"], "m1", {"order": 0, "title": "Module 1", "status": "complete", "estimated_minutes": 5})
     fake_fs.fs.create_section(curriculum["id"], "m1", "s1", {"order": 0, "title": "Intro", "content_markdown": "x", "citations": [], "status": "complete"})
 
-    tool = CompletePhaseTool()
+    tool = TransitionPhaseTool()
     ctx = _make_ctx(curriculum["id"], conv["id"])
     ctx.phase = "review"
 
-    result = await tool.execute(CompletePhaseInput(next_phase="ready", reason="done"), ctx)
+    result = await tool.execute(TransitionPhaseInput(next_phase="ready", reason="done"), ctx)
     assert "error" in result
 
 
 @pytest.mark.asyncio
-async def test_complete_phase_review_to_ready_allowed_when_complete(fake_fs):
+async def test_transition_phase_review_to_ready_allowed_when_complete(fake_fs):
     """review->ready succeeds once every section is complete and the overview is set."""
     conv = fake_fs.fs.create_conversation("uid1", "New conversation", curriculum_id=None)
     curriculum = fake_fs.fs.create_curriculum("uid1", "prep", "prep", conversation_id=conv["id"])
@@ -718,9 +718,9 @@ async def test_complete_phase_review_to_ready_allowed_when_complete(fake_fs):
     fake_fs.fs.create_module(curriculum["id"], "m1", {"order": 0, "title": "Module 1", "status": "complete", "estimated_minutes": 5})
     fake_fs.fs.create_section(curriculum["id"], "m1", "s1", {"order": 0, "title": "Intro", "content_markdown": "x", "citations": [], "status": "complete"})
 
-    tool = CompletePhaseTool()
+    tool = TransitionPhaseTool()
     ctx = _make_ctx(curriculum["id"], conv["id"])
     ctx.phase = "review"
 
-    result = await tool.execute(CompletePhaseInput(next_phase="ready", reason="done"), ctx)
+    result = await tool.execute(TransitionPhaseInput(next_phase="ready", reason="done"), ctx)
     assert result["status"] == "transitioned"

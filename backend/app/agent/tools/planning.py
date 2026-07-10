@@ -235,7 +235,7 @@ class ProposeTaskPlanTool(Tool):
         tasks = plan_doc["tasks"]
         done_count = sum(1 for t in tasks if t.get("status") == "done")
         # Full-object write: update_curriculum merges top-level fields only, so the
-        # nested "progress" dict must be written whole (same pattern as CompletePhaseTool).
+        # nested "progress" dict must be written whole (same pattern as TransitionPhaseTool).
         fs.update_curriculum(
             ctx.curriculum_id,
             {

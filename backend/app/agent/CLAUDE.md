@@ -12,7 +12,7 @@ See `/CLAUDE.md` and `backend/CLAUDE.md` first. Deep scoped context for
 `build_context → chat_stream → route reasoning/text deltas → execute tool calls → check HITL
 gate → loop or return`. Returns `DONE` (plain text), `PAUSED` (HITL gate fired),
 `CANCELLED` (`stop` frame), or `ERROR`. Re-reads `phase` fresh from Firestore every
-iteration — a `complete_phase` call takes effect next iteration, not next turn.
+iteration — a `transition_phase` call takes effect next iteration, not next turn.
 
 ## Adding a new tool
 
@@ -34,7 +34,7 @@ iteration — a `complete_phase` call takes effect next iteration, not next turn
 1. Update `docs/specs/02-agent-system-spec.md` §2 first, and add the phase to
    `AgentPhase` in `app/models/curriculum.py`.
 2. Add allowed transitions to `_VALID_TRANSITIONS` in `app/agent/tools/control.py`
-   (`CompletePhaseTool`) — unlisted transitions are rejected with an error observation.
+   (`TransitionPhaseTool`) — unlisted transitions are rejected with an error observation.
 3. Add `status_map`/`label_map` entries, a `_PHASE_TOOLS` entry (`registry.py`), and a
    `_PHASE_PROMPT_FILES` entry (`memory/manager.py`); write a new prompt file only if
    genuinely new instructions are needed.
@@ -69,7 +69,7 @@ iteration — a `complete_phase` call takes effect next iteration, not next turn
 - Be concrete and behavior-shaping, not vague — the model only sees these files, not
   the codebase. Code-level enforcement is minimal (mainly `write_section`'s
   citations check, the Mermaid syntax lint (`mermaid_lint.py`) shared by
-  `write_section`/`update_section`, and `CompletePhaseTool`'s transition validation).
+  `write_section`/`update_section`, and `TransitionPhaseTool`'s transition validation).
 - `profile_synthesis.md`/`compaction.md` are one-shot small-model tasks loaded
   directly by their call sites, not part of phase composition — their output is
   stored verbatim with no post-processing, so keep "return ONLY the output" intact.
@@ -83,7 +83,7 @@ step was a successful gate call, even mid-`max_iterations`. Resumption is the ne
 frame: `plan_decision` is handled specially by `_apply_plan_decision` (approve →
 materialize stubs, jump to `writing`; modify → record feedback and leave phase at
 `awaiting_approval` — the agent itself picks `outline_planning` or `deep_research` via
-`complete_phase`); a clarifying question emits `user_input_requested` and persists
+`transition_phase`); a clarifying question emits `user_input_requested` and persists
 `pending_user_input` on the state doc (replayed on WS reconnect so a refresh restores the
 card; cleared the moment the next `user_message` frame arrives) — resumption is still an
 ordinary `user_message` frame, no dedicated "answer" type.

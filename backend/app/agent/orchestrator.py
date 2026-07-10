@@ -309,7 +309,7 @@ class Orchestrator:
         Implements the per-iteration cycle documented in `app/agent/CLAUDE.md`:
         `build_context -> chat_stream -> route reasoning/text deltas -> execute tool
         calls -> check HITL gate -> loop or return`. Re-reads `phase` fresh from Firestore at the
-        top of every iteration (a `complete_phase` call from a tool executed in a prior
+        top of every iteration (a `transition_phase` call from a tool executed in a prior
         iteration only takes effect starting the next iteration).
 
         Args:
@@ -369,7 +369,7 @@ class Orchestrator:
                 return RunResult(TurnOutcome.CANCELLED)
 
             # Re-read phase fresh from Firestore every iteration (not cached from the
-            # loop's start) — a `complete_phase` tool call in the previous iteration
+            # loop's start) — a `transition_phase` tool call in the previous iteration
             # must be visible here so the next iteration uses the new phase's tools/prompt.
             state = fs.get_agent_state(curriculum_id) or state
             phase = state.get("phase", phase)
@@ -700,12 +700,12 @@ class Orchestrator:
             decision (PlanDecision): The user's decision — "approve" (materialize
                 modules/sections, jump to the "writing" phase) or "modify" (record
                 feedback and leave the phase at "awaiting_approval"; the agent itself
-                chooses, via `complete_phase`, whether to revise directly from
+                chooses, via `transition_phase`, whether to revise directly from
                 `outline_planning` or gather more sources first via `deep_research`).
             emit (Emitter): Async callable used to stream `phase_change`/`progress`
                 events live to the client — previously this transition only surfaced on
                 the next reconnect snapshot, leaving the sticky phase banner stale. On
-                "modify" no phase_change is emitted here; `complete_phase` emits its own
+                "modify" no phase_change is emitted here; `transition_phase` emits its own
                 once the agent picks a target phase.
 
         Returns:
@@ -766,7 +766,7 @@ class Orchestrator:
         else:
             # Record feedback and mark the plan revising, but leave phase/status alone —
             # the agent now picks its own path (outline_planning vs. deep_research) via
-            # complete_phase, which handles status + phase_change itself once it decides.
+            # transition_phase, which handles status + phase_change itself once it decides.
             feedback_list = plan.get("user_feedback", [])
             if decision.feedback:
                 feedback_list.append(decision.feedback)
@@ -778,10 +778,10 @@ class Orchestrator:
                     "content": (
                         f"The user requested changes to the task plan with this feedback: "
                         f"{decision.feedback!r}. You are still in the 'awaiting_approval' phase "
-                        f"and MUST now choose your next phase with complete_phase: if the "
+                        f"and MUST now choose your next phase with transition_phase: if the "
                         f"feedback asks for topics or depth your saved sources do not cover, "
-                        f"call complete_phase('deep_research') to research them first; "
-                        f"otherwise call complete_phase('outline_planning'). Then revise the "
+                        f"call transition_phase('deep_research') to research them first; "
+                        f"otherwise call transition_phase('outline_planning'). Then revise the "
                         f"outline to address ALL accumulated feedback and re-propose it with "
                         f"propose_task_plan."
                     ),

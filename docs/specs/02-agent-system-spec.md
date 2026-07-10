@@ -17,7 +17,7 @@ WS event protocol in spec 01 §7. Human-in-the-loop gates pause the loop for use
 intake ──► deep_research ──► outline_planning ──► awaiting_approval ──► writing ──► review ──► ready ──► refinement (steady state)
               ▲       │              ▲                     │
               └───────┘              └── modify + feedback ┘  (agent picks outline_planning or
-           (gap found mid-revision)                            deep_research via complete_phase)
+           (gap found mid-revision)                            deep_research via transition_phase)
 ```
 
 - **intake**: Understand the user's request; read user profile memory; ask clarifying
@@ -60,10 +60,10 @@ intake ──► deep_research ──► outline_planning ──► awaiting_app
   without that prefix fall back to using the full id verbatim), status=writing, go to
   writing, emit live `phase_change` (writing) + `progress` WS events. modify → feedback
   appended, plan status set to `revising`; the orchestrator does NOT force a phase — it
-  stays `awaiting_approval` and the agent itself calls `complete_phase` to choose
+  stays `awaiting_approval` and the agent itself calls `transition_phase` to choose
   `outline_planning` (revise directly from saved sources) or `deep_research` (gather
   more sources first, when the feedback needs topics/depth not already covered); no
-  orchestrator-emitted `phase_change` on modify — `complete_phase` emits its own once
+  orchestrator-emitted `phase_change` on modify — `transition_phase` emits its own once
   the agent transitions.
 - **writing**: Pop tasks from the queue one at a time. For each: scan the saved-source
   summaries in working memory, `fetch_url` the relevant saved URLs to pull full content
@@ -74,11 +74,11 @@ intake ──► deep_research ──► outline_planning ──► awaiting_app
   materialized from the approved plan, rejecting any invented id with an error listing the
   existing ids. Update progress after each task (WS `progress` + `curriculum_updated`).
   Persist task status so a crashed/resumed run continues where it left off.
-  `complete_phase("review")` is rejected while any plan task is still pending or any
+  `transition_phase("review")` is rejected while any plan task is still pending or any
   section doc is still `"planned"`.
 - **review**: Curriculum status=reviewing. Verify every section has citations, diagrams
   where valuable, sample Q&A coverage; write the curriculum `overview`; then
-  status=ready. `complete_phase("ready")` is
+  status=ready. `transition_phase("ready")` is
   rejected server-side if any section isn't `"complete"` or the overview is still empty.
 - **refinement**: Steady conversational state. User asks for modifications
   (`update_section`), explanations ("explain X from module 2" → read section, explain in
@@ -136,12 +136,12 @@ Key requirements:
   approve → a message stating the plan was APPROVED, stubs materialized, phase is now
   `writing`, and to begin the first task immediately without asking for confirmation;
   modify → a message stating the user's feedback text and instructing the model it is
-  still in `awaiting_approval` and MUST choose its next phase via `complete_phase`
+  still in `awaiting_approval` and MUST choose its next phase via `transition_phase`
   (`deep_research` if the feedback needs uncovered topics/depth, else
   `outline_planning`), then revise and re-propose via `propose_task_plan`. The approve
   branch also emits a live `phase_change` (`writing`) + `progress` WS event so the
   client's phase banner updates immediately rather than only on the next reconnect; the
-  modify branch emits no `phase_change` — `complete_phase` emits its own once the agent
+  modify branch emits no `phase_change` — `transition_phase` emits its own once the agent
   picks a target phase.
 
 ## 4. Tool catalog (`agent/tools/`)
@@ -196,7 +196,7 @@ during writing-only refinements, etc. — keep filtering simple: a phase→allow
 **Control tools**
 - `request_user_input(question, options[]?)` → HITL gate for clarifying questions: persists `pending_user_input` on the state doc, emits `user_input_requested` (question rendered as an interactive chat card, quick-pick options plus always-present free text), pauses loop. Replayed on WS reconnect if still pending; cleared on the next `user_message` frame (the ordinary reply, no dedicated "answer" frame type).
 - `update_scratchpad(content)` → overwrite agent scratchpad in state doc (agent's own working notes: what's done, what's next, open questions).
-- `complete_phase(next_phase, reason)` → validated transition; updates state + curriculum status; emits `phase_change`. Two transitions carry an additional completeness gate (error observation, no transition applied, if unmet): `writing`→`review` requires every module_ref-bearing plan task `"done"` and no section doc left `"planned"`; `review`→`ready` requires every section `"complete"` and the curriculum `overview` non-empty.
+- `transition_phase(next_phase, reason)` → validated transition; updates state + curriculum status; emits `phase_change`. Two transitions carry an additional completeness gate (error observation, no transition applied, if unmet): `writing`→`review` requires every module_ref-bearing plan task `"done"` and no section doc left `"planned"`; `review`→`ready` requires every section `"complete"` and the curriculum `overview` non-empty.
 
 ## 5. Memory & context management (`agent/memory/`)
 
@@ -251,14 +251,14 @@ detailed, high-quality instruction document (not a stub). Required files:
   target), anti-patterns (never save unfetched URLs, no vague summaries, don't retry
   failed fetches, don't re-search covered topics), and guidance for re-entering the
   phase after a plan-modify decision (targeted queries only for the feedback gap, not a
-  full re-sweep, then `complete_phase("outline_planning")`).
+  full re-sweep, then `transition_phase("outline_planning")`).
 - `planning_phase.md` — Outline design principles: beginner→interview-ready arc,
   module sequencing (foundations → core skills → question drills → mock/strategy),
   every module must include sample-questions-with-model-answers sections, no fixed
   module/section count limit (scope driven by researched material and user goals, with
   timeline respected via priority ordering rather than capping count), task plan format,
   how to incorporate `modify` feedback on revision (choosing `outline_planning` vs.
-  `deep_research` via `complete_phase` before revising).
+  `deep_research` via `transition_phase` before revising).
 - `writing_phase.md` — Section authoring standards: rich GitHub-flavored Markdown; use
   Mermaid diagrams (flowchart/sequence/mindmap) wherever a process/relationship is
   explained; tables for comparisons; callout blockquotes; concrete examples; sample
@@ -274,7 +274,7 @@ detailed, high-quality instruction document (not a stub). Required files:
   coherence); fix failures directly via `write_section` overwrite (never a fragment);
   sources come only from the already-saved source pool (re-read via `fetch_url` on a
   saved URL; no new searching);
-  after all modules pass, `write_curriculum_overview`; exit via `complete_phase("ready")`.
+  after all modules pass, `write_curriculum_overview`; exit via `transition_phase("ready")`.
 - `refinement_phase.md` — How to handle edits (read before update, minimal targeted
   changes, preserve citations, describe what changed), explanations (teach in chat with
   analogies matched to user profile; don't modify content unless asked), additions

@@ -22,7 +22,7 @@ publishing it: write the curriculum overview and transition to `ready`.
 5. After all modules pass, call `write_curriculum_overview` with a compelling overview of
    the whole curriculum (what it covers, how it is personalized to this user, how to work
    through it).
-6. Call `complete_phase("ready", reason=...)`, then tell the user in one short message
+6. Call `transition_phase("ready", reason=...)`, then tell the user in one short message
    that the curriculum is complete and they can ask for refinements, explanations, or
    additions from here on.
 
@@ -55,6 +55,6 @@ saved sources in your working memory are your entire source pool here; you may
 ## Exit criteria
 
 All sections pass the checklist, module statuses are accurate, and the curriculum
-overview has been written. Then — and only then — call `complete_phase("ready", reason=...)`.
+overview has been written. Then — and only then — call `transition_phase("ready", reason=...)`.
 This is validated server-side: the call is rejected if any section isn't `"complete"` or
 the overview is still empty — finish those first rather than calling it speculatively.

@@ -13,7 +13,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from app.agent.tools.base import AgentContext, Tool, ToolExecutionError
-from app.agent.tools.control import CompletePhaseTool, RequestUserInputTool, UpdateScratchpadTool
+from app.agent.tools.control import TransitionPhaseTool, RequestUserInputTool, UpdateScratchpadTool
 from app.agent.tools.curriculum import (
     ListCurriculumStructureTool,
     ReadSectionTool,
@@ -59,7 +59,7 @@ class ToolResult:
 _ALWAYS_AVAILABLE = [
     "get_user_profile",
     "update_scratchpad",
-    "complete_phase",
+    "transition_phase",
     "request_user_input",
     "set_curriculum_title",
 ]
@@ -155,7 +155,7 @@ class ToolRegistry:
             SetModuleStatusTool(),
             RequestUserInputTool(),
             UpdateScratchpadTool(),
-            CompletePhaseTool(),
+            TransitionPhaseTool(),
         ]
         self._tools: dict[str, Tool] = {t.name: t for t in tool_instances}
 

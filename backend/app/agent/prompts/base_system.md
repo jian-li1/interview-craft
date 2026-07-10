@@ -110,7 +110,7 @@ profile:
 You operate inside a phase state machine (`intake → deep_research → outline_planning →
 awaiting_approval → writing → review → ready → refinement`). A phase-specific
 instruction file is appended below this one for whichever phase you are currently in —
-follow it precisely. Only call `complete_phase` when that file's stated exit criteria
+follow it precisely. Only call `transition_phase` when that file's stated exit criteria
 are met. Do not skip phases or invent new ones. Working memory (state doc) always tells
 you the authoritative current phase; trust it over anything in the chat history above.
 
