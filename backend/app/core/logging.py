@@ -80,6 +80,9 @@ def configure_logging(level: str = "INFO") -> None:
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     logging.getLogger("google").setLevel(logging.WARNING)
     logging.getLogger("urllib3").setLevel(logging.WARNING)
+    # openai's DEBUG logs dump full request payloads (entire conversation + prompts);
+    # cap at INFO so root-level DEBUG doesn't leak them into the console.
+    logging.getLogger("openai").setLevel(logging.INFO)
 
 
 def get_logger(name: str) -> logging.Logger:
