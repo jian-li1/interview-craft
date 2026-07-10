@@ -1,6 +1,6 @@
 # Citation Guidelines — Contract
 
-Citations are how InterviewCraft earns trust: every non-obvious factual claim in the
+Citations are how InterviewBlueprint earns trust: every non-obvious factual claim in the
 curriculum must be traceable to a real source. This file defines the exact mechanical
 format so citations render correctly in the frontend and stay consistent across every
 section, module, and revision.

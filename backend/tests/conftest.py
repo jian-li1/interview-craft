@@ -14,7 +14,7 @@ import os
 os.environ.setdefault("APP_ENV", "development")
 os.environ.setdefault("SESSION_JWT_SECRET", "test-secret-not-for-production-0123456789abcdef")
 os.environ.setdefault("GOOGLE_OAUTH_CLIENT_ID", "test-client-id.apps.googleusercontent.com")
-os.environ.setdefault("FIREBASE_PROJECT_ID", "interviewcraft-test")
+os.environ.setdefault("FIREBASE_PROJECT_ID", "interview-blueprint-test")
 os.environ.setdefault("LLM_PROVIDER", "openai")
 os.environ.setdefault("OPENAI_API_KEY", "sk-test-not-real")
 os.environ.setdefault("SEARCH_PROVIDER", "duckduckgo")

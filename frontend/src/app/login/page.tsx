@@ -98,7 +98,7 @@ export default function LoginPage() {
           <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-accent text-white">
             <Sparkles className="h-5 w-5" aria-hidden="true" />
           </span>
-          <h1 className="mt-4 text-xl font-semibold">Welcome to InterviewCraft</h1>
+          <h1 className="mt-4 text-xl font-semibold">Welcome to InterviewBlueprint</h1>
           <p className="mt-1.5 text-sm text-muted-foreground">
             Sign in to start building your interview curriculum.
           </p>
@@ -116,7 +116,7 @@ export default function LoginPage() {
         )}
 
         <p className="mt-8 text-center text-xs text-muted-foreground">
-          By continuing, you agree to InterviewCraft&apos;s Terms and acknowledge our
+          By continuing, you agree to InterviewBlueprint&apos;s Terms and acknowledge our
           Privacy Policy.
         </p>
       </motion.div>

@@ -160,7 +160,7 @@ async def _fetch_page_markdown(url: str) -> dict[str, Any]:
         async with httpx.AsyncClient(
             timeout=_FETCH_TIMEOUT_SECONDS,
             follow_redirects=True,
-            headers={"User-Agent": "InterviewCraftBot/1.0 (+research agent)"},
+            headers={"User-Agent": "InterviewBlueprintBot/1.0 (+research agent)"},
         ) as client:
             async with client.stream("GET", safe_url) as response:
                 response.raise_for_status()

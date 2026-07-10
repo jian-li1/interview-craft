@@ -10,8 +10,8 @@ does not duplicate the command reference.
 
 ```mermaid
 flowchart LR
-    U["User's browser"] -->|HTTPS| FE["Cloud Run:\ninterviewcraft-frontend\n(Next.js, standalone output)"]
-    U -->|HTTPS + WSS| BE["Cloud Run:\ninterviewcraft-backend\n(FastAPI + uvicorn)"]
+    U["User's browser"] -->|HTTPS| FE["Cloud Run:\ninterview-blueprint-frontend\n(Next.js, standalone output)"]
+    U -->|HTTPS + WSS| BE["Cloud Run:\ninterview-blueprint-backend\n(FastAPI + uvicorn)"]
     FE -->|"REST (server-baked NEXT_PUBLIC_API_BASE_URL)"| BE
     BE -->|firebase-admin, ADC| FS[("Firestore\n(native mode)")]
     BE -->|Secret Manager refs| SM[("Secret Manager:\nSESSION_JWT_SECRET,\nOPENAI_API_KEY,\nGOOGLE_OAUTH_CLIENT_ID, ...")]
@@ -84,7 +84,7 @@ Follow [deploy/README.md](../../deploy/README.md) exactly — it covers, in orde
    can't read the backend's service URL, since that URL must be baked into the frontend
    image.
 5. **Extra provider keys** (Gemini, Tavily, Google CSE): add each as its own Secret
-   Manager secret, then `gcloud run services update interviewcraft-backend
+   Manager secret, then `gcloud run services update interview-blueprint-backend
    --set-secrets ...` to attach it — same pattern as the three secrets created in
    one-time setup.
 6. **Smoke test**: hit `https://<backend-url>/api/healthz` (no auth needed) to confirm

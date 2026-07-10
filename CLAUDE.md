@@ -1,4 +1,4 @@
-# InterviewCraft — Project Context
+# InterviewBlueprint — Project Context
 
 Agentic AI platform generating personalized, fully-cited interview-prep curricula.
 Monorepo: FastAPI backend (the agentic system) + Next.js 15 frontend + Firestore.

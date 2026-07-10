@@ -24,7 +24,7 @@ from firebase_admin import credentials, firestore
 
 from app.core.config import Settings, get_settings
 
-_APP_NAME = "interviewcraft"
+_APP_NAME = "interview-blueprint"
 
 
 @lru_cache

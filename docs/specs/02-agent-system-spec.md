@@ -1,4 +1,4 @@
-# InterviewCraft — Agentic System Specification (THE CORE)
+# InterviewBlueprint — Agentic System Specification (THE CORE)
 
 This is the most important part of the application. Implement it carefully and completely.
 Lives in `backend/app/agent/`.
@@ -245,7 +245,7 @@ during writing-only refinements, etc. — keep filtering simple: a phase→allow
 These are loaded from disk (cached) and composed per phase. Each must be a genuinely
 detailed, high-quality instruction document (not a stub). Required files:
 
-- `base_system.md` — Identity ("InterviewCraft Agent"), mission, ReAct behavioral rules
+- `base_system.md` — Identity ("InterviewBlueprint Agent"), mission, ReAct behavioral rules
   (reason internally first (native reasoning): assess state → decide next action; one
   coherent batch of tool calls per step; adapt on tool errors), tone, honesty about sources,
   personalization mandate (always ground advice in the user profile), safety rules

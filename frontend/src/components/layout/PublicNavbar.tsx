@@ -16,7 +16,7 @@ export function PublicNavbar() {
           <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-accent text-white">
             <Sparkles className="h-4 w-4" aria-hidden="true" />
           </span>
-          <span>InterviewCraft</span>
+          <span>InterviewBlueprint</span>
         </Link>
         <div className="flex items-center gap-2">
           <ThemeToggle />

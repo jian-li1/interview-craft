@@ -29,7 +29,7 @@ export function AppearanceTab() {
     <Card>
       <CardHeader>
         <CardTitle>Appearance</CardTitle>
-        <CardDescription>Choose how InterviewCraft looks on this device.</CardDescription>
+        <CardDescription>Choose how InterviewBlueprint looks on this device.</CardDescription>
       </CardHeader>
       <CardContent>
         <div className="grid grid-cols-3 gap-3 max-w-md" role="radiogroup" aria-label="Theme">

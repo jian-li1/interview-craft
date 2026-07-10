@@ -34,7 +34,7 @@ export function Hero() {
               that actually researches
             </h1>
             <p className="mt-5 max-w-xl text-lg text-muted-foreground">
-              Describe the interview you&apos;re preparing for. InterviewCraft researches
+              Describe the interview you&apos;re preparing for. InterviewBlueprint researches
               the role deeply, proposes a plan you approve, then writes a full,
               beginner-friendly curriculum with diagrams, sample Q&amp;A, and cited sources.
             </p>

@@ -34,7 +34,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
         <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-accent text-white">
           <Sparkles className="h-4 w-4" aria-hidden="true" />
         </span>
-        InterviewCraft
+        InterviewBlueprint
       </Link>
 
       <button

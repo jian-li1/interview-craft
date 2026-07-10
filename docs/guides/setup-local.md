@@ -1,6 +1,6 @@
 # Local setup
 
-Complete step-by-step instructions for running InterviewCraft locally: bare-metal
+Complete step-by-step instructions for running InterviewBlueprint locally: bare-metal
 (venv + npm) and Docker Compose paths, every environment variable explained, and a
 troubleshooting section for the errors you're most likely to hit.
 
@@ -21,7 +21,7 @@ troubleshooting section for the errors you're most likely to hit.
 ## 1. Clone and orient
 
 ```bash
-cd interview-craft
+cd interview-blueprint
 ```
 
 Repo layout you'll be working with: `backend/` (FastAPI), `frontend/` (Next.js),
@@ -55,7 +55,7 @@ gcloud emulators firestore start --host-port=localhost:8686
 Leave that running in its own terminal. Then in `backend/.env`:
 
 ```
-FIREBASE_PROJECT_ID=interviewcraft-dev
+FIREBASE_PROJECT_ID=interview-blueprint-dev
 GOOGLE_APPLICATION_CREDENTIALS=
 FIRESTORE_EMULATOR_HOST=localhost:8686
 ```
@@ -93,7 +93,7 @@ SESSION_JWT_EXPIRES_MIN=10080        # session cookie lifetime in minutes (7 day
 GOOGLE_OAUTH_CLIENT_ID=<...>.apps.googleusercontent.com   # REQUIRED, no default. From step 2.
 
 # --- Firestore: fill in exactly one of the two paths from step 3 ---
-FIREBASE_PROJECT_ID=interviewcraft-dev
+FIREBASE_PROJECT_ID=interview-blueprint-dev
 GOOGLE_APPLICATION_CREDENTIALS=./serviceAccountKey.json   # path A only; blank for emulator
 FIRESTORE_EMULATOR_HOST=                                   # path B only, e.g. localhost:8686
 
@@ -223,7 +223,7 @@ docker compose up --build
   Next.js inlines them — this is why they're `args:` under `build:`, not `environment:`),
   exposes `3000:3000`.
 - **`firestore-emulator`** — `google/cloud-sdk:slim` running `gcloud emulators
-  firestore start --host-port=0.0.0.0:8686 --project=interviewcraft-dev`, exposed on
+  firestore start --host-port=0.0.0.0:8686 --project=interview-blueprint-dev`, exposed on
   `8686:8686`.
 
 To actually use the bundled emulator, set in `backend/.env`:

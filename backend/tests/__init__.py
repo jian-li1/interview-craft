@@ -1,1 +1,1 @@
-"""Test package for the InterviewCraft backend (pytest, mocked Firestore/LLM)."""
+"""Test package for the InterviewBlueprint backend (pytest, mocked Firestore/LLM)."""

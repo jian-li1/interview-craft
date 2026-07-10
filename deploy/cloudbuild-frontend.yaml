@@ -5,7 +5,7 @@ steps:
     args:
       - build
       - -t
-      - $_REGION-docker.pkg.dev/$PROJECT_ID/interviewcraft/frontend:latest
+      - $_REGION-docker.pkg.dev/$PROJECT_ID/interview-blueprint/frontend:latest
       - --build-arg
       - NEXT_PUBLIC_API_BASE_URL=$_API_URL
       - --build-arg
@@ -14,7 +14,7 @@ steps:
       - NEXT_PUBLIC_GOOGLE_CLIENT_ID=$_GOOGLE_CLIENT_ID
       - .
 images:
-  - $_REGION-docker.pkg.dev/$PROJECT_ID/interviewcraft/frontend:latest
+  - $_REGION-docker.pkg.dev/$PROJECT_ID/interview-blueprint/frontend:latest
 substitutions:
   _REGION: us-central1
   _API_URL: ""

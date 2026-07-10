@@ -1,11 +1,11 @@
-# InterviewCraft — Architecture & System Contracts (Source of Truth)
+# InterviewBlueprint — Architecture & System Contracts (Source of Truth)
 
 This document defines the binding contracts between the frontend and backend. Both
 implementations MUST conform exactly to the shapes defined here.
 
 ## 1. Product summary
 
-InterviewCraft is an agentic AI platform that generates comprehensive, end-to-end,
+InterviewBlueprint is an agentic AI platform that generates comprehensive, end-to-end,
 beginner-friendly interview-preparation curricula from a single user prompt. The agent
 performs deep web research, proposes an outline + task plan (human-in-the-loop approval),
 then writes the curriculum module-by-module with rich Markdown, Mermaid diagrams,
@@ -29,7 +29,7 @@ clarify, or explain any part of the curriculum.
 ## 3. Repository layout
 
 ```
-interview-craft/
+interview-blueprint/
 ├── README.md, CLAUDE.md, .gitignore, docker-compose.yml, .env.example
 ├── docs/
 │   ├── specs/        # These spec files (contracts)
@@ -72,7 +72,7 @@ SESSION_JWT_EXPIRES_MIN=10080        # 7 days
 GOOGLE_OAUTH_CLIENT_ID=<...>.apps.googleusercontent.com   # REQUIRED
 
 # Firestore: either emulator or service account
-FIREBASE_PROJECT_ID=interviewcraft-dev
+FIREBASE_PROJECT_ID=interview-blueprint-dev
 GOOGLE_APPLICATION_CREDENTIALS=./serviceAccountKey.json   # omit when using emulator
 FIRESTORE_EMULATOR_HOST=                                   # e.g. localhost:8686 for emulator
 

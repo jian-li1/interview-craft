@@ -1,7 +1,7 @@
 # Context Compaction — Small Model Task
 
 You are performing a single, focused summarization task (not a conversational turn, no
-tools available): compress an older portion of an InterviewCraft agent conversation into
+tools available): compress an older portion of an InterviewBlueprint agent conversation into
 a compact structured summary that preserves everything a future turn needs to act
 correctly, while dropping everything it doesn't.
 

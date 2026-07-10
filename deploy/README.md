@@ -1,4 +1,4 @@
-# Deploying InterviewCraft to Google Cloud Platform
+# Deploying InterviewBlueprint to Google Cloud Platform
 
 The app deploys as two Cloud Run services (backend + frontend) with Firestore as the
 database. Total one-time setup is ~15 minutes; each deploy after that is one command.
@@ -53,4 +53,4 @@ Subsequent deploys: rerun the same command, or `./deploy/deploy.sh <project> <re
 - Cost stays near zero at idle (`--min-instances 0`). For instant cold starts set
   `--min-instances 1` on the backend.
 - Extra provider keys (Gemini, Tavily, Google CSE) can be added the same way:
-  create a secret, then `gcloud run services update interviewcraft-backend --set-secrets ...`.
+  create a secret, then `gcloud run services update interview-blueprint-backend --set-secrets ...`.

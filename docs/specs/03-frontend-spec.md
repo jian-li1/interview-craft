@@ -1,4 +1,4 @@
-# InterviewCraft — Frontend UX & Implementation Spec
+# InterviewBlueprint — Frontend UX & Implementation Spec
 
 Next.js 15 App Router + TypeScript + Tailwind v4. Conform to API/WS contracts in spec 01.
 

@@ -1,9 +1,9 @@
-# InterviewCraft
+# InterviewBlueprint
 
 **AI-powered agentic platform that generates comprehensive, personalized, fully-cited
 interview-preparation curricula from a single prompt.**
 
-Tell InterviewCraft what interview you're preparing for — "Google SWE system design",
+Tell InterviewBlueprint what interview you're preparing for — "Google SWE system design",
 "consulting case interviews at McKinsey", "ICU nursing interviews" — and an agentic AI
 system deep-researches the web, proposes a curriculum plan for your approval, then writes a
 complete beginner-to-ready curriculum: structured modules and sections with rich Markdown,

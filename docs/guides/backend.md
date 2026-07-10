@@ -256,7 +256,7 @@ Key mechanics:
 ## 6. Firestore service & schema — `app/services/firestore.py`
 
 `get_firestore_client()` is an `@lru_cache`d factory that lazily creates one
-`firebase_admin` app named `"interviewcraft"` (a fixed name, not the default app — this
+`firebase_admin` app named `"interview-blueprint"` (a fixed name, not the default app — this
 lets tests re-import the app without "app already exists" errors) and returns a
 `firestore.client()` bound to it. Initialization branches three ways:
 1. `FIRESTORE_EMULATOR_HOST` set → sets the env var (if not already) and initializes

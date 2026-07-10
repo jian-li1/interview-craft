@@ -39,7 +39,7 @@ export function Features() {
           Everything you need, nothing you have to build
         </h2>
         <p className="mt-3 text-muted-foreground">
-          InterviewCraft handles research, planning, and writing so you can focus on
+          InterviewBlueprint handles research, planning, and writing so you can focus on
           learning.
         </p>
       </div>

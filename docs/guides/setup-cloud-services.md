@@ -1,6 +1,6 @@
 # Cloud services setup
 
-Per-service instructions for every external service InterviewCraft can use, and exactly
+Per-service instructions for every external service InterviewBlueprint can use, and exactly
 which `.env` variable each credential goes into. Only three things are required to run
 at all: a Google OAuth client, a Firebase/Firestore project (or the local emulator —
 see [setup-local.md](setup-local.md)), and one LLM provider key (or a local
@@ -28,12 +28,12 @@ the sign-in button and mint the ID token in the first place).
    Credentials](https://console.cloud.google.com/apis/credentials). Create a project if
    you don't have one yet (top-left project picker → "New Project").
 2. If prompted, configure the **OAuth consent screen** first: External user type is
-   fine for development; App name = "InterviewCraft" (or anything); support email = your
+   fine for development; App name = "InterviewBlueprint" (or anything); support email = your
    own; no scopes beyond the default `openid`/`email`/`profile` are needed; add your own
    Google account under "Test users" if the app stays in "Testing" publishing status.
 3. Back on the Credentials page: **+ Create Credentials → OAuth client ID**.
 4. Application type: **Web application**.
-5. Name: anything, e.g. "InterviewCraft Web".
+5. Name: anything, e.g. "InterviewBlueprint Web".
 6. **Authorized JavaScript origins** — add:
    - `http://localhost:3000` (local frontend dev server)
    - your production frontend URL later, after your first Cloud Run deploy (see
@@ -83,13 +83,13 @@ gcloud auth login
 gcloud config set project YOUR_PROJECT_ID
 gcloud services enable firestore.googleapis.com
 gcloud firestore databases create --location=us-central1
-gcloud iam service-accounts create interviewcraft-dev \
-  --display-name "InterviewCraft local dev"
+gcloud iam service-accounts create interview-blueprint-dev \
+  --display-name "InterviewBlueprint local dev"
 gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
-  --member "serviceAccount:interviewcraft-dev@YOUR_PROJECT_ID.iam.gserviceaccount.com" \
+  --member "serviceAccount:interview-blueprint-dev@YOUR_PROJECT_ID.iam.gserviceaccount.com" \
   --role "roles/datastore.user"
 gcloud iam service-accounts keys create backend/serviceAccountKey.json \
-  --iam-account "interviewcraft-dev@YOUR_PROJECT_ID.iam.gserviceaccount.com"
+  --iam-account "interview-blueprint-dev@YOUR_PROJECT_ID.iam.gserviceaccount.com"
 ```
 
 Then set the same two `backend/.env` values as in §2a.

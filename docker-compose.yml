@@ -39,6 +39,6 @@ services:
     command: >
       gcloud emulators firestore start
       --host-port=0.0.0.0:8686
-      --project=interviewcraft-dev
+      --project=interview-blueprint-dev
     ports:
       - "8686:8686"

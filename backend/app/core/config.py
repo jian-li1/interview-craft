@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     google_oauth_client_id: str = Field(..., description="Google OAuth client id for ID token verification")
 
     # --- Firestore ---
-    firebase_project_id: str = "interviewcraft-dev"
+    firebase_project_id: str = "interview-blueprint-dev"
     google_application_credentials: str | None = None
     firestore_emulator_host: str | None = None
 

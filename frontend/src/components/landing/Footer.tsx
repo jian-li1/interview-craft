@@ -10,10 +10,10 @@ export function Footer() {
           <span className="flex h-6 w-6 items-center justify-center rounded-md bg-gradient-accent text-white">
             <Sparkles className="h-3 w-3" aria-hidden="true" />
           </span>
-          InterviewCraft
+          InterviewBlueprint
         </Link>
         <p className="text-xs text-muted-foreground">
-          &copy; {new Date().getFullYear()} InterviewCraft. All rights reserved.
+          &copy; {new Date().getFullYear()} InterviewBlueprint. All rights reserved.
         </p>
       </div>
     </footer>

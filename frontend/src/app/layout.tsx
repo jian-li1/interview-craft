@@ -18,9 +18,9 @@ const inter = Inter({
 // Static <head> metadata for the whole app (App Router merges this into
 // every page unless a route segment overrides it with its own `metadata`).
 export const metadata: Metadata = {
-  title: "InterviewCraft — Your AI interview-prep curriculum",
+  title: "InterviewBlueprint — Your AI interview-prep curriculum",
   description:
-    "InterviewCraft generates comprehensive, personalized interview-preparation curricula through deep research, human-in-the-loop planning, and cited, visual lessons.",
+    "InterviewBlueprint generates comprehensive, personalized interview-preparation curricula through deep research, human-in-the-loop planning, and cited, visual lessons.",
 };
 
 // Viewport + theme-color config, split out from `metadata` per Next.js 15

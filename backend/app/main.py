@@ -28,9 +28,9 @@ def create_app() -> FastAPI:
     configure_logging("DEBUG" if settings.app_env == "development" else "INFO")
 
     app = FastAPI(
-        title="InterviewCraft API",
+        title="InterviewBlueprint API",
         version="0.1.0",
-        description="Backend for InterviewCraft: an agentic AI interview-prep curriculum platform.",
+        description="Backend for InterviewBlueprint: an agentic AI interview-prep curriculum platform.",
     )
 
     # allow_credentials=True is required so the browser sends the httpOnly `ic_session`
@@ -64,7 +64,7 @@ def create_app() -> FastAPI:
             None: This function only has the side effect of emitting a log line.
         """
         logger.info(
-            "InterviewCraft backend starting up",
+            "InterviewBlueprint backend starting up",
             extra={"extra_fields": {"app_env": settings.app_env, "llm_provider": settings.llm_provider}},
         )
 
