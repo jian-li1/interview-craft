@@ -1,8 +1,8 @@
 """Provider-agnostic LLM abstraction.
 
-All providers (OpenAI, Gemini, llama.cpp via OpenAI-compatible endpoint) implement the
-same `LLMProvider` protocol and emit the same stream of `LLMEvent`s, so the orchestrator
-never has to branch on which provider is active.
+All providers (OpenAI — including any OpenAI-compatible endpoint via `OPENAI_BASE_URL` —
+and Gemini) implement the same `LLMProvider` protocol and emit the same stream of
+`LLMEvent`s, so the orchestrator never has to branch on which provider is active.
 """
 
 from __future__ import annotations

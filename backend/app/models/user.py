@@ -20,7 +20,7 @@ class UserSettings(ApiModel):
     Attributes:
         theme (Theme): UI theme preference ("system", "light", or "dark").
         llm_provider (str | None): Per-user override of the global `LLM_PROVIDER` env
-            var (e.g. "openai", "gemini", "llamacpp"); None defers to the server default.
+            var (e.g. "openai", "gemini"); None defers to the server default.
         search_provider (str | None): Per-user override of the global `SEARCH_PROVIDER`
             env var (e.g. "duckduckgo", "google", "tavily"); None defers to the server
             default.

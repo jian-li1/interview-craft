@@ -115,7 +115,7 @@ Key requirements:
 - **Streaming**: use the provider's native streaming; forward text deltas immediately.
   Reasoning comes from the provider's own native reasoning stream, not a prompt convention:
   OpenAI-compatible endpoints expose a `reasoning_content` delta field on streaming chat
-  completions (the DeepSeek/llama.cpp/vLLM convention; `reasoning` is read as a fallback for
+  completions (the DeepSeek/vLLM convention; `reasoning` is read as a fallback for
   OpenRouter-style gateways; first-party OpenAI models expose neither field, so no reasoning
   events are emitted for them), and Gemini exposes thought-summary parts (`part.thought ==
   true`) when `thinking_config.include_thoughts` is set on the request. Providers emit these
@@ -308,7 +308,7 @@ class LLMProvider(Protocol):
     async def complete(self, messages, small=False) -> str   # non-streaming helper
 # LLMEvent = TextDelta | ToolCallDelta(complete tool calls assembled by provider impl) | Done(usage)
 ```
-- `openai_provider.py`: openai SDK, honors OPENAI_BASE_URL (→ llama.cpp compatibility;
+- `openai_provider.py`: openai SDK, honors OPENAI_BASE_URL (→ any OpenAI-compatible endpoint;
   when base_url set and no api key, use "not-needed" placeholder). Tools via native
   function-calling. `small=True` → OPENAI_SMALL_MODEL.
 - `gemini_provider.py`: google-genai SDK, translate tool schemas, same event interface.

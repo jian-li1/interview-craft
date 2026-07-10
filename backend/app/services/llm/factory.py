@@ -21,32 +21,18 @@ def _build_provider(name: str) -> LLMProvider:
     their configured client, avoiding repeated client construction across requests.
 
     Args:
-        name (str): The provider identifier: "openai", "llamacpp", or "gemini".
+        name (str): The provider identifier: "openai" or "gemini".
 
     Returns:
         LLMProvider: The constructed provider instance.
 
     Raises:
-        ValueError: If `name` is not a recognized provider, or if required
-            provider-specific settings (e.g. `OPENAI_BASE_URL` for llamacpp) are missing.
+        ValueError: If `name` is not a recognized provider name.
     """
     settings = get_settings()
     if name == "openai":
         from app.services.llm.openai_provider import OpenAIProvider
 
-        return OpenAIProvider(
-            api_key=settings.openai_api_key,
-            model=settings.openai_model,
-            small_model=settings.openai_small_model,
-            base_url=settings.openai_base_url,
-            max_output_tokens=settings.llm_max_output_tokens,
-            request_timeout_seconds=settings.llm_request_timeout_seconds,
-        )
-    if name == "llamacpp":
-        from app.services.llm.openai_provider import OpenAIProvider
-
-        if not settings.openai_base_url:
-            raise ValueError("OPENAI_BASE_URL must be set to use the llamacpp provider")
         return OpenAIProvider(
             api_key=settings.openai_api_key,
             model=settings.openai_model,

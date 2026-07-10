@@ -146,7 +146,7 @@ async def _wait_cancellable(coro_task: asyncio.Task, cancel_event: asyncio.Event
     This is the core primitive behind "immediate" `stop` handling: without it, a `stop`
     WS frame only takes effect at coarse checkpoints (between loop iterations), leaving
     two gaps — (a) nothing interrupts a long wait on the next LLM stream chunk (a slow
-    prefill on a local llama.cpp server can stall for many seconds), and (b) a
+    prefill on a local OpenAI-compatible server can stall for many seconds), and (b) a
     long-running tool call (e.g. `fetch_url`, which fetches a full page and can take
     10-30s) runs to completion even after `stop` arrives. By racing the actual work
     against `cancel_event.wait()`, a `stop` frame that arrives mid-await is noticed
@@ -482,7 +482,7 @@ class Orchestrator:
                 # If we broke out early due to cancellation, the async generator is still
                 # "open" from the provider's/SDK's point of view — closing it here signals
                 # the underlying HTTP stream to shut down instead of leaving it abandoned
-                # (which would otherwise keep a local llama.cpp server generating forever).
+                # (which would otherwise keep a local OpenAI-compatible server generating forever).
                 # aclose() on an already-exhausted generator is a harmless no-op.
                 with contextlib.suppress(Exception):
                     await stream.aclose()

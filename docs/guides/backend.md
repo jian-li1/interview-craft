@@ -44,7 +44,7 @@ troubleshooting section of [setup-local.md](setup-local.md)).
 Every other field has a sane default matching `docs/specs/01-architecture-and-contracts.md
 §4` exactly: `app_env`, `port`, `frontend_origin`, `session_jwt_expires_min`,
 `firebase_project_id`, `google_application_credentials`, `firestore_emulator_host`,
-`llm_provider` (`openai|gemini|llamacpp`), `openai_api_key`/`openai_model`/
+`llm_provider` (`openai|gemini`), `openai_api_key`/`openai_model`/
 `openai_small_model`/`openai_base_url`, `gemini_api_key`/`gemini_model`/
 `gemini_small_model`, `search_provider` (`duckduckgo|google|tavily`),
 `google_cse_api_key`/`google_cse_engine_id`/`tavily_api_key`, `agent_max_iterations`
@@ -311,7 +311,7 @@ JSON fragments, regardless of provider.
 
 - **`openai_provider.py` (`OpenAIProvider`)** — wraps `openai.AsyncOpenAI`. Constructor
   requires an API key *unless* `base_url` is set, in which case it substitutes the
-  literal string `"not-needed"` (local OpenAI-compatible servers like llama.cpp typically
+  literal string `"not-needed"` (local OpenAI-compatible servers typically
   don't check the key). `chat_stream` accumulates streamed `tool_calls` deltas into a
   `pending_calls: dict[int, {...}]` keyed by the OpenAI stream's per-call `index`,
   concatenating `arguments` JSON string fragments until the stream ends, then
@@ -331,11 +331,10 @@ JSON fragments, regardless of provider.
   name as `user_override or settings.llm_provider`, then calls an `@lru_cache`d
   `_build_provider(name)`. Providers are effectively singletons per name — cheap since
   they're stateless aside from their configured HTTP client.
-- **llama.cpp**: there is no separate `llamacpp_provider.py` file. `"llamacpp"` is
-  handled inside `factory._build_provider` by constructing an `OpenAIProvider` and
-  *requiring* `OPENAI_BASE_URL` to be set (raises `ValueError` otherwise) — i.e.
-  `LLM_PROVIDER=llamacpp` is purely a routing choice that reuses the OpenAI client
-  pointed at a local server, exactly as the root `CLAUDE.md` describes.
+- **Self-hosted / OpenAI-compatible endpoints**: there is no separate provider value for
+  this. Point `LLM_PROVIDER=openai` at any OpenAI-compatible server (vLLM, Ollama,
+  LM Studio, etc.) by setting `OPENAI_BASE_URL` to that server's URL — the same
+  `OpenAIProvider` client is reused, exactly as the root `CLAUDE.md` describes.
 
 ### How streaming events flow to the client
 

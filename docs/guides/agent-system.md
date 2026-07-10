@@ -184,7 +184,7 @@ doesn't parse anything; it just forwards `ReasoningDelta`/`TextDelta` 1:1 to the
 
 **OpenAI-compatible provider** (`openai_provider.py`): the streamed `ChoiceDelta` object
 has no typed `reasoning_content` field in the OpenAI SDK — it's a de-facto convention used
-by DeepSeek, llama.cpp server, vLLM, and SiliconFlow on OpenAI-compatible chat-completions
+by DeepSeek, vLLM, and SiliconFlow on OpenAI-compatible chat-completions
 endpoints. Since the SDK's pydantic models allow extra fields, `chat_stream` reads
 `getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None)` every
 chunk (the `reasoning` fallback covers OpenRouter-style gateways) and yields

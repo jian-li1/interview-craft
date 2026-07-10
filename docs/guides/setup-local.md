@@ -14,8 +14,8 @@ troubleshooting section for the errors you're most likely to hit.
   (**Authorized JavaScript origins**: `http://localhost:3000`).
 - Either a **Firebase/Firestore project + service account key**, or the **Firestore
   emulator** (no Google account needed) — §3 below.
-- Either an **OpenAI API key** (or Gemini), or a **local llama.cpp server** — §5/§6
-  below.
+- Either an **OpenAI API key** (or Gemini), or a **local OpenAI-compatible model
+  server** — §5/§6 below.
 - Optional: Docker + Docker Compose, if you'd rather run everything in containers (§7).
 
 ## 1. Clone and orient
@@ -98,11 +98,11 @@ GOOGLE_APPLICATION_CREDENTIALS=./serviceAccountKey.json   # path A only; blank f
 FIRESTORE_EMULATOR_HOST=                                   # path B only, e.g. localhost:8686
 
 # --- LLM: pick one provider ---
-LLM_PROVIDER=openai                  # openai | gemini | llamacpp
+LLM_PROVIDER=openai                  # openai | gemini
 OPENAI_API_KEY=sk-...                # required if LLM_PROVIDER=openai
 OPENAI_MODEL=gpt-4o                  # main model, used for the ReAct loop
 OPENAI_SMALL_MODEL=gpt-4o-mini       # used for compaction, profile synthesis (cheaper/faster)
-OPENAI_BASE_URL=                     # set for llama.cpp — see §6 below
+OPENAI_BASE_URL=                     # set for a local OpenAI-compatible server — see §6 below
 GEMINI_API_KEY=                      # required if LLM_PROVIDER=gemini
 GEMINI_MODEL=gemini-2.5-pro
 GEMINI_SMALL_MODEL=gemini-2.5-flash
@@ -162,35 +162,29 @@ Visit `http://localhost:3000`. You should see the landing page; clicking through
 `/login` should render a working Google Sign-In button (if it instead shows a warning
 box, see Troubleshooting).
 
-## 6. llama.cpp local inference (free, fully offline LLM option)
+## 6. Local OpenAI-compatible inference (free, fully offline LLM option)
 
-Skip both OpenAI and Gemini entirely and run a local model server instead:
-
-```bash
-# Example: llama.cpp's server binary, any OpenAI-compatible GGUF model.
-llama-server --port 8080 -m /path/to/your-model.gguf
-```
+Skip both OpenAI and Gemini entirely and run any local server that exposes an
+OpenAI-compatible `/v1` chat-completions API instead — e.g. vLLM, Ollama, or LM Studio.
 
 Then in `backend/.env`:
 
 ```
-LLM_PROVIDER=llamacpp
-OPENAI_BASE_URL=http://localhost:8080/v1
+LLM_PROVIDER=openai
+OPENAI_BASE_URL=http://localhost:8080/v1   # or wherever your server listens
 OPENAI_API_KEY=                      # leave blank — see below
-OPENAI_MODEL=<whatever your server reports as its model name, often ignored by llama.cpp>
+OPENAI_MODEL=<whatever your server reports as its model name, often ignored by local servers>
 OPENAI_SMALL_MODEL=<same, or a second/smaller local model if you're running two servers>
 ```
 
-Under the hood `LLM_PROVIDER=llamacpp` is handled by
-`app/services/llm/factory.py:_build_provider` constructing a plain `OpenAIProvider`
-pointed at `OPENAI_BASE_URL`, and **requires** that base URL to be set (raises
-`ValueError("OPENAI_BASE_URL must be set to use the llamacpp provider")` otherwise).
-When no `OPENAI_API_KEY` is set but a `base_url` is present,
-`app/services/llm/openai_provider.py` substitutes the literal placeholder string
-`"not-needed"` — llama.cpp's server doesn't validate the key, so this just satisfies the
-OpenAI SDK's requirement that *some* key string be passed.
+There is no separate provider value for this — the `openai` provider itself, pointed at
+`OPENAI_BASE_URL`, is what serves any OpenAI-compatible endpoint. When no
+`OPENAI_API_KEY` is set but a `base_url` is present, `app/services/llm/openai_provider.py`
+substitutes the literal placeholder string `"not-needed"` — local servers don't validate
+the key, so this just satisfies the OpenAI SDK's requirement that *some* key string be
+passed.
 
-Note: search still needs a provider (DuckDuckGo works with zero config) — llama.cpp
+Note: search still needs a provider (DuckDuckGo works with zero config) — a local LLM
 only replaces the *LLM*, not web search.
 
 ## 7. Running both together

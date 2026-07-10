@@ -20,7 +20,7 @@ See root `/CLAUDE.md` first. Scoped conventions for `backend/` only. Agent core:
 - `app/services/firestore.py` — Firestore repo functions. **No ownership checks here**
   — callers must check `owner_uid == current_user.uid` first.
 - `app/services/llm/` — `base.py` (protocol), `openai_provider.py` (also serves
-  llama.cpp via `OPENAI_BASE_URL`), `gemini_provider.py`, `factory.py`.
+  any OpenAI-compatible endpoint via `OPENAI_BASE_URL`), `gemini_provider.py`, `factory.py`.
 - `app/services/search/` — `duckduckgo.py` (default, keyless), `google_cse.py`,
   `tavily.py`, `factory.py`.
 - `app/services/resume_parser.py` — in-memory pdf/docx/txt parsing, 5MB cap.

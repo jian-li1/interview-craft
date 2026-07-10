@@ -40,7 +40,8 @@ class Settings(BaseSettings):
     firestore_emulator_host: str | None = None
 
     # --- LLM ---
-    llm_provider: Literal["openai", "gemini", "llamacpp"] = "openai"
+    # "openai" also serves any OpenAI-compatible endpoint via openai_base_url.
+    llm_provider: Literal["openai", "gemini"] = "openai"
     openai_api_key: str | None = None
     openai_model: str = "gpt-4o"
     openai_small_model: str = "gpt-4o-mini"
@@ -60,8 +61,8 @@ class Settings(BaseSettings):
     context_token_limit: int = 100_000
 
     # --- LLM request shape / resilience ---
-    # Hard cap on generated tokens per LLM call. Without this, a local llama.cpp server
-    # (or any misbehaving OpenAI-compatible endpoint) can generate indefinitely — this is
+    # Hard cap on generated tokens per LLM call. Without this, a misbehaving
+    # local/OpenAI-compatible endpoint can generate indefinitely — this is
     # a defense-in-depth bound independent of any provider-side default.
     llm_max_output_tokens: int = 8192
     # Timeout (seconds) applied to the `read` leg of LLM HTTP requests — for streaming

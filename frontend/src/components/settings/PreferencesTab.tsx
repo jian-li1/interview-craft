@@ -78,9 +78,9 @@ export function PreferencesTab() {
               disabled={saving}
             >
               <option value="">Server default</option>
-              <option value="openai">OpenAI</option>
+              {/* openai routes both hosted OpenAI and any OpenAI-compatible endpoint via OPENAI_BASE_URL */}
+              <option value="openai">OpenAI / OpenAI-compatible</option>
               <option value="gemini">Gemini</option>
-              <option value="llamacpp">llama.cpp (local, OpenAI-compatible)</option>
             </Select>
           </div>
         </div>

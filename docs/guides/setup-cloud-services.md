@@ -3,8 +3,8 @@
 Per-service instructions for every external service InterviewCraft can use, and exactly
 which `.env` variable each credential goes into. Only three things are required to run
 at all: a Google OAuth client, a Firebase/Firestore project (or the local emulator —
-see [setup-local.md](setup-local.md)), and one LLM provider key (or a local llama.cpp
-server). Everything else is optional.
+see [setup-local.md](setup-local.md)), and one LLM provider key (or a local
+OpenAI-compatible server). Everything else is optional.
 
 | Service | Required? | Free tier? | Goes into |
 |---|---|---|---|
@@ -104,7 +104,7 @@ runs a `google/cloud-sdk:slim` container per `docker-compose.yml`'s
 blank — `app/services/firestore.py` detects the emulator host and skips credential
 verification entirely.
 
-## 3. OpenAI API key (one LLM provider required, unless using llama.cpp)
+## 3. OpenAI API key (one LLM provider required, unless using a local OpenAI-compatible server)
 
 1. Go to [platform.openai.com/api-keys](https://platform.openai.com/api-keys), sign in,
    **Create new secret key**. Copy it immediately (shown once).
@@ -120,7 +120,8 @@ verification entirely.
    (see [agent-system.md](agent-system.md) §6). Any two chat-completions-capable model
    names work — swap them for cheaper/faster or more capable models as needed.
 3. This is a paid API — there is no free tier. For a free local alternative, see
-   [setup-local.md](setup-local.md)'s llama.cpp section (`LLM_PROVIDER=llamacpp`).
+   [setup-local.md](setup-local.md)'s local-inference section (`LLM_PROVIDER=openai` +
+   `OPENAI_BASE_URL`).
 
 ## 4. Google Gemini API key (optional)
 
@@ -188,7 +189,7 @@ needed beyond leaving `SEARCH_PROVIDER` unset or explicitly `duckduckgo`.
 ## Related documents
 
 - [setup-local.md](setup-local.md) — full local environment walkthrough (env var
-  reference, running both apps, Docker Compose, llama.cpp, troubleshooting).
+  reference, running both apps, Docker Compose, local inference, troubleshooting).
 - [deployment.md](deployment.md) — how these same credentials get provisioned as GCP
   Secret Manager secrets for production.
 - [docs/specs/01-architecture-and-contracts.md](../specs/01-architecture-and-contracts.md)

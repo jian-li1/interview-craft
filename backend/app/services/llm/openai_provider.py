@@ -1,6 +1,6 @@
 """OpenAI-compatible LLM provider.
 
-Also serves llama.cpp servers (or any other OpenAI-compatible endpoint) when
+Also serves any OpenAI-compatible endpoint (local or hosted) when
 `OPENAI_BASE_URL` is set: the OpenAI SDK is pointed at that base URL, and if no API key
 is configured a harmless placeholder ("not-needed") is used since local servers usually
 don't check it.
@@ -95,13 +95,13 @@ class OpenAIProvider:
         """Initialize the provider's async OpenAI SDK client.
 
         Args:
-            api_key (str | None): The OpenAI API key, or None when targeting a local
-                OpenAI-compatible server (e.g. llama.cpp) that doesn't check the key.
+            api_key (str | None): The OpenAI API key, or None when targeting an
+                OpenAI-compatible server that doesn't check the key.
             model (str): The main model name/id to use for regular completions.
             small_model (str): The cheaper/faster model name/id to use when `small=True`
                 (e.g. for summarization).
-            base_url (str | None): An alternate OpenAI-compatible base URL (set for the
-                "llamacpp" provider); None uses OpenAI's default endpoint.
+            base_url (str | None): Points the client at an OpenAI-compatible endpoint;
+                None uses OpenAI's default endpoint.
             max_output_tokens (int): The `max_tokens` cap applied to every completion
                 request, to bound cost/latency.
             request_timeout_seconds (float): Read timeout (seconds) for the HTTP client;
@@ -182,7 +182,7 @@ class OpenAIProvider:
                 finish_reason = choice.finish_reason
 
             if delta:
-                # Not a typed SDK field: DeepSeek/llama.cpp/vLLM/SiliconFlow use
+                # Not a typed SDK field: DeepSeek/vLLM/SiliconFlow use
                 # `reasoning_content`, OpenRouter-style gateways use `reasoning` — pydantic
                 # allows extra fields so getattr works even though ChoiceDelta doesn't
                 # declare either.

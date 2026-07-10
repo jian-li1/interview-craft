@@ -30,8 +30,8 @@ personalized to *your* background, and citations for every claim.
 - **Visual curriculum** — n8n-style workflow canvas of modules (React Flow) plus a Reader
   view with rendered Markdown, Mermaid diagrams, and source cards. Light/dark themes,
   smooth animations.
-- **Pluggable providers** — LLM: OpenAI / Google Gemini / llama.cpp (OpenAI-compatible,
-  local). Search: DuckDuckGo (free, keyless) / Google Custom Search / Tavily.
+- **Pluggable providers** — LLM: OpenAI / Google Gemini / any OpenAI-compatible server
+  (via OPENAI_BASE_URL, e.g. local). Search: DuckDuckGo (free, keyless) / Google Custom Search / Tavily.
 
 ## Architecture
 
@@ -48,7 +48,7 @@ personalized to *your* background, and citations for every claim.
 └────────────────────┘                              │      ┌──────┴───────┐       │
         Google Sign-In → ID token → session JWT     │   LLM providers  Search     │
                                                     │  (OpenAI/Gemini/ (DDG/CSE/  │
-                                                    │   llama.cpp)      Tavily)   │
+                                                    │   local)          Tavily)   │
                                                     └───────────┬─────────────────┘
                                                                 ▼
                                                        Firestore (users, profiles,
@@ -79,7 +79,7 @@ personalized to *your* background, and citations for every claim.
 ## Quick start (local)
 
 Prereqs: Python 3.12+, Node 20+, a Google OAuth client ID, an OpenAI API key
-(or a running llama.cpp server). Full step-by-step guide: [docs/guides/setup-local.md](docs/guides/setup-local.md).
+(or a running local OpenAI-compatible server). Full step-by-step guide: [docs/guides/setup-local.md](docs/guides/setup-local.md).
 
 ```bash
 # 1. Backend
@@ -109,7 +109,7 @@ docker compose up --build
 |---|---|---|
 | Google OAuth 2.0 client | Sign-in | Yes |
 | Firebase / Firestore | All data | Yes (or local emulator, no account) |
-| OpenAI API | Agent LLM | No (or llama.cpp locally, free) |
+| OpenAI API | Agent LLM | No (or a local OpenAI-compatible server, free) |
 | DuckDuckGo search | Web research | Yes, keyless (Gemini/Tavily/Google CSE optional) |
 
 Setup instructions for each: [docs/guides/setup-cloud-services.md](docs/guides/setup-cloud-services.md).
