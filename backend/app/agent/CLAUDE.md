@@ -49,13 +49,16 @@ iteration — a `transition_phase` call takes effect next iteration, not next tu
   NEVER the full page content (that blew up the system blocks in an earlier design).
   Full content re-enters context only via `fetch_url` on a saved URL; after any batch
   with a successful `fetch_url`, `strip_stale_fetch_url_outputs` keeps only the latest
-  fetch of each URL in the conversation.
+  fetch of each URL in the conversation. Section content gets the same treatment: after
+  any batch with a `write_section`/`update_section` call or a successful `read_section`,
+  `strip_stale_section_content` keeps only the latest read/write/update occurrence of
+  each `(module_id, section_id)` in the conversation.
 - Working memory is always rebuilt fresh from the state doc — never cache it.
 - Compaction triggers at `tokens_before > 0.8 * CONTEXT_TOKEN_LIMIT`
   (`COMPACTION_TRIGGER_FRACTION`), summarizing the older ~60%
   (`OLDER_FRACTION_TO_COMPACT`) via the small model. Changing these fractions requires
   updating `tests/test_memory.py`/`test_memory_manager_context.py`.
-- Tool-output truncation (`RECENT_TOOL_EXCHANGES_KEPT_FULL = 6`) runs on every
+- Tool-output truncation (`RECENT_TOOL_EXCHANGES_KEPT_FULL = 20`) runs on every
   `build_context` call independent of compaction — full data still lives in Firestore.
 - Token estimation (`memory/tokens.py`) uses `tiktoken` with a `chars/4` fallback —
   don't assume `tiktoken` is always available.

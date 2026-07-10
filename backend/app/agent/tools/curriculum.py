@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 import re
 from typing import Any, Literal
 
@@ -10,12 +11,27 @@ from pydantic import BaseModel, Field
 
 from app.agent.mermaid_lint import lint_markdown_mermaid
 from app.agent.tools.base import AgentContext, Tool
+from app.core.logging import get_logger
 from app.services import firestore as fs
+
+logger = get_logger(__name__)
 
 # Matches numbered module/section doc ids ("m1", "s12", ...) so write_section's
 # refinement-only auto-creation path can compute the next sequential id.
 _NUMBERED_MODULE_ID_RE = re.compile(r"^m(\d+)$")
 _NUMBERED_SECTION_ID_RE = re.compile(r"^s(\d+)$")
+
+# Tool names whose calls carry a section's content_markdown somewhere in their
+# input/output and are therefore in scope for strip_stale_section_content.
+_SECTION_CONTENT_TOOLS = ("read_section", "write_section", "update_section")
+
+# Replacement text for a stripped content_markdown input — also serves as the
+# idempotence sentinel so a re-run doesn't treat stripped calls as content-bearing.
+_SECTION_CONTENT_STRIPPED_NOTE = (
+    "section content removed — this section was read or written again later in the "
+    "conversation; the latest read_section/write_section/update_section call for this "
+    "section carries the current content (re-read with read_section if needed)"
+)
 
 
 class ListCurriculumStructureInput(BaseModel):
@@ -504,6 +520,106 @@ class SetModuleStatusTool(Tool):
                 "module_id": input.module_id,
             },
         }
+
+
+def strip_stale_section_content(conversation_id: str) -> int:
+    """Rewrite every non-latest read/write/update_section call per section to drop its content.
+
+    Mirrors `strip_stale_fetch_url_outputs` in `app/agent/tools/research.py`: called after
+    any batch containing a `write_section`/`update_section` call or a successful
+    `read_section` call, so re-reading or re-revising the same section later in a long
+    conversation doesn't leave duplicate full section Markdown sitting in the model-facing
+    history — only the most recent content-bearing occurrence of a given (module_id,
+    section_id) keeps its content; earlier occurrences are rewritten to a short note.
+
+    Args:
+        conversation_id (str): The conversation whose messages to scan and rewrite.
+
+    Returns:
+        int: The number of messages whose `tool_calls` were rewritten (0 on any
+            internal failure — this function never raises).
+    """
+    updated_count = 0
+    try:
+        messages = fs.list_messages(conversation_id)
+
+        # Pass 1: find, for each (module_id, section_id), the (message_index,
+        # tool_call_index) of its LAST content-bearing occurrence across read/write/update
+        # calls — chronological message order, then call order within a message — so
+        # pass 2 knows which occurrence to leave untouched.
+        last_occurrence: dict[tuple[str, str], tuple[int, int]] = {}
+        # Cache per-occurrence bookkeeping needed by pass 2: which key it belongs to and
+        # whether it's a read (output rewrite) or a write/update (input rewrite).
+        occurrence_kind: dict[tuple[int, int], tuple[tuple[str, str], str]] = {}
+        for msg_idx, msg in enumerate(messages):
+            for tc_idx, tc in enumerate(msg.get("tool_calls") or []):
+                name = tc.get("name")
+                if name not in _SECTION_CONTENT_TOOLS:
+                    continue
+                tc_input = tc.get("input")
+                if not isinstance(tc_input, dict):
+                    continue
+                module_id = tc_input.get("module_id")
+                section_id = tc_input.get("section_id")
+                if not module_id or not section_id:
+                    continue
+                key = (module_id, section_id)
+
+                if name == "read_section":
+                    # A read is content-bearing only if it actually returned the section
+                    # doc (error observations like "not found" carry no content_markdown).
+                    try:
+                        output = json.loads(tc.get("output_full") or "{}")
+                    except Exception:
+                        continue
+                    if not isinstance(output, dict) or "content_markdown" not in output:
+                        continue
+                else:
+                    # write_section/update_section are content-bearing whenever their input
+                    # carries a non-stripped content_markdown — INCLUDING error-status calls,
+                    # since a rejected write's input still holds full content that must be
+                    # strippable once a later call for the same section supersedes it.
+                    content = tc_input.get("content_markdown")
+                    if not content or content == _SECTION_CONTENT_STRIPPED_NOTE:
+                        continue
+
+                occurrence_kind[(msg_idx, tc_idx)] = (key, name)
+                last_occurrence[key] = (msg_idx, tc_idx)
+
+        # Pass 2: rewrite every occurrence that isn't the last one for its key.
+        for msg_idx, msg in enumerate(messages):
+            tool_calls = msg.get("tool_calls") or []
+            changed = False
+            new_tool_calls = []
+            for tc_idx, tc in enumerate(tool_calls):
+                kind = occurrence_kind.get((msg_idx, tc_idx))
+                if kind is None or last_occurrence.get(kind[0]) == (msg_idx, tc_idx):
+                    new_tool_calls.append(tc)
+                    continue
+                key, name = kind
+                module_id, section_id = key
+                if name == "read_section":
+                    # Reads carry content in the output — rewrite output_full only, leave
+                    # input/output_preview untouched (preview is UI-only).
+                    stripped_output = {
+                        "module_id": module_id,
+                        "section_id": section_id,
+                        "note": _SECTION_CONTENT_STRIPPED_NOTE,
+                    }
+                    new_tool_calls.append({**tc, "output_full": json.dumps(stripped_output)})
+                else:
+                    # Writes/updates carry content in the input — rewrite input only, keep
+                    # output_full/output_preview (small status dicts, not worth stripping).
+                    new_input = {**tc["input"], "content_markdown": _SECTION_CONTENT_STRIPPED_NOTE}
+                    new_tool_calls.append({**tc, "input": new_input})
+                changed = True
+            if changed:
+                fs.update_message(conversation_id, msg["id"], {"tool_calls": new_tool_calls})
+                updated_count += 1
+    except Exception:
+        logger.warning("failed to strip stale section content", exc_info=True)
+        return updated_count
+    return updated_count
 
 
 # --------------------------------------------------------------------------------------

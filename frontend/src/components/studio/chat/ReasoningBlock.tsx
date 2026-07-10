@@ -71,7 +71,7 @@ export function ReasoningBlock({ reasoning, streaming }: ReasoningBlockProps) {
           >
             <p
               ref={scrollRef}
-              className="max-h-60` overflow-y-auto whitespace-pre-wrap px-3 pb-3 text-xs leading-relaxed text-muted-foreground scrollbar-thin"
+              className="max-h-60 overflow-y-auto whitespace-pre-wrap px-3 pb-3 text-xs leading-relaxed text-muted-foreground scrollbar-thin"
             >
               {reasoning}
               {streaming && <span className="blinking-caret" aria-hidden="true" />}

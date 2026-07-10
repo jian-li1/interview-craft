@@ -7,16 +7,20 @@ write_section's target guard rejects invented module/section ids in writing/revi
 enforces next-sequential-id creation in refinement; transition_phase's writing->review and
 review->ready completeness gates block premature phase exits; transition_phase also allows
 the plan-revision loop-backs awaiting_approval->deep_research and
-outline_planning->deep_research.
+outline_planning->deep_research; strip_stale_section_content dedups read/write/update_section
+calls per (module_id, section_id) so a section's content never occupies context twice.
 """
 
 from __future__ import annotations
+
+import json
 
 import pytest
 
 from app.agent.tools.base import AgentContext
 from app.agent.tools.control import TransitionPhaseInput, TransitionPhaseTool
 from app.agent.tools.curriculum import (
+    _SECTION_CONTENT_STRIPPED_NOTE,
     SetCurriculumTitleInput,
     SetCurriculumTitleTool,
     SetModuleStatusInput,
@@ -25,6 +29,7 @@ from app.agent.tools.curriculum import (
     UpdateSectionTool,
     WriteSectionInput,
     WriteSectionTool,
+    strip_stale_section_content,
 )
 from app.core.config import get_settings
 
@@ -724,3 +729,259 @@ async def test_transition_phase_review_to_ready_allowed_when_complete(fake_fs):
 
     result = await tool.execute(TransitionPhaseInput(next_phase="ready", reason="done"), ctx)
     assert result["status"] == "transitioned"
+
+
+def _read_call(tc_id: str, module_id: str, section_id: str, content: str | None) -> dict:
+    """Build a fake `read_section` tool_call record.
+
+    Args:
+        tc_id (str): The tool call id.
+        module_id (str): Section's module id (goes in `input`).
+        section_id (str): Section id (goes in `input`).
+        content (str | None): If given, `output_full` is a full section doc with this
+            `content_markdown` (content-bearing); if None, `output_full` is an error
+            observation (not content-bearing).
+
+    Returns:
+        dict: A tool_call record shaped like the ones the orchestrator persists.
+    """
+    if content is None:
+        output = {"error": "section s9 not found in module m9"}
+        status = "error"
+    else:
+        output = {"module_id": module_id, "section_id": section_id, "content_markdown": content}
+        status = "ok"
+    return {
+        "id": tc_id,
+        "name": "read_section",
+        "input": {"module_id": module_id, "section_id": section_id},
+        "output_full": json.dumps(output),
+        "output_preview": "...",
+        "status": status,
+    }
+
+
+def _write_call(
+    tc_id: str, name: str, module_id: str, section_id: str, content: str, status: str = "ok"
+) -> dict:
+    """Build a fake `write_section`/`update_section` tool_call record.
+
+    Args:
+        tc_id (str): The tool call id.
+        name (str): Either "write_section" or "update_section".
+        module_id (str): Section's module id (goes in `input`).
+        section_id (str): Section id (goes in `input`).
+        content (str): The `content_markdown` carried in `input`.
+        status (str): The call's recorded status ("ok" or "error").
+
+    Returns:
+        dict: A tool_call record shaped like the ones the orchestrator persists.
+    """
+    return {
+        "id": tc_id,
+        "name": name,
+        "input": {
+            "module_id": module_id,
+            "section_id": section_id,
+            "title": "Intro",
+            "content_markdown": content,
+            "citations": [{"id": 1, "url": "https://example.com", "title": "Example"}],
+        },
+        "output_full": json.dumps({"status": status, "module_id": module_id, "section_id": section_id}),
+        "output_preview": "...",
+        "status": status,
+    }
+
+
+def test_strip_stale_section_content_keeps_last_read_across_messages(fake_fs):
+    """Two read_section calls on the same section in separate messages: the earlier
+    output is stripped to {module_id, section_id, note}, the later one keeps content;
+    returns 1.
+    """
+    conv = fake_fs.fs.create_conversation("uid1", "chat", curriculum_id="cur1")
+    fake_fs.fs.append_message(
+        conv["id"],
+        {"role": "assistant", "content": "", "tool_calls": [_read_call("tc1", "m1", "s1", "old content")]},
+    )
+    fake_fs.fs.append_message(
+        conv["id"],
+        {"role": "assistant", "content": "", "tool_calls": [_read_call("tc2", "m1", "s1", "new content")]},
+    )
+
+    updated = strip_stale_section_content(conv["id"])
+    assert updated == 1
+
+    messages = fake_fs.fs.list_messages(conv["id"])
+    rewritten = json.loads(messages[0]["tool_calls"][0]["output_full"])
+    assert rewritten == {"module_id": "m1", "section_id": "s1", "note": _SECTION_CONTENT_STRIPPED_NOTE}
+
+    kept = json.loads(messages[1]["tool_calls"][0]["output_full"])
+    assert kept["content_markdown"] == "new content"
+
+
+def test_strip_stale_section_content_error_write_then_ok_write(fake_fs):
+    """A rejected write_section (status error, e.g. simulated lint rejection) followed by
+    a successful write_section on the same section: the earlier call's input content is
+    stripped (other input fields preserved, output_full untouched), the latest input
+    keeps its content.
+    """
+    conv = fake_fs.fs.create_conversation("uid1", "chat", curriculum_id="cur1")
+    fake_fs.fs.append_message(
+        conv["id"],
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [_write_call("tc1", "write_section", "m1", "s1", "broken ```mermaid", status="error")],
+        },
+    )
+    fake_fs.fs.append_message(
+        conv["id"],
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [_write_call("tc2", "write_section", "m1", "s1", "fixed content", status="ok")],
+        },
+    )
+
+    updated = strip_stale_section_content(conv["id"])
+    assert updated == 1
+
+    messages = fake_fs.fs.list_messages(conv["id"])
+    first_tc = messages[0]["tool_calls"][0]
+    assert first_tc["input"]["content_markdown"] == _SECTION_CONTENT_STRIPPED_NOTE
+    assert first_tc["input"]["title"] == "Intro"
+    assert first_tc["input"]["citations"] == [{"id": 1, "url": "https://example.com", "title": "Example"}]
+    # output_full is a small status dict — left untouched by the input-only rewrite.
+    assert json.loads(first_tc["output_full"])["status"] == "error"
+
+    second_tc = messages[1]["tool_calls"][0]
+    assert second_tc["input"]["content_markdown"] == "fixed content"
+
+
+def test_strip_stale_section_content_cross_tool_write_then_read(fake_fs):
+    """write_section then read_section on the same section: the write's input content is
+    stripped once the later read supersedes it, the read's output is kept.
+    """
+    conv = fake_fs.fs.create_conversation("uid1", "chat", curriculum_id="cur1")
+    fake_fs.fs.append_message(
+        conv["id"],
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [_write_call("tc1", "write_section", "m1", "s1", "written content")],
+        },
+    )
+    fake_fs.fs.append_message(
+        conv["id"],
+        {"role": "assistant", "content": "", "tool_calls": [_read_call("tc2", "m1", "s1", "written content")]},
+    )
+
+    updated = strip_stale_section_content(conv["id"])
+    assert updated == 1
+
+    messages = fake_fs.fs.list_messages(conv["id"])
+    assert messages[0]["tool_calls"][0]["input"]["content_markdown"] == _SECTION_CONTENT_STRIPPED_NOTE
+    kept_read = json.loads(messages[1]["tool_calls"][0]["output_full"])
+    assert kept_read["content_markdown"] == "written content"
+
+
+def test_strip_stale_section_content_cross_tool_read_then_update(fake_fs):
+    """read_section then update_section on the same section: the read's output is
+    stripped, the update's input content is kept.
+    """
+    conv = fake_fs.fs.create_conversation("uid1", "chat", curriculum_id="cur1")
+    fake_fs.fs.append_message(
+        conv["id"],
+        {"role": "assistant", "content": "", "tool_calls": [_read_call("tc1", "m1", "s1", "old content")]},
+    )
+    fake_fs.fs.append_message(
+        conv["id"],
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [_write_call("tc2", "update_section", "m1", "s1", "revised content")],
+        },
+    )
+
+    updated = strip_stale_section_content(conv["id"])
+    assert updated == 1
+
+    messages = fake_fs.fs.list_messages(conv["id"])
+    rewritten_read = json.loads(messages[0]["tool_calls"][0]["output_full"])
+    assert "content_markdown" not in rewritten_read
+    assert messages[1]["tool_calls"][0]["input"]["content_markdown"] == "revised content"
+
+
+def test_strip_stale_section_content_different_sections_and_non_section_calls_untouched(fake_fs):
+    """Different (module_id, section_id) keys don't affect each other, a non-section tool
+    call (fetch_url) is left alone, and a section read/written only once is untouched —
+    returns 0.
+    """
+    conv = fake_fs.fs.create_conversation("uid1", "chat", curriculum_id="cur1")
+    fetch_output = json.dumps({"url": "https://example.com/z", "content_markdown": "page content"})
+    fake_fs.fs.append_message(
+        conv["id"],
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                _read_call("tc1", "m1", "s1", "section one content"),
+                _write_call("tc2", "write_section", "m2", "s1", "section two content"),
+                {"id": "tc3", "name": "fetch_url", "input": {"url": "https://example.com/z"},
+                 "output_full": fetch_output, "output_preview": "...", "status": "ok"},
+            ],
+        },
+    )
+
+    updated = strip_stale_section_content(conv["id"])
+    assert updated == 0
+
+    messages = fake_fs.fs.list_messages(conv["id"])
+    tool_calls = {tc["id"]: tc for tc in messages[0]["tool_calls"]}
+    assert json.loads(tool_calls["tc1"]["output_full"])["content_markdown"] == "section one content"
+    assert tool_calls["tc2"]["input"]["content_markdown"] == "section two content"
+    assert tool_calls["tc3"]["output_full"] == fetch_output
+
+
+def test_strip_stale_section_content_no_matching_messages_returns_zero(fake_fs):
+    """A conversation with no section-content tool calls updates nothing."""
+    conv = fake_fs.fs.create_conversation("uid1", "chat", curriculum_id="cur1")
+    fake_fs.fs.append_message(conv["id"], {"role": "user", "content": "hi"})
+    assert strip_stale_section_content(conv["id"]) == 0
+
+
+def test_strip_stale_section_content_is_idempotent(fake_fs):
+    """Calling strip_stale_section_content a second time returns 0 and changes nothing
+    further — the stripped-note sentinel keeps earlier writes from being re-treated as
+    content-bearing.
+    """
+    conv = fake_fs.fs.create_conversation("uid1", "chat", curriculum_id="cur1")
+    fake_fs.fs.append_message(
+        conv["id"],
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [_write_call("tc1", "write_section", "m1", "s1", "old content")],
+        },
+    )
+    fake_fs.fs.append_message(
+        conv["id"],
+        {"role": "assistant", "content": "", "tool_calls": [_read_call("tc2", "m1", "s1", "old content")]},
+    )
+    fake_fs.fs.append_message(
+        conv["id"],
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [_write_call("tc3", "update_section", "m1", "s1", "final content")],
+        },
+    )
+
+    first_run = strip_stale_section_content(conv["id"])
+    assert first_run == 2  # tc1's write input and tc2's read output both superseded by tc3
+
+    before = fake_fs.fs.list_messages(conv["id"])
+    second_run = strip_stale_section_content(conv["id"])
+    assert second_run == 0
+    after = fake_fs.fs.list_messages(conv["id"])
+    assert before == after

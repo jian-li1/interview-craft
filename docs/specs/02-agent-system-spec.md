@@ -184,6 +184,13 @@ during writing-only refinements, etc. — keep filtering simple: a phase→allow
 - `write_section(module_id, section_id, title, content_markdown, citations[])` → target guard first: in `writing`/`review`, module_id/section_id must already exist (materialized from the approved plan) or the write is rejected with an error listing existing ids; in `ready`/`refinement`, a new module/section may be created but only at the next sequential id (`m{N+1}`/`s{K+1}`, auto-creating the module doc when applicable), otherwise rejected. Then validates citations non-empty for research-based content; syntax-lints any ```mermaid blocks and rejects the write with an error observation (no write performed) if a diagram is broken; marks task done (matching `module_id-section_id` or, for legacy docs, the section id alone); emits `curriculum_updated` + `progress`; also refreshes the parent module's derived status (planned→writing→complete, from its sections) and estimated_minutes (~200 wpm from written content).
 - `read_section(module_id, section_id)` → full content (for explanation/refinement).
 - `update_section(module_id, section_id, content_markdown, citations[], change_note)` → for refinement phase; also syntax-lints ```mermaid blocks and rejects with an error observation (no write) if broken; also refreshes the parent module's derived status/estimated_minutes.
+- After any batch containing a `write_section`/`update_section` call or a successful
+  `read_section` call, the orchestrator runs `strip_stale_section_content`: for each
+  (module_id, section_id), only the latest content-bearing occurrence keeps its markdown —
+  earlier `read_section` outputs are rewritten to `{module_id, section_id, note}` and
+  earlier `write_section`/`update_section` inputs have `content_markdown` replaced with a
+  note (their outputs, small status dicts, are kept), so a section's content never
+  occupies context twice.
 - `write_curriculum_overview(overview_markdown, emoji, tags[])` → sets curriculum overview/metadata.
 - `set_curriculum_title(title, emoji?)` → renames the curriculum (and the linked
   conversation's sidebar/dashboard title) away from the placeholder derived from the raw
@@ -226,8 +233,8 @@ during writing-only refinements, etc. — keep filtering simple: a phase→allow
   `conversations/{id}.summary`, set `compacted_through`, and rebuild context as
   [system blocks] + [summary block] + [remaining recent messages]. Emit WS `compaction`.
 - The model is replayed each tool call's full `output_full`; only outputs older than the
-  last 6 exchanges are truncated to short previews in the rebuilt context (full data also
-  lives in Firestore saved sources / sections).
+  last 20 exchanges (`RECENT_TOOL_EXCHANGES_KEPT_FULL`) are truncated to short previews in
+  the rebuilt context (full data also lives in Firestore saved sources / sections).
 
 ## 6. Prompt files (`agent/prompts/*.md`) — write these THOROUGHLY
 

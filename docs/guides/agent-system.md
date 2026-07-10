@@ -298,6 +298,13 @@ precisely or if the profile changed mid-run.
   `mermaid_lint.lint_markdown_mermaid` guard (error observation + no write on a broken
   diagram), and emits only `curriculum_updated` (no `progress` event, since this isn't
   task-queue-driven).
+- After any batch containing a `write_section`/`update_section` call or a successful
+  `read_section` call, the orchestrator runs `strip_stale_section_content(conversation_id)`:
+  for each `(module_id, section_id)`, only the latest content-bearing occurrence keeps its
+  markdown — earlier `read_section` outputs are rewritten to `{module_id, section_id,
+  note}`, earlier `write_section`/`update_section` inputs have `content_markdown` replaced
+  with a note (their small status-dict outputs are kept, since write-status observations
+  aren't worth stripping) — so a section's content never occupies context twice.
 - **`write_curriculum_overview`** — sets `overview`, `emoji`, `tags` on the curriculum
   doc; emits `curriculum_updated(scope="overview")`.
 - **`set_curriculum_title`** — `title` (<=80 chars), optional `emoji`. Always available
@@ -412,7 +419,11 @@ design pinned full Markdown here and system-block growth blew past the token bud
 (compaction can't shrink system blocks, only conversation messages). Instead the
 summaries act as a permanent ledger; the agent calls `fetch_url` on a saved URL when it
 needs the full text back, and `strip_stale_fetch_url_outputs` guarantees each URL's
-content exists at most once in the conversation (latest fetch wins).
+content exists at most once in the conversation (latest fetch wins). The same pattern
+applies to section content: `strip_stale_section_content` guarantees each section's
+`content_markdown` exists at most once in the conversation (latest read/write/update
+wins), so re-reading or revising a section during refinement doesn't leave duplicate
+full-section Markdown in the model-facing history.
 
 ### Layer 5 — Episodic memory (conversation)
 
@@ -430,7 +441,7 @@ the whole tool output for recent exchanges, not a truncated preview.
 
 Before assembly, `truncate_old_tool_outputs` (`memory/compaction.py`) copies the
 message list, identifies which messages carry `tool_calls`, and for every such message
-**except the last `RECENT_TOOL_EXCHANGES_KEPT_FULL = 6`**, truncates each tool call's
+**except the last `RECENT_TOOL_EXCHANGES_KEPT_FULL = 20`**, truncates each tool call's
 model-facing `output_full` to `TOOL_OUTPUT_PREVIEW_CHARS = 300` chars with an
 `"... [truncated]"` suffix (legacy records lacking `output_full` fall back to their
 `output_preview`). This runs on every `build_context` call regardless of whether

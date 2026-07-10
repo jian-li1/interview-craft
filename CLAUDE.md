@@ -40,8 +40,9 @@ specs silently.
   saved research sources (agent-written ≤5-sentence summaries from save_sources, grouped
   by search query — full page content stays on the source doc; the agent re-fetches a
   saved URL via fetch_url, and duplicate fetches of a URL are stripped from the
-  conversation keeping only the latest) → conversation (with rolling compaction
-  summary at 0.8× CONTEXT_TOKEN_LIMIT via the small model).
+  conversation keeping only the latest — likewise, duplicate reads/writes of a curriculum
+  section's content are stripped keeping only the latest) → conversation (with rolling
+  compaction summary at 0.8× CONTEXT_TOKEN_LIMIT via the small model).
 - Providers are swappable via env/user settings: LLM_PROVIDER (openai | gemini | llamacpp —
   llamacpp = OpenAI provider with OPENAI_BASE_URL), SEARCH_PROVIDER (duckduckgo | google | tavily).
   DuckDuckGo uses the `ddgs` package (keyless).

@@ -2,6 +2,9 @@
 
 import { useState } from "react";
 import { motion } from "framer-motion";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import rehypeHighlight from "rehype-highlight";
 import { HelpCircle, Send } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
@@ -60,7 +63,12 @@ export function QuestionCard({ question, options, disabled, onAnswer }: Question
         <h3 className="text-sm font-semibold">The agent needs your input</h3>
       </div>
 
-      <p className="mt-3 text-sm font-medium text-foreground">{question}</p>
+      {/* Render question as markdown since agents emit bold/lists in clarifying questions */}
+      <div className="prose-chat mt-3 text-sm font-medium">
+        <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
+          {question}
+        </ReactMarkdown>
+      </div>
 
       {options && options.length > 0 && (
         <div className="mt-3 flex flex-col gap-1.5">

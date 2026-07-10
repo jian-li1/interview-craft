@@ -14,8 +14,8 @@ from app.services.llm.base import ChatMessage, LLMProvider
 _PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
 
 # Tool outputs older than this many recent exchanges get truncated to a short preview
-# in the rebuilt context (full data still lives in Firestore research notes / sections).
-RECENT_TOOL_EXCHANGES_KEPT_FULL = 6
+# in the rebuilt context (full data still lives in Firestore saved sources / sections).
+RECENT_TOOL_EXCHANGES_KEPT_FULL = 20
 TOOL_OUTPUT_PREVIEW_CHARS = 300
 
 # Fraction of older messages folded into the summary when compaction triggers.

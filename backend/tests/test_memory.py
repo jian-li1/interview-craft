@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from app.agent.memory.compaction import (
+    RECENT_TOOL_EXCHANGES_KEPT_FULL,
     select_messages_to_compact,
     truncate_old_tool_outputs,
 )
@@ -67,10 +68,15 @@ def test_select_messages_to_compact_splits_older_60_percent():
 
 def test_truncate_old_tool_outputs_keeps_recent_full():
     """Verify only the oldest tool-bearing messages get their model-facing output_full
-    truncated, while the most recent 6 keep their full-length output untouched.
+    truncated, while the most recent `RECENT_TOOL_EXCHANGES_KEPT_FULL` keep their
+    full-length output untouched.
     """
+    # Build 4 more tool-bearing messages than the kept-full window so exactly
+    # the 4 oldest fall outside it, regardless of the constant's current value.
+    num_truncated = 4
+    total = RECENT_TOOL_EXCHANGES_KEPT_FULL + num_truncated
     msgs = []
-    for i in range(10):
+    for i in range(total):
         msgs.append(
             {
                 "id": str(i),
@@ -81,10 +87,10 @@ def test_truncate_old_tool_outputs_keeps_recent_full():
             }
         )
     result = truncate_old_tool_outputs(msgs)
-    # Last 6 tool-bearing messages keep full output; earlier ones get truncated.
+    # The last RECENT_TOOL_EXCHANGES_KEPT_FULL messages keep full output; earlier ones truncate.
     for i, msg in enumerate(result):
         full = msg["tool_calls"][0]["output_full"]
-        if i >= 4:  # indices 4..9 are the last 6
+        if i >= num_truncated:  # inside the kept-full window
             assert full == "x" * 500
         else:
             assert full.endswith("... [truncated]")
@@ -95,14 +101,15 @@ def test_truncate_old_tool_outputs_falls_back_to_legacy_preview():
     """Verify legacy records lacking `output_full` are truncated via their `output_preview`,
     with the truncated result written to the model-facing `output_full` field.
     """
-    # 7 tool-bearing messages so the oldest (index 0) falls outside the kept-full window.
+    # One more tool-bearing message than the kept-full window, so the oldest
+    # (index 0) falls outside it and gets truncated.
     msgs = [
         {
             "id": str(i),
             "role": "assistant",
             "tool_calls": [{"id": f"tc{i}", "name": "web_search", "output_preview": "y" * 500}],
         }
-        for i in range(7)
+        for i in range(RECENT_TOOL_EXCHANGES_KEPT_FULL + 1)
     ]
     result = truncate_old_tool_outputs(msgs)
     oldest = result[0]["tool_calls"][0]

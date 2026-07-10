@@ -17,6 +17,7 @@ from typing import Any
 from app.agent.memory.manager import MemoryManager
 from app.agent.tools.base import AgentContext
 from app.agent.tools.control import PHASE_LABELS
+from app.agent.tools.curriculum import strip_stale_section_content
 from app.agent.tools.registry import ToolRegistry
 from app.agent.tools.research import strip_stale_fetch_url_outputs
 from app.core.config import Settings
@@ -519,6 +520,9 @@ class Orchestrator:
             # Set if any fetch_url call this batch succeeded — triggers a dedup pass over
             # stored fetch_url outputs after the batch is persisted (see below).
             any_fetch_succeeded = False
+            # Set if any write/update_section (any status) or successful read_section call
+            # ran this batch — triggers a dedup pass over stored section content (see below).
+            any_section_content = False
 
             for tc in tool_calls:
                 # Cancellation check: must stop the *rest* of batch from starting, else
@@ -587,6 +591,12 @@ class Orchestrator:
                 # dedup pass after the batch covers every fetch this turn.
                 if tc.name == "fetch_url" and result.status == "ok":
                     any_fetch_succeeded = True
+                # write/update inputs carry full section content even on error (e.g. a rejected
+                # Mermaid lint); a read only adds content when it succeeds.
+                if tc.name in ("write_section", "update_section") or (
+                    tc.name == "read_section" and result.status == "ok"
+                ):
+                    any_section_content = True
 
                 # `output_full` is the complete tool result replayed to the model;
                 # `output_preview` is a short slice for the client UI only.
@@ -661,6 +671,11 @@ class Orchestrator:
                 # Dedup fetch_url outputs: keep only the newest fetch of each URL in
                 # context, so re-fetching the same URL later never duplicates content.
                 strip_stale_fetch_url_outputs(conversation_id)
+
+            if any_section_content:
+                # Dedup section content: only the latest read/write of each section keeps
+                # its markdown in context, so a section's content never appears twice.
+                strip_stale_section_content(conversation_id)
 
             fs.set_agent_state(curriculum_id, {"iteration_count": iteration + 1})
 
