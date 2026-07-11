@@ -85,6 +85,9 @@ class Curriculum(ApiModel):
         owner_uid (str): uid of the user who owns this curriculum.
         title (str): Display title for the curriculum.
         user_prompt (str): Original user prompt that requested this curriculum.
+        description (str): Agent-written 1-2 sentence description of the curriculum,
+            set when the agent first proposes a task plan (empty before that / for
+            legacy docs).
         emoji (str | None): Optional emoji used as a visual icon on the dashboard.
         status (CurriculumStatus): Current lifecycle stage of the curriculum.
         overview (str): Short AI-generated overview/summary of the curriculum content.
@@ -102,6 +105,7 @@ class Curriculum(ApiModel):
     owner_uid: str
     title: str
     user_prompt: str
+    description: str = ""
     emoji: str | None = None
     status: CurriculumStatus = "researching"
     overview: str = ""
@@ -126,6 +130,9 @@ class CurriculumSummary(ApiModel):
         owner_uid (str): uid of the user who owns this curriculum.
         title (str): Display title for the curriculum.
         user_prompt (str): Original user prompt that requested this curriculum.
+        description (str): Agent-written 1-2 sentence description of the curriculum,
+            set when the agent first proposes a task plan (empty before that / for
+            legacy docs).
         emoji (str | None): Optional emoji used as a visual icon.
         status (CurriculumStatus): Current lifecycle stage of the curriculum.
         overview (str): Short AI-generated overview/summary.
@@ -142,6 +149,7 @@ class CurriculumSummary(ApiModel):
     owner_uid: str
     title: str
     user_prompt: str
+    description: str = ""
     emoji: str | None = None
     status: CurriculumStatus
     overview: str = ""
@@ -181,7 +189,10 @@ class Module(ApiModel):
         id (str): Module id.
         order (int): Display order of this module within the curriculum.
         title (str): Module title.
-        summary (str): Short description of the module's content.
+        description (str): Agent-written 1-2 sentence description of the module's
+            content, shown under its title on the workflow canvas node. Legacy
+            Firestore docs may still carry an unused `summary` key — the model simply
+            ignores it.
         objectives (list[str]): Learning objectives for the module.
         status (ModuleStatus): Whether the module is planned, being written, or done.
         estimated_minutes (int): Estimated time to complete the module, in minutes.
@@ -191,7 +202,7 @@ class Module(ApiModel):
     id: str
     order: int
     title: str
-    summary: str = ""
+    description: str = ""
     objectives: list[str] = Field(default_factory=list)
     status: ModuleStatus = "planned"
     estimated_minutes: int = 0

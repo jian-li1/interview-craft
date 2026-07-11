@@ -53,6 +53,11 @@ scope against the user's stated timeline.
 
 ## Task plan format — a strict, binding id contract
 
+`propose_task_plan` ALSO takes a top-level `description`: 1-2 sentences, plain prose (no
+markdown), at most 300 characters, describing what this curriculum covers and for whom —
+this appears under the curriculum's title on the user's dashboard card, so personalize it
+to the user's stated goal rather than writing something generic.
+
 Each task in `propose_task_plan`'s `tasks` list maps to EXACTLY one section — never
 more, never fewer, and never a task for the curriculum overview (the overview is
 written later, during `review`, via `write_curriculum_overview` — it is NOT a task
@@ -80,6 +85,9 @@ display title is captured, so get it right:
   Design Fundamentals"`, no leading "Module X:" numbering). This exact string becomes the
   module's display title in the curriculum once the plan is approved — it must NOT be a
   copy of one of that module's section titles, and never the bare id.
+- `description`: 1-2 sentences, plain prose (no markdown), at most 300 characters,
+  summarizing what the module covers — shown under the module's title on its card in the
+  workflow canvas. Never a restatement of the title, and never a list of section titles.
 
 The `outline_markdown` should be a clean, human-readable rendering of the same structure
 (module titles + summaries + section titles) — this is what's shown to the user in the

@@ -669,7 +669,9 @@ def _validate_write_target(
             {
                 "order": len(existing_modules),
                 "title": title.split(":")[0][:80],
-                "summary": "",
+                # No structured description available for a refinement-created module —
+                # left blank (matches the legacy-plan default in materialization).
+                "description": "",
                 "objectives": [],
                 "status": "planned",
                 "estimated_minutes": 0,

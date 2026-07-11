@@ -34,11 +34,12 @@ import { StatusEdge, type StatusEdgeType } from "@/components/studio/curriculum/
 import type { CurriculumFull, ModuleStatus } from "@/lib/types";
 import { useEffect } from "react";
 
-const NODE_WIDTH = 240;
-// Approximate rendered height of a ModuleNode card (title row + status pill +
-// meta row, with padding) — used only so the MiniMap can draw node rects
-// without waiting on DOM measurement (see WorkflowView minimap notes below).
-const NODE_HEIGHT = 132;
+const NODE_WIDTH = 280;
+// Approximate rendered height of a ModuleNode card (title row up to 2 lines +
+// description up to 3 lines + status pill + meta row, with padding) — used
+// only so the MiniMap can draw node rects without waiting on DOM measurement
+// (see WorkflowView minimap notes below).
+const NODE_HEIGHT = 188;
 const START_NODE_HEIGHT = 64;
 const H_GAP = 80;
 // React Flow anchors Handles at CSS top:50% of the node wrapper's declared inline
@@ -108,6 +109,7 @@ function buildLayout(curriculum: CurriculumFull) {
         id: mod.id,
         order: mod.order,
         title: mod.title,
+        description: mod.description,
         status: mod.status,
         sectionCount: mod.sections.length,
         estimatedMinutes: mod.estimated_minutes,

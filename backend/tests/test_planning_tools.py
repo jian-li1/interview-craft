@@ -66,19 +66,29 @@ def _valid_tasks() -> list[dict]:
 
 
 def _modules_for(tasks: list[dict]) -> list[dict]:
-    """Auto-derive a valid `modules` list (one placeholder-titled entry per distinct
-    module_ref, in first-appearance order) matching the module set used by `tasks` —
-    keeps tests that aren't specifically about `modules` validation from tripping it.
+    """Auto-derive a valid `modules` list (one placeholder-titled/described entry per
+    distinct module_ref, in first-appearance order) matching the module set used by
+    `tasks` — keeps tests that aren't specifically about `modules` validation from
+    tripping it.
     """
     seen: dict[str, None] = {}
     for t in tasks:
         ref = t.get("module_ref")
         if ref and ref not in seen:
             seen[ref] = None
-    return [{"id": ref, "title": f"Module Title {ref}"} for ref in seen]
+    return [
+        {"id": ref, "title": f"Module Title {ref}", "description": f"Description for {ref}."}
+        for ref in seen
+    ]
 
 
-async def _run(fake_fs, outline_markdown: str, tasks: list[dict], modules: list[dict] | None = None):
+async def _run(
+    fake_fs,
+    outline_markdown: str,
+    tasks: list[dict],
+    modules: list[dict] | None = None,
+    description: str = "A curriculum covering the essentials for interview prep.",
+):
     """Set up a curriculum/conversation and execute propose_task_plan with the given input.
 
     Args:
@@ -88,6 +98,9 @@ async def _run(fake_fs, outline_markdown: str, tasks: list[dict], modules: list[
         modules (list[dict] | None): Raw module dicts to submit as `PlanModuleInput`s;
             defaults to `_modules_for(tasks)` when omitted so tests unrelated to
             `modules` validation don't need to construct it manually.
+        description (str): Curriculum-level `description` to submit; defaults to a
+            valid placeholder so tests unrelated to description validation don't need
+            to construct it manually.
 
     Returns:
         tuple: (result dict from tool.execute, curriculum_id) for further assertions.
@@ -103,6 +116,7 @@ async def _run(fake_fs, outline_markdown: str, tasks: list[dict], modules: list[
     result = await tool.execute(
         ProposeTaskPlanInput(
             outline_markdown=outline_markdown,
+            description=description,
             tasks=[PlanTaskInput(**t) for t in tasks],
             modules=[PlanModuleInput(**m) for m in (modules if modules is not None else _modules_for(tasks))],
         ),
@@ -215,7 +229,7 @@ async def test_propose_task_plan_rejects_missing_module_ref():
 async def test_propose_task_plan_rejects_modules_missing_a_module(fake_fs):
     """A `modules` list missing an entry for a module_ref used by tasks (m2) is rejected."""
     tasks = _valid_tasks()  # spans m1, m2
-    modules = [{"id": "m1", "title": "Foundations"}]  # missing m2 entirely
+    modules = [{"id": "m1", "title": "Foundations", "description": "Covers the basics."}]  # missing m2 entirely
     result, curriculum_id = await _run(fake_fs, _valid_outline(), tasks, modules)
     assert "error" in result
     assert fake_fs.fs.get_plan(curriculum_id) is None
@@ -225,7 +239,10 @@ async def test_propose_task_plan_rejects_modules_missing_a_module(fake_fs):
 async def test_propose_task_plan_rejects_modules_wrong_order(fake_fs):
     """A `modules` list with the right ids but out of module-number order is rejected."""
     tasks = _valid_tasks()  # spans m1, m2
-    modules = [{"id": "m2", "title": "Practice"}, {"id": "m1", "title": "Foundations"}]
+    modules = [
+        {"id": "m2", "title": "Practice", "description": "Practice drills."},
+        {"id": "m1", "title": "Foundations", "description": "Covers the basics."},
+    ]
     result, curriculum_id = await _run(fake_fs, _valid_outline(), tasks, modules)
     assert "error" in result
     assert fake_fs.fs.get_plan(curriculum_id) is None
@@ -235,7 +252,7 @@ async def test_propose_task_plan_rejects_modules_wrong_order(fake_fs):
 async def test_propose_task_plan_rejects_blank_module_title(fake_fs):
     """A `modules` entry with a whitespace-only title is rejected."""
     tasks = [{"id": "m1-s1", "title": "Intro", "module_ref": "m1"}]
-    modules = [{"id": "m1", "title": "   "}]
+    modules = [{"id": "m1", "title": "   ", "description": "Covers the basics."}]
     result, curriculum_id = await _run(fake_fs, "Section 1.1: Intro", tasks, modules)
     assert "error" in result
     assert fake_fs.fs.get_plan(curriculum_id) is None
@@ -245,8 +262,44 @@ async def test_propose_task_plan_rejects_blank_module_title(fake_fs):
 async def test_propose_task_plan_rejects_module_title_too_long(fake_fs):
     """A `modules` entry with a title over 80 chars is rejected."""
     tasks = [{"id": "m1-s1", "title": "Intro", "module_ref": "m1"}]
-    modules = [{"id": "m1", "title": "x" * 81}]
+    modules = [{"id": "m1", "title": "x" * 81, "description": "Covers the basics."}]
     result, curriculum_id = await _run(fake_fs, "Section 1.1: Intro", tasks, modules)
+    assert "error" in result
+    assert fake_fs.fs.get_plan(curriculum_id) is None
+
+
+@pytest.mark.asyncio
+async def test_propose_task_plan_rejects_blank_module_description(fake_fs):
+    """A `modules` entry with a whitespace-only description is rejected."""
+    tasks = [{"id": "m1-s1", "title": "Intro", "module_ref": "m1"}]
+    modules = [{"id": "m1", "title": "Foundations", "description": "   "}]
+    result, curriculum_id = await _run(fake_fs, "Section 1.1: Intro", tasks, modules)
+    assert "error" in result
+    assert fake_fs.fs.get_plan(curriculum_id) is None
+
+
+@pytest.mark.asyncio
+async def test_propose_task_plan_rejects_module_description_too_long(fake_fs):
+    """A `modules` entry with a description over 300 chars is rejected."""
+    tasks = [{"id": "m1-s1", "title": "Intro", "module_ref": "m1"}]
+    modules = [{"id": "m1", "title": "Foundations", "description": "x" * 301}]
+    result, curriculum_id = await _run(fake_fs, "Section 1.1: Intro", tasks, modules)
+    assert "error" in result
+    assert fake_fs.fs.get_plan(curriculum_id) is None
+
+
+@pytest.mark.asyncio
+async def test_propose_task_plan_rejects_blank_curriculum_description(fake_fs):
+    """A whitespace-only curriculum-level `description` is rejected."""
+    result, curriculum_id = await _run(fake_fs, _valid_outline(), _valid_tasks(), description="   ")
+    assert "error" in result
+    assert fake_fs.fs.get_plan(curriculum_id) is None
+
+
+@pytest.mark.asyncio
+async def test_propose_task_plan_rejects_curriculum_description_too_long(fake_fs):
+    """A curriculum-level `description` over 300 chars is rejected."""
+    result, curriculum_id = await _run(fake_fs, _valid_outline(), _valid_tasks(), description="x" * 301)
     assert "error" in result
     assert fake_fs.fs.get_plan(curriculum_id) is None
 
@@ -255,9 +308,26 @@ async def test_propose_task_plan_rejects_module_title_too_long(fake_fs):
 async def test_propose_task_plan_accepted_plan_persists_modules(fake_fs):
     """A valid plan with a proper `modules` list persists `modules` verbatim on the plan doc."""
     tasks = _valid_tasks()
-    modules = [{"id": "m1", "title": "Foundations"}, {"id": "m2", "title": "Practice Drills"}]
+    modules = [
+        {"id": "m1", "title": "Foundations", "description": "Covers the basics."},
+        {"id": "m2", "title": "Practice Drills", "description": "Hands-on practice questions."},
+    ]
     result, curriculum_id = await _run(fake_fs, _valid_outline(), tasks, modules)
     assert result["status"] == "proposed"
     saved_plan = fake_fs.fs.get_plan(curriculum_id)
     assert saved_plan is not None
     assert saved_plan["modules"] == modules
+
+
+@pytest.mark.asyncio
+async def test_propose_task_plan_writes_description_onto_curriculum_and_plan(fake_fs):
+    """A successful propose_task_plan writes `description` onto both the curriculum doc
+    (so the dashboard card can render it immediately) and the plan doc.
+    """
+    description = "A focused prep plan for backend interview loops."
+    result, curriculum_id = await _run(fake_fs, _valid_outline(), _valid_tasks(), description=description)
+    assert result["status"] == "proposed"
+    saved_plan = fake_fs.fs.get_plan(curriculum_id)
+    assert saved_plan["description"] == description
+    curriculum = fake_fs.fs.get_curriculum(curriculum_id)
+    assert curriculum["description"] == description

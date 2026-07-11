@@ -26,6 +26,8 @@ def _to_summary(data: dict) -> CurriculumSummary:
         owner_uid=data["owner_uid"],
         title=data.get("title", ""),
         user_prompt=data.get("user_prompt", ""),
+        # "" default covers legacy docs and curricula that predate the first plan proposal.
+        description=data.get("description", ""),
         emoji=data.get("emoji"),
         status=data.get("status", "researching"),
         overview=data.get("overview", ""),
@@ -88,6 +90,8 @@ async def get_curriculum_full(
         owner_uid=curriculum["owner_uid"],
         title=curriculum.get("title", ""),
         user_prompt=curriculum.get("user_prompt", ""),
+        # "" default covers legacy docs and curricula that predate the first plan proposal.
+        description=curriculum.get("description", ""),
         emoji=curriculum.get("emoji"),
         status=curriculum.get("status", "researching"),
         overview=curriculum.get("overview", ""),

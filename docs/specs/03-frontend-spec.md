@@ -51,10 +51,12 @@ drawer behavior is unchanged (slide-in overlay, unaffected by the desktop collap
 - **Dashboard**: greeting with user name; prominent prompt box ("What interview are you
   preparing for?") with example prompt chips — submitting creates a conversation
   (POST /api/conversations with the prompt) and routes to /studio/[id]; grid of curriculum
-  cards (emoji, title, status badge, progress bar when generating, module count, updated
-  time, delete w/ confirm). Empty state illustration. The dashboard's prompt box is the
-  *only* way to create a curriculum — the sidebar's "New curriculum" button never calls the
-  API; it just navigates to /dashboard (see §2 sidebar note below).
+  cards (emoji, title, subtitle showing the agent-written `description` — falling back to
+  `user_prompt` for legacy curricula or before a plan is first proposed, `line-clamp-3` —
+  status badge, progress bar when generating, module count, updated time, delete w/
+  confirm). Empty state illustration. The dashboard's prompt box is the *only* way to
+  create a curriculum — the sidebar's "New curriculum" button never calls the API; it just
+  navigates to /dashboard (see §2 sidebar note below).
 - **Settings**: tabs — Profile (link/embed onboarding edit), Preferences (LLM provider,
   search provider dropdowns — "server default" option), Appearance (theme), Account (email, logout).
 
@@ -107,8 +109,10 @@ Two views, toggle: **Workflow** and **Reader**.
   truncate instead of widening the card and overlapping the first module, then module
   nodes sorted by `order` laid out as a single horizontal row to its right (one node per
   step, equal spacing), connected by animated edges that flow left→right; node handles are
-  `Position.Left` (target) / `Position.Right` (source) to match. Each module node shows
-  order badge, title, status (planned=dashed border, writing=pulsing accent, complete=filled
+  `Position.Left` (target) / `Position.Right` (source) to match. Each module node is
+  `280px` wide (`NODE_WIDTH`) and shows order badge, title (`line-clamp-2`), the
+  agent-written `description` when non-empty (shown under the title, `line-clamp-3`),
+  status (planned=dashed border, writing=pulsing accent, complete=filled
   check), section count, estimated minutes. Clicking a module node resolves that module's
   first section (lowest `order`) and switches to the Reader view focused there (module with
   no sections yet: Reader still switches to that module, showing its "not written" state).

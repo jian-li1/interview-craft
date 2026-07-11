@@ -69,6 +69,15 @@ class PlanModuleInput(BaseModel):
             "module id."
         ),
     )
+    description: str = Field(
+        ...,
+        description=(
+            "1-2 sentences describing what this module covers, shown under the module's title "
+            "on its node in the workflow canvas. Plain prose (no markdown), at most 300 "
+            "characters. Must be a real summary of the module's content — never a restatement "
+            "of the title, and never a list of its section titles."
+        ),
+    )
 
 
 class ProposeTaskPlanInput(BaseModel):
@@ -81,6 +90,14 @@ class ProposeTaskPlanInput(BaseModel):
             "line MUST be labeled 'Section X.Y: <title>' (X = module number, Y = section number "
             "within that module) — propose_task_plan cross-checks these labels against `tasks` "
             "and rejects the plan if they don't match 1:1."
+        ),
+    )
+    description: str = Field(
+        ...,
+        description=(
+            "1-2 sentences describing what this curriculum covers and for whom, shown on the "
+            "user's dashboard card under the curriculum title. Plain prose (no markdown), at "
+            "most 300 characters."
         ),
     )
     tasks: list[PlanTaskInput] = Field(..., description="The full task list for this plan version.")
@@ -103,12 +120,14 @@ def _validate_plan(input: ProposeTaskPlanInput) -> str | None:
     `module_ref` match the `m{X}-s{Y}`/`m{X}` format with a consistent prefix; task ids
     are unique; module numbering is contiguous from m1 in first-appearance order; the
     `modules` list's ids exactly match that module set (same ids, same order) and every
-    module has a non-empty, <=80-char title; section numbering is contiguous from s1 per
-    module in task-list order; and the `outline_markdown`'s `Section X.Y` labels exactly
-    match the task id set. Designed to catch the failure modes seen in practice: invented
-    ids, missing module_ref, a module list that doesn't cover the tasks' modules (or
-    reuses a section title as the module title), and an outline that describes more
-    sections than the task list actually covers.
+    module has a non-empty, <=80-char title and a non-empty, <=300-char description;
+    section numbering is contiguous from s1 per module in task-list order; the
+    `outline_markdown`'s `Section X.Y` labels exactly match the task id set; and the
+    curriculum-level `description` is non-empty and <=300 chars. Designed to catch the
+    failure modes seen in practice: invented ids, missing module_ref, a module list that
+    doesn't cover the tasks' modules (or reuses a section title as the module title), an
+    outline that describes more sections than the task list actually covers, and a
+    missing/oversized description at either the curriculum or module level.
 
     Args:
         input (ProposeTaskPlanInput): The plan input as submitted to `propose_task_plan`.
@@ -178,6 +197,12 @@ def _validate_plan(input: ProposeTaskPlanInput) -> str | None:
                 f"display title as it appears in the outline (not a section title, not a bare "
                 f"id), non-empty and at most 80 characters."
             )
+        # Module description must be a real summary, bounded so it fits the workflow node card.
+        if not m.description.strip() or len(m.description) > 300:
+            return (
+                f"module {m.id!r} has an invalid description — it must be non-empty and at most "
+                f"300 characters, summarizing the module's content (not a copy of its title)."
+            )
 
     # Section numbering: contiguous from s1 per module, in task-list order within that module.
     sections_by_module: dict[str, list[int]] = {}
@@ -222,6 +247,14 @@ def _validate_plan(input: ProposeTaskPlanInput) -> str | None:
             + " — every section in the outline needs exactly one task, and vice versa."
         )
 
+    # Curriculum-level description must be a real summary, bounded so it fits the
+    # dashboard card subtitle.
+    if not input.description.strip() or len(input.description) > 300:
+        return (
+            "description is invalid — it must be non-empty and at most 300 characters, "
+            "summarizing what this curriculum covers and for whom."
+        )
+
     return None
 
 
@@ -231,9 +264,10 @@ class ProposeTaskPlanTool(Tool):
         "HITL GATE — propose the curriculum outline and task plan to the user for approval. "
         "Validates the plan first (task id format 'm{X}-s{Y}', module_ref prefix match, "
         "contiguous module/section numbering, that modules' ids exactly cover the tasks' module "
-        "set with a real non-empty <=80-char title per module, and that outline_markdown's "
-        "'Section X.Y' labels match tasks 1:1) — returns an error observation and saves nothing "
-        "if the plan fails any check. Saves the plan, sets curriculum status to 'awaiting_approval', "
+        "set with a real non-empty <=80-char title and non-empty <=300-char description per "
+        "module, that outline_markdown's 'Section X.Y' labels match tasks 1:1, and a non-empty "
+        "<=300-char curriculum-level description) — returns an error observation and saves "
+        "nothing if the plan fails any check. Saves the plan, sets curriculum status to 'awaiting_approval', "
         "emits phase_change, progress, and plan_proposed events to the client (the modules list is "
         "saved but NOT included in the plan_proposed payload), and PAUSES your loop until the user "
         "responds with approve or modify. Call this alone, with no other tool calls in the same "
@@ -251,9 +285,9 @@ class ProposeTaskPlanTool(Tool):
         `plan_decision` WS frame (handled by `Orchestrator._apply_plan_decision`).
 
         Args:
-            input (ProposeTaskPlanInput): The validated outline markdown, full task
-                list, and structured module list (id + display title, one per module)
-                for this plan version.
+            input (ProposeTaskPlanInput): The validated outline markdown, curriculum-level
+                description, full task list, and structured module list (id + display
+                title + description, one per module) for this plan version.
             ctx (AgentContext): The current agent run's context; `ctx.curriculum_id`
                 scopes the plan document.
 
@@ -287,10 +321,12 @@ class ProposeTaskPlanTool(Tool):
         plan_doc = {
             "version": next_version,
             "outline_markdown": input.outline_markdown,
+            "description": input.description,
             "tasks": [t.model_dump() for t in input.tasks],
-            # Structured module titles (id + real display title) — the source of truth
-            # for module doc titles at materialization (see orchestrator.py); NOT
-            # mirrored into the plan_proposed WS payload below (frontend contract unchanged).
+            # Structured module titles+descriptions (id + real display title + summary) —
+            # the source of truth for module doc fields at materialization (see
+            # orchestrator.py); NOT mirrored into the plan_proposed WS payload below
+            # (frontend contract unchanged).
             "modules": [m.model_dump() for m in input.modules],
             "status": "proposed",
             "user_feedback": user_feedback,
@@ -303,10 +339,13 @@ class ProposeTaskPlanTool(Tool):
         done_count = sum(1 for t in tasks if t.get("status") == "done")
         # Full-object write: update_curriculum merges top-level fields only, so the
         # nested "progress" dict must be written whole (same pattern as TransitionPhaseTool).
+        # "description" is also written here so the dashboard card shows it as soon as a
+        # plan is proposed — re-proposals overwrite it, latest wins.
         fs.update_curriculum(
             ctx.curriculum_id,
             {
                 "status": "awaiting_approval",
+                "description": input.description,
                 "progress": {
                     "phase": "awaiting_approval",
                     "completed_tasks": done_count,

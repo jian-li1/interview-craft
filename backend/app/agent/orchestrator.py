@@ -807,14 +807,17 @@ class Orchestrator:
         """Create module/section stub docs from the approved plan's tasks.
 
         Groups tasks by `module_ref`; each distinct module_ref becomes a module doc. Its
-        title is taken from the plan's structured `modules` list (`{id, title}`, added by
-        `propose_task_plan`'s `modules` field) — the module's real outline-authored
+        title is taken from the plan's structured `modules` list (`{id, title, description}`,
+        added by `propose_task_plan`'s `modules` field) — the module's real outline-authored
         display title, truncated to 80 chars for safety — when a matching non-empty entry
         exists. Legacy plans that predate the `modules` field (or that omit an entry for a
         given module_ref) fall back to the original heuristic: deriving the title from the
         first task referencing that module, truncated at any ':' separator and 80 chars.
-        Each task becomes a "planned" section stub the writing phase will fill in. The
-        section doc id is derived from the task id: under the binding `m{X}-s{Y}` id
+        The module doc's `description` is likewise taken from the structured entry
+        (stripped); legacy plans that predate the field (or omit an entry) get `""` — there
+        is no title-style heuristic fallback for description since it isn't derivable from a
+        task title. Each task becomes a "planned" section stub the writing phase will fill
+        in. The section doc id is derived from the task id: under the binding `m{X}-s{Y}` id
         contract (see `tools/planning.py`'s `_validate_plan`), stripping the `m{X}-`
         prefix yields the section doc id (e.g. task `m1-s2` -> module doc `m1`, section
         doc `s2`); legacy plans whose task ids don't carry that prefix fall back to using
@@ -827,8 +830,8 @@ class Orchestrator:
             curriculum_id (str): The curriculum to create module/section stubs under.
             plan (dict[str, Any]): The approved plan document, whose `tasks` list
                 (each with `id`, `title`, optional `module_ref`) drives stub creation,
-                and whose optional `modules` list (`{id, title}`) supplies each module's
-                real display title.
+                and whose optional `modules` list (`{id, title, description}`) supplies
+                each module's real display title and summary.
 
         Returns:
             None: Creates Firestore module/section documents as a side effect.
@@ -836,28 +839,32 @@ class Orchestrator:
         tasks = plan.get("tasks", [])
         module_order: dict[str, int] = {}
         module_titles: dict[str, str] = {}
+        module_descriptions: dict[str, str] = {}
 
-        # Structured titles keyed by module id, from the plan's `modules` list — the
-        # source of truth for module doc titles; entries with a missing/blank title are
-        # dropped so that module_ref falls through to the legacy heuristic below.
-        structured_titles = {
-            m["id"]: m["title"] for m in plan.get("modules", []) or [] if m.get("title")
-        }
+        # Structured entries keyed by module id, from the plan's `modules` list — the
+        # source of truth for module doc title/description.
+        structured_entries = {m["id"]: m for m in plan.get("modules", []) or []}
 
         # First pass: discover distinct module_refs in task order, assigning each a
-        # stable order index and resolving its title — prefer the structured plan title;
-        # legacy plans without a matching `modules` entry fall back to deriving it from
-        # the first task that references this module (truncated at any ':' separator).
+        # stable order index and resolving its title/description — prefer the structured
+        # plan entry; legacy plans without a matching `modules` entry fall back to
+        # deriving the title from the first task referencing this module (truncated at
+        # any ':' separator), with description defaulting to "" (not derivable from a
+        # task title).
         for t in tasks:
             module_ref = t.get("module_ref")
             if not module_ref:
                 continue
             if module_ref not in module_order:
                 module_order[module_ref] = len(module_order)
-                structured = structured_titles.get(module_ref)
+                entry = structured_entries.get(module_ref) or {}
+                structured_title = entry.get("title")
                 module_titles[module_ref] = (
-                    structured[:80] if structured else t.get("title", module_ref).split(":")[0][:80]
+                    structured_title[:80]
+                    if structured_title
+                    else t.get("title", module_ref).split(":")[0][:80]
                 )
+                module_descriptions[module_ref] = (entry.get("description") or "").strip()
 
         # Only create modules that don't already exist — re-approving a plan (or a
         # partially-completed prior materialization) must not duplicate/reset modules.
@@ -871,7 +878,7 @@ class Orchestrator:
                 {
                     "order": order,
                     "title": module_titles[module_id],
-                    "summary": "",
+                    "description": module_descriptions[module_id],
                     "objectives": [],
                     "status": "planned",
                     "estimated_minutes": 0,

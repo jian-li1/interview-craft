@@ -180,7 +180,7 @@ during writing-only refinements, etc. — keep filtering simple: a phase→allow
 - `get_user_profile()` → synthesized_profile + structured fields (target roles, experience level, learning style, timeline).
 
 **Planning tools**
-- `propose_task_plan(outline_markdown, tasks[], modules[])` → HITL GATE: validates the plan first (task id `m{X}-s{Y}`, `module_ref` prefix match, contiguous module/section numbering, `modules[]` ids exactly covering the tasks' module set with a non-empty <=80-char title per module, `outline_markdown`'s `Section X.Y` labels matching `tasks` 1:1) — error observation, no writes, if invalid; on success saves plan (including `modules`), sets status awaiting_approval, emits `phase_change` + `progress` + `plan_proposed` (unchanged payload — `modules` is not mirrored into it), pauses loop.
+- `propose_task_plan(outline_markdown, description, tasks[], modules[])` → HITL GATE: validates the plan first (task id `m{X}-s{Y}`, `module_ref` prefix match, contiguous module/section numbering, `modules[]` ids exactly covering the tasks' module set with a non-empty <=80-char title and non-empty <=300-char `description` per module, `outline_markdown`'s `Section X.Y` labels matching `tasks` 1:1, and a non-empty <=300-char curriculum-level `description`) — error observation, no writes, if invalid; on success saves plan (including `modules` and `description`), sets status awaiting_approval, writes `description` onto the curriculum doc (so the dashboard card can render it immediately — re-proposals overwrite it, latest wins), emits `phase_change` + `progress` + `plan_proposed` (unchanged payload — `modules`/`description` are not mirrored into it), pauses loop.
 - `get_task_plan()` → current plan + task statuses.
 
 **Curriculum tools**

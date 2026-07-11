@@ -13,6 +13,8 @@ export type ModuleNodeData = {
   id: string;
   order: number;
   title: string;
+  /** Agent-written 1-2 sentence module summary, shown under the title. */
+  description: string;
   /** Module's current status as tracked server-side (planned/writing/complete); drives this card's border/badge/progress-bar and the connecting StatusEdge's animation. */
   status: ModuleStatus;
   sectionCount: number;
@@ -31,8 +33,9 @@ const STATUS_META: Record<ModuleStatus, { label: string; icon: typeof Circle }> 
 /**
  * Custom React Flow node registered under the "module" node type (see
  * `nodeTypes` in WorkflowView.tsx). Renders one module as a clickable card
- * showing its order, title, status badge, section count, and estimated
- * reading time. Visual state is entirely status-driven:
+ * showing its order, title, agent-written description, status badge,
+ * section count, and estimated reading time. Visual state is entirely
+ * status-driven:
  *  - `planned` — dashed border, muted badge, static icon.
  *  - `writing` — accent border, accent badge, spinning icon, plus an
  *    animated indeterminate progress bar along the bottom of the card.
@@ -55,7 +58,7 @@ export function ModuleNode({ data }: NodeProps<ModuleNodeType>) {
         type="button"
         layout
         className={cn(
-          "flex w-[240px] flex-col gap-2 rounded-xl border bg-card p-3.5 text-left shadow-sm transition-shadow hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+          "flex w-[280px] flex-col gap-2 rounded-xl border bg-card p-3.5 text-left shadow-sm transition-shadow hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
           data.status === "planned" && "border-dashed border-border",
           data.status === "writing" && "border-accent",
           data.status === "complete" && "border-success/50"
@@ -66,8 +69,13 @@ export function ModuleNode({ data }: NodeProps<ModuleNodeType>) {
             {/* order is 0-based in Firestore; display 1-based */}
             {data.order + 1}
           </span>
-          <p className="min-w-0 flex-1 truncate text-sm font-semibold">{data.title}</p>
+          <p className="min-w-0 flex-1 line-clamp-2 text-sm font-semibold">{data.title}</p>
         </div>
+
+        {/* Agent-written module summary, only rendered when non-empty (legacy modules may lack it). */}
+        {data.description && (
+          <p className="text-xs leading-snug text-muted-foreground line-clamp-3">{data.description}</p>
+        )}
 
         <div className="flex items-center gap-1.5 text-xs">
           <span

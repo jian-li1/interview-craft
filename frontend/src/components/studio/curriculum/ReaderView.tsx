@@ -298,8 +298,8 @@ export function ReaderView({
                     Module {currentModule.order + 1}
                   </p>
                   <h2 className="text-xl font-semibold">{currentModule.title}</h2>
-                  {currentModule.summary && (
-                    <p className="mt-1 text-sm text-muted-foreground">{currentModule.summary}</p>
+                  {currentModule.description && (
+                    <p className="mt-1 text-sm text-muted-foreground">{currentModule.description}</p>
                   )}
                 </div>
               </div>

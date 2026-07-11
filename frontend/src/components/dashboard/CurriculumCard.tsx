@@ -32,14 +32,15 @@ interface CurriculumCardProps {
 
 /**
  * A single curriculum tile in the dashboard grid. Renders the title, the
- * originating user prompt, a status badge (mapped from `CurriculumSummary["status"]`
- * via `STATUS_META`), and — while the agent is still generating
- * (researching/planning/writing/reviewing) — an animated progress bar driven by
- * `curriculum.progress`. Clicking the card navigates to the studio for its
- * conversation; the trash icon opens a `ConfirmDialog` and, on confirm,
- * calls `curriculaApi.remove` then notifies the parent via `onDeleted` so
- * it can drop the item from its list (this component holds no list state
- * itself).
+ * agent-written description (falling back to the originating user prompt for
+ * legacy curricula or pre-plan phases), a status badge (mapped from
+ * `CurriculumSummary["status"]` via `STATUS_META`), and — while the agent is
+ * still generating (researching/planning/writing/reviewing) — an animated
+ * progress bar driven by `curriculum.progress`. Clicking the card navigates
+ * to the studio for its conversation; the trash icon opens a `ConfirmDialog`
+ * and, on confirm, calls `curriculaApi.remove` then notifies the parent via
+ * `onDeleted` so it can drop the item from its list (this component holds no
+ * list state itself).
  */
 export function CurriculumCard({ curriculum, onDeleted }: CurriculumCardProps) {
   const router = useRouter();
@@ -102,8 +103,9 @@ export function CurriculumCard({ curriculum, onDeleted }: CurriculumCardProps) {
 
           <div className="flex-1">
             <h3 className="font-semibold leading-snug line-clamp-2">{curriculum.title}</h3>
-            <p className="mt-1 text-xs text-muted-foreground line-clamp-2">
-              {curriculum.user_prompt}
+            {/* Falls back to user_prompt for legacy curricula or before a plan is first proposed. */}
+            <p className="mt-1 text-xs text-muted-foreground line-clamp-3">
+              {curriculum.description || curriculum.user_prompt}
             </p>
           </div>
 

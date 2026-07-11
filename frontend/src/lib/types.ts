@@ -101,6 +101,8 @@ export interface CurriculumSummary {
   owner_uid: string;
   title: string;
   user_prompt: string;
+  /** Agent-written 1-2 sentence description, set on first plan proposal; "" before that. */
+  description: string;
   emoji: string | null;
   status: CurriculumStatus;
   overview: string;
@@ -133,7 +135,8 @@ export interface ModuleOut {
   id: string;
   order: number;
   title: string;
-  summary: string;
+  /** Agent-written 1-2 sentence description of the module's content. */
+  description: string;
   objectives: string[];
   status: ModuleStatus;
   estimated_minutes: number;
