@@ -21,6 +21,9 @@ Handle each request type deliberately and don't over-reach.
    plain language — this is shown to the user, so write it like a friendly changelog
    entry ("Added a comparison table for X per your request", not "updated content").
 5. Confirm the change briefly in chat once done.
+6. To rename a module or fix a stale module description (not its content), use
+   `update_module` with `title` and/or `description` instead — it leaves sections,
+   status, and ordering untouched.
 
 ### Explanations ("explain X from module 2", "what does Y mean", "why is Z important")
 
@@ -38,23 +41,32 @@ Handle each request type deliberately and don't over-reach.
 ### Additions ("add a section on X", "I also want to cover Y", "can you add more on Z")
 
 1. Check `list_curriculum_structure` to see whether this fits as a new section within
-   an existing module or needs a new module.
+   an existing module or needs a brand-new module.
 2. If the topic requires evidence you don't have yet, do targeted research first
    (`web_search` → `fetch_url` the promising results → `save_sources` the keepers) —
    treat this like the writing-phase top-up research, not a full re-run of
    `deep_research`.
-3. Write the new content with `write_section` following the same standards as
-   `writing_phase.md` (citations, diagrams where useful, personalization, length
-   guidance). New ids are constrained and validated server-side: a new section must use
-   the next sequential id within its module (`s{K+1}`, where K is the current highest
-   section number in that module — e.g. `s4` if `s1..s3` already exist); a brand-new
-   module must be `m{N+1}` (where N is the current highest module number) —
-   `write_section` auto-creates the module doc for you when given that exact id.
-   Arbitrary slugs or gapped numbers (e.g. `s6` when only `s1..s3` exist) are rejected
-   with an error naming the expected id — use `list_curriculum_structure` first if
-   you're unsure of the current max.
-4. Update `list_curriculum_structure`-visible metadata (module/section counts) implicitly
-   through the tool; mention the addition briefly in chat once done.
+3. Two cases, handled differently:
+   - **New section in an existing module**: write it directly with `write_section`
+     using the next sequential id within that module (`s{K+1}`, where K is the current
+     highest section number in that module — e.g. `s4` if `s1..s3` already exist).
+     Gapped or arbitrary ids (e.g. `s6` when only `s1..s3` exist) are rejected
+     server-side with an error naming the expected id — use `list_curriculum_structure`
+     first if you're unsure of the current max. `write_section` in this phase only
+     creates NEW sections; if the id you named already exists, it's rejected too — see
+     "Edits" above for changing existing content via `update_section`.
+   - **Brand-new module**: FIRST call `create_module` with exactly the next sequential
+     id (`m{N+1}`, N = the current highest module number), a concise title (<=80 chars),
+     and a real 1-2 sentence description (<=300 chars, the same quality bar as plan-time
+     module descriptions — it's displayed on the module's card in the workflow view and
+     in the reader header, so make it a genuine summary, never a restatement of the
+     title). THEN write its sections with `write_section` starting at `s1`.
+     `write_section` no longer auto-creates modules — skipping `create_module` first
+     gets the write rejected with an error pointing you back here.
+4. Follow the same content standards as `writing_phase.md` (citations, diagrams where
+   useful, personalization, length guidance) for whatever you write.
+5. Update `list_curriculum_structure`-visible metadata (module/section counts) implicitly
+   through the tools; mention the addition briefly in chat once done.
 
 ### New deep-dives that may trigger targeted research
 

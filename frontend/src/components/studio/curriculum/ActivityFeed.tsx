@@ -42,6 +42,8 @@ const TOOL_ACTION_LABELS: Record<string, string> = {
   write_curriculum_overview: "Writing the overview",
   set_curriculum_title: "Naming the curriculum",
   set_module_status: "Updating module status",
+  create_module: "Creating a module",
+  update_module: "Updating module details",
   request_user_input: "Asking you a question",
   update_scratchpad: "Updating working notes",
   transition_phase: "Moving to the next phase",

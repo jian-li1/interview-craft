@@ -2,12 +2,16 @@
 write_section/update_section auto-derive parent module status/estimated_minutes;
 set_module_status emits a curriculum_updated WS event; write_section and
 transition_phase persist progress onto the curriculum doc for REST readers;
-write_section's target guard rejects invented module/section ids in writing/review and
-enforces next-sequential-id creation in refinement; transition_phase's writing->review and
-review->ready completeness gates block premature phase exits; transition_phase also allows
-the plan-revision loop-backs awaiting_approval->deep_research and
-outline_planning->deep_research; strip_stale_section_content dedups read/write/update_section
-calls per (module_id, section_id) so a section's content never occupies context twice.
+write_section's target guard rejects invented module ids in every phase and, in
+ready/refinement, also rejects already-existing section ids (directing the model to
+update_section) while enforcing next-sequential-id creation for brand-new sections;
+create_module/update_module are the sole module-creation/metadata-edit tools in
+ready/refinement (write_section no longer auto-creates modules); transition_phase's
+writing->review and review->ready completeness gates block premature phase exits;
+transition_phase also allows the plan-revision loop-backs awaiting_approval->deep_research
+and outline_planning->deep_research; strip_stale_section_content dedups
+read/write/update_section calls per (module_id, section_id) so a section's content never
+occupies context twice.
 """
 
 from __future__ import annotations
@@ -20,10 +24,14 @@ from app.agent.tools.base import AgentContext
 from app.agent.tools.control import TransitionPhaseInput, TransitionPhaseTool
 from app.agent.tools.curriculum import (
     _SECTION_CONTENT_STRIPPED_NOTE,
+    CreateModuleInput,
+    CreateModuleTool,
     SetCurriculumTitleInput,
     SetCurriculumTitleTool,
     SetModuleStatusInput,
     SetModuleStatusTool,
+    UpdateModuleInput,
+    UpdateModuleTool,
     UpdateSectionInput,
     UpdateSectionTool,
     WriteSectionInput,
@@ -149,6 +157,9 @@ async def test_write_section_derives_module_status_writing_then_complete(fake_fs
 
     tool = WriteSectionTool()
     ctx = _make_ctx(curriculum["id"], conv["id"])
+    # Simulate the writing phase overwriting pre-materialized planned stubs — the target
+    # guard now rejects an already-existing section outside writing/review.
+    ctx.phase = "writing"
 
     # Keep content short (<=400 chars) so the citation guard doesn't trip.
     await tool.execute(
@@ -480,10 +491,10 @@ async def test_write_section_refinement_rejects_gapped_section_id(fake_fs):
 
 
 @pytest.mark.asyncio
-async def test_write_section_refinement_auto_creates_next_sequential_module(fake_fs):
-    """In refinement, write_section may create a brand-new module, but only at the next
-    sequential id (m2, since only m1 exists) — the module doc is auto-created as a
-    planned stub (write_section is the only module-creation path in refinement).
+async def test_write_section_refinement_rejects_write_to_nonexistent_module(fake_fs):
+    """In refinement, write_section on a module that doesn't exist is rejected (write_section
+    never creates modules anymore) with an error mentioning create_module — no module doc
+    is created as a side effect.
     """
     curriculum, conv = await _setup_curriculum_for_write_section(fake_fs)
     fake_fs.fs.create_module(curriculum["id"], "m1", {"order": 0, "title": "Module 1", "status": "complete", "estimated_minutes": 5})
@@ -496,20 +507,15 @@ async def test_write_section_refinement_auto_creates_next_sequential_module(fake
         WriteSectionInput(module_id="m2", section_id="s1", title="New Module: Extra Practice", content_markdown="Short content. " * 5, citations=[]),
         ctx,
     )
-    assert result["status"] == "written"
-    new_module = fake_fs.fs.get_module(curriculum["id"], "m2")
-    assert new_module is not None
-    assert new_module["title"] == "New Module"  # split(":")[0] applied to the section title
-    # Auto-created as "planned", but _refresh_module_status (which runs right after,
-    # same as any write_section call) immediately derives "complete" from its one
-    # now-complete section — so by the time the write returns it's already "complete".
-    assert new_module["status"] == "complete"
+    assert "error" in result
+    assert "create_module" in result["error"]
+    assert fake_fs.fs.get_module(curriculum["id"], "m2") is None
 
 
 @pytest.mark.asyncio
-async def test_write_section_refinement_rejects_non_sequential_new_module(fake_fs):
-    """In refinement, a brand-new module id that isn't the next sequential one (m3 when
-    only m1 exists, skipping m2) is rejected.
+async def test_write_section_refinement_rejects_write_to_gapped_module(fake_fs):
+    """In refinement, write_section on a module id that skips ahead (m3 when only m1
+    exists) is rejected the same way as any other missing module — no module doc created.
     """
     curriculum, conv = await _setup_curriculum_for_write_section(fake_fs)
     fake_fs.fs.create_module(curriculum["id"], "m1", {"order": 0, "title": "Module 1", "status": "complete", "estimated_minutes": 5})
@@ -524,6 +530,238 @@ async def test_write_section_refinement_rejects_non_sequential_new_module(fake_f
     )
     assert "error" in result
     assert fake_fs.fs.get_module(curriculum["id"], "m3") is None
+
+
+@pytest.mark.asyncio
+async def test_write_section_refinement_rejects_existing_section(fake_fs):
+    """In refinement, write_section on a section id that already exists is rejected
+    (write_section only creates new sections there) with an error mentioning
+    update_section, and the existing content is left unchanged.
+    """
+    curriculum, conv = await _setup_curriculum_for_write_section(fake_fs)
+    fake_fs.fs.create_module(curriculum["id"], "m1", {"order": 0, "title": "Module 1", "status": "complete", "estimated_minutes": 5})
+    fake_fs.fs.create_section(curriculum["id"], "m1", "s1", {"order": 0, "title": "Section 1", "content_markdown": "original", "citations": [], "status": "complete"})
+
+    tool = WriteSectionTool()
+    ctx = _make_ctx(curriculum["id"], conv["id"])
+    ctx.phase = "refinement"
+
+    result = await tool.execute(
+        WriteSectionInput(module_id="m1", section_id="s1", title="Section 1", content_markdown="overwritten content", citations=[]),
+        ctx,
+    )
+    assert "error" in result
+    assert "update_section" in result["error"]
+    unchanged = fake_fs.fs.get_section(curriculum["id"], "m1", "s1")
+    assert unchanged["content_markdown"] == "original"
+
+
+@pytest.mark.asyncio
+async def test_create_module_happy_path(fake_fs):
+    """create_module creates m2 (next sequential after m1) with the given title/
+    description, "planned"/0-minute defaults, order = existing module count, returns a
+    curriculum_updated _ws_event, and refreshes the curriculum's module_count.
+    """
+    curriculum, conv = await _setup_curriculum_for_write_section(fake_fs)
+    fake_fs.fs.create_module(curriculum["id"], "m1", {"order": 0, "title": "Module 1", "status": "complete", "estimated_minutes": 5})
+
+    tool = CreateModuleTool()
+    ctx = _make_ctx(curriculum["id"], conv["id"])
+    ctx.phase = "refinement"
+
+    result = await tool.execute(
+        CreateModuleInput(module_id="m2", title="Extra Practice", description="More drills covering edge cases."),
+        ctx,
+    )
+    assert result == {
+        "status": "created",
+        "module_id": "m2",
+        "title": "Extra Practice",
+        "_ws_event": {
+            "type": "curriculum_updated",
+            "curriculum_id": curriculum["id"],
+            "scope": "module",
+            "module_id": "m2",
+        },
+    }
+
+    new_module = fake_fs.fs.get_module(curriculum["id"], "m2")
+    assert new_module["order"] == 1
+    assert new_module["title"] == "Extra Practice"
+    assert new_module["description"] == "More drills covering edge cases."
+    assert new_module["objectives"] == []
+    assert new_module["status"] == "planned"
+    assert new_module["estimated_minutes"] == 0
+
+    updated_curriculum = fake_fs.fs.get_curriculum(curriculum["id"])
+    assert updated_curriculum["module_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_create_module_rejects_gapped_id(fake_fs):
+    """create_module rejects a gapped id (m3 when only m1 exists) — no module created."""
+    curriculum, conv = await _setup_curriculum_for_write_section(fake_fs)
+    fake_fs.fs.create_module(curriculum["id"], "m1", {"order": 0, "title": "Module 1", "status": "complete", "estimated_minutes": 5})
+
+    tool = CreateModuleTool()
+    ctx = _make_ctx(curriculum["id"], conv["id"])
+    ctx.phase = "refinement"
+
+    result = await tool.execute(CreateModuleInput(module_id="m3", title="Skip Ahead", description="Covers advanced topics."), ctx)
+    assert "error" in result
+    assert "m2" in result["error"]  # names the expected id
+    assert fake_fs.fs.get_module(curriculum["id"], "m3") is None
+
+
+@pytest.mark.asyncio
+async def test_create_module_rejects_arbitrary_slug(fake_fs):
+    """create_module rejects a free-form slug id (not 'm{N+1}') — no module created."""
+    curriculum, conv = await _setup_curriculum_for_write_section(fake_fs)
+    fake_fs.fs.create_module(curriculum["id"], "m1", {"order": 0, "title": "Module 1", "status": "complete", "estimated_minutes": 5})
+
+    tool = CreateModuleTool()
+    ctx = _make_ctx(curriculum["id"], conv["id"])
+    ctx.phase = "refinement"
+
+    result = await tool.execute(CreateModuleInput(module_id="extra-practice", title="Extra Practice", description="More drills."), ctx)
+    assert "error" in result
+    assert fake_fs.fs.get_module(curriculum["id"], "extra-practice") is None
+
+
+@pytest.mark.asyncio
+async def test_create_module_rejects_already_existing_id(fake_fs):
+    """create_module rejects a module_id that already exists, directing the model to
+    update_module for metadata edits instead."""
+    curriculum, conv = await _setup_curriculum_for_write_section(fake_fs)
+    fake_fs.fs.create_module(curriculum["id"], "m1", {"order": 0, "title": "Module 1", "description": "Original.", "status": "complete", "estimated_minutes": 5})
+
+    tool = CreateModuleTool()
+    ctx = _make_ctx(curriculum["id"], conv["id"])
+    ctx.phase = "refinement"
+
+    result = await tool.execute(CreateModuleInput(module_id="m1", title="Replacement Title", description="Replacement description."), ctx)
+    assert "error" in result
+    assert "update_module" in result["error"]
+    unchanged = fake_fs.fs.get_module(curriculum["id"], "m1")
+    assert unchanged["title"] == "Module 1"
+
+
+@pytest.mark.asyncio
+async def test_create_module_rejects_blank_title(fake_fs):
+    """create_module rejects a blank (whitespace-only) title with a runtime validation error."""
+    curriculum, conv = await _setup_curriculum_for_write_section(fake_fs)
+
+    tool = CreateModuleTool()
+    ctx = _make_ctx(curriculum["id"], conv["id"])
+    ctx.phase = "refinement"
+
+    result = await tool.execute(CreateModuleInput(module_id="m1", title="   ", description="A real description."), ctx)
+    assert "error" in result
+    assert fake_fs.fs.get_module(curriculum["id"], "m1") is None
+
+
+@pytest.mark.asyncio
+async def test_create_module_rejects_oversized_description(fake_fs):
+    """create_module rejects a description over 300 chars with a runtime validation error."""
+    curriculum, conv = await _setup_curriculum_for_write_section(fake_fs)
+
+    tool = CreateModuleTool()
+    ctx = _make_ctx(curriculum["id"], conv["id"])
+    ctx.phase = "refinement"
+
+    result = await tool.execute(CreateModuleInput(module_id="m1", title="Module 1", description="x" * 301), ctx)
+    assert "error" in result
+    assert fake_fs.fs.get_module(curriculum["id"], "m1") is None
+
+
+@pytest.mark.asyncio
+async def test_update_module_updates_title_only_then_description_only(fake_fs):
+    """update_module changes only the field(s) provided, leaving the others intact, and
+    emits a curriculum_updated _ws_event each time."""
+    curriculum, conv = await _setup_curriculum_for_write_section(fake_fs)
+    fake_fs.fs.create_module(
+        curriculum["id"], "m1",
+        {"order": 0, "title": "Module 1", "description": "Original description.", "status": "complete", "estimated_minutes": 5},
+    )
+
+    tool = UpdateModuleTool()
+    ctx = _make_ctx(curriculum["id"], conv["id"])
+    ctx.phase = "refinement"
+
+    title_result = await tool.execute(UpdateModuleInput(module_id="m1", title="Renamed Module"), ctx)
+    assert title_result["status"] == "updated"
+    assert title_result["updated_fields"] == ["title"]
+    assert title_result["_ws_event"] == {
+        "type": "curriculum_updated",
+        "curriculum_id": curriculum["id"],
+        "scope": "module",
+        "module_id": "m1",
+    }
+    after_title = fake_fs.fs.get_module(curriculum["id"], "m1")
+    assert after_title["title"] == "Renamed Module"
+    assert after_title["description"] == "Original description."  # untouched
+
+    description_result = await tool.execute(
+        UpdateModuleInput(module_id="m1", description="A fresher summary of the content."), ctx
+    )
+    assert description_result["updated_fields"] == ["description"]
+    after_description = fake_fs.fs.get_module(curriculum["id"], "m1")
+    assert after_description["title"] == "Renamed Module"  # untouched by this call
+    assert after_description["description"] == "A fresher summary of the content."
+
+
+@pytest.mark.asyncio
+async def test_update_module_rejects_unknown_module_id(fake_fs):
+    """update_module errors on an unknown module id, listing existing ids."""
+    curriculum, conv = await _setup_curriculum_for_write_section(fake_fs)
+    fake_fs.fs.create_module(curriculum["id"], "m1", {"order": 0, "title": "Module 1", "status": "complete", "estimated_minutes": 5})
+
+    tool = UpdateModuleTool()
+    ctx = _make_ctx(curriculum["id"], conv["id"])
+    ctx.phase = "refinement"
+
+    result = await tool.execute(UpdateModuleInput(module_id="m9", title="New Title"), ctx)
+    assert "error" in result
+    assert "m1" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_update_module_rejects_when_neither_field_provided(fake_fs):
+    """update_module errors when both title and description are omitted."""
+    curriculum, conv = await _setup_curriculum_for_write_section(fake_fs)
+    fake_fs.fs.create_module(curriculum["id"], "m1", {"order": 0, "title": "Module 1", "status": "complete", "estimated_minutes": 5})
+
+    tool = UpdateModuleTool()
+    ctx = _make_ctx(curriculum["id"], conv["id"])
+    ctx.phase = "refinement"
+
+    result = await tool.execute(UpdateModuleInput(module_id="m1"), ctx)
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_create_module_then_write_section_flow(fake_fs):
+    """Flow test: create_module("m2", ...) followed by write_section(m2, s1, ...)
+    succeeds — the new module exists by the time write_section's target guard runs."""
+    curriculum, conv = await _setup_curriculum_for_write_section(fake_fs)
+    fake_fs.fs.create_module(curriculum["id"], "m1", {"order": 0, "title": "Module 1", "status": "complete", "estimated_minutes": 5})
+
+    create_tool = CreateModuleTool()
+    ctx = _make_ctx(curriculum["id"], conv["id"])
+    ctx.phase = "refinement"
+
+    create_result = await create_tool.execute(
+        CreateModuleInput(module_id="m2", title="Extra Practice", description="More drills covering edge cases."), ctx
+    )
+    assert create_result["status"] == "created"
+
+    write_tool = WriteSectionTool()
+    write_result = await write_tool.execute(
+        WriteSectionInput(module_id="m2", section_id="s1", title="Drill 1", content_markdown="Short content. " * 5, citations=[]),
+        ctx,
+    )
+    assert write_result["status"] == "written"
+    assert fake_fs.fs.get_section(curriculum["id"], "m2", "s1") is not None
 
 
 @pytest.mark.asyncio

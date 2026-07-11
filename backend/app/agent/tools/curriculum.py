@@ -15,8 +15,8 @@ from app.services import firestore as fs
 
 logger = get_logger(__name__)
 
-# Matches numbered module/section doc ids ("m1", "s12", ...) so write_section's
-# refinement-only auto-creation path can compute the next sequential id.
+# Matches numbered module/section doc ids ("m1", "s12", ...) so create_module and
+# write_section's ready/refinement guards can compute the expected next sequential id.
 _NUMBERED_MODULE_ID_RE = re.compile(r"^m(\d+)$")
 _NUMBERED_SECTION_ID_RE = re.compile(r"^s(\d+)$")
 
@@ -110,23 +110,27 @@ class WriteSectionInput(BaseModel):
 class WriteSectionTool(Tool):
     name = "write_section"
     description = (
-        "Write (create or overwrite) a curriculum section's full content. During writing/review, "
-        "this ONLY accepts module_id/section_id already materialized from the approved plan "
-        "(e.g. 'm1'/'s1') and rejects any other id with an error observation naming the "
-        "existing ids — never invent a new module or section here; the curriculum overview is "
-        "never a section, use write_curriculum_overview. New sections/modules can only be "
-        "created during refinement, and only using the next sequential id ('s{K+1}' in an "
-        "existing module, or a new module 'm{N+1}') — arbitrary slugs are rejected there too. "
-        "Validates that citations are non-empty for research-based content (raises an error "
-        "observation if you submit substantial content with zero citations — add citations or "
-        "explicitly keep the section citation-free only when it truly makes no factual claims). "
-        "Marks the corresponding task done if one exists, marks the section/module status, and "
-        "emits curriculum_updated + progress events to the client."
+        "Write a curriculum section's full content. During writing/review, this ONLY accepts "
+        "module_id/section_id already materialized from the approved plan (e.g. 'm1'/'s1') and "
+        "overwrites that planned stub — any other id is rejected with an error observation "
+        "naming the existing ids; never invent a new module or section here, and the curriculum "
+        "overview is never a section, use write_curriculum_overview. During ready/refinement, "
+        "write_section ONLY creates a brand-new section within an ALREADY-EXISTING module, at "
+        "exactly the next sequential id ('s{K+1}', K = the module's current highest section "
+        "number) — an arbitrary or gapped section id is rejected, and so is a section id that "
+        "already exists (edit existing content with update_section instead, never write_section). "
+        "write_section NEVER creates a module in any phase — to add a brand-new module, call "
+        "create_module first (id 'm{N+1}', a title, and a description), then write_section its "
+        "sections starting at 's1'. Validates that citations are non-empty for research-based "
+        "content (raises an error observation if you submit substantial content with zero "
+        "citations — add citations or explicitly keep the section citation-free only when it "
+        "truly makes no factual claims). Marks the corresponding task done if one exists, marks "
+        "the section/module status, and emits curriculum_updated + progress events to the client."
     )
     input_model = WriteSectionInput
 
     async def execute(self, input: WriteSectionInput, ctx: AgentContext) -> dict[str, Any]:
-        """Create or overwrite a section's content, enforcing citations.
+        """Create (or, during writing/review, overwrite) a section's content, enforcing citations.
 
         This is the main code-level enforcement point for citations (per
         `app/agent/CLAUDE.md`): content over 400 stripped characters with no
@@ -151,12 +155,14 @@ class WriteSectionTool(Tool):
                 (so REST readers like the dashboard see it, not just live WS clients).
                 On the citation-guard failure, `{"error": "..."}` instead (no write
                 performed). Also `{"error": "..."}` if the target guard rejects
-                module_id/section_id (see `_validate_write_target`) — a wrong target
-                is checked first since it invalidates everything else.
+                module_id/section_id (see `_validate_write_target`) — checked first since
+                a wrong target invalidates everything else; in particular, during ready/
+                refinement this now also rejects an already-existing section (use
+                update_section) and a missing module (create it first with create_module).
         """
-        # Target guard: catch invented/phantom module or section ids before any other
-        # check, since writing to the wrong target invalidates citation work too.
-        target_error = _validate_write_target(ctx.curriculum_id, ctx.phase, input.module_id, input.section_id, input.title)
+        # Target guard: catch invented/phantom module or section ids, and (in ready/
+        # refinement) already-existing sections, before any other check.
+        target_error = _validate_write_target(ctx.curriculum_id, ctx.phase, input.module_id, input.section_id)
         if target_error:
             return {"error": target_error}
 
@@ -488,6 +494,209 @@ class SetModuleStatusTool(Tool):
         }
 
 
+class CreateModuleInput(BaseModel):
+    """Input schema for `CreateModuleTool`."""
+
+    module_id: str = Field(
+        ...,
+        description=(
+            "The new module's id — must be exactly the next sequential id 'm{N+1}' (N = the "
+            "current highest numbered module id); arbitrary slugs or gapped numbers are rejected "
+            "with an error naming the expected id."
+        ),
+    )
+    title: str = Field(
+        ...,
+        description="The module's real display title, non-empty, at most 80 characters.",
+    )
+    description: str = Field(
+        ...,
+        description=(
+            "1-2 sentence summary of what this module covers, shown under its title on the "
+            "workflow node card, the reader module header, and the dashboard. Plain prose, "
+            "non-empty, at most 300 characters — never a restatement of the title."
+        ),
+    )
+
+
+class CreateModuleTool(Tool):
+    name = "create_module"
+    description = (
+        "Create a brand-new module during ready/refinement, when a request needs a genuinely "
+        "new top-level module rather than a new section in an existing one. module_id must be "
+        "exactly the next sequential id 'm{N+1}' (N = the current highest numbered module id) — "
+        "arbitrary slugs are rejected with an error naming the expected id, and an already-"
+        "existing module id is rejected too (use update_module for metadata edits instead). "
+        "title is the module's real display title (<=80 chars); description is a real 1-2 "
+        "sentence summary (<=300 chars, same quality bar as plan-time module descriptions) shown "
+        "on the workflow node card, reader module header, and dashboard — never a copy of the "
+        "title. After creating the module, add its content with write_section starting at 's1' "
+        "(write_section itself never creates modules). To edit an existing module's title/"
+        "description, use update_module instead of create_module."
+    )
+    input_model = CreateModuleInput
+
+    async def execute(self, input: CreateModuleInput, ctx: AgentContext) -> dict[str, Any]:
+        """Create a new module doc at the next sequential id, with a validated title/description.
+
+        Args:
+            input (CreateModuleInput): The validated module_id, title, and description.
+            ctx (AgentContext): The current agent run's context; `ctx.curriculum_id`
+                scopes the write.
+
+        Returns:
+            dict[str, Any]: On success, `{"status": "created", "module_id", "title",
+                "_ws_event": {...}}` with a `curriculum_updated` (scope "module") event
+                for the orchestrator to forward. `{"error": "..."}` if title/description
+                fail bounds validation, the module_id already exists (use update_module
+                instead), or module_id isn't the next sequential id.
+        """
+        # Bounds-check title/description first — same limits as propose_task_plan's
+        # module validation, since both render on the same workflow node card.
+        title_error = _validate_module_title(input.title)
+        if title_error:
+            return {"error": title_error}
+        description_error = _validate_module_description(input.description)
+        if description_error:
+            return {"error": description_error}
+
+        # Single fs.list_modules call feeds both the existence check and the expected-id
+        # computation below.
+        existing_modules = fs.list_modules(ctx.curriculum_id)
+        if any(m["id"] == input.module_id for m in existing_modules):
+            return {
+                "error": (
+                    f"module {input.module_id!r} already exists — create_module only creates "
+                    f"brand-new modules. To edit its title/description, use update_module instead."
+                )
+            }
+
+        max_n = 0
+        for m in existing_modules:
+            match = _NUMBERED_MODULE_ID_RE.match(m["id"])
+            if match:
+                max_n = max(max_n, int(match.group(1)))
+        expected = f"m{max_n + 1}"
+        if input.module_id != expected:
+            return {
+                "error": (
+                    f"module_id {input.module_id!r} is not the next sequential module id. "
+                    f"create_module requires exactly {expected!r} — arbitrary module ids are "
+                    f"rejected."
+                )
+            }
+
+        # Same doc shape as legacy write_section auto-creation (order/objectives/status/
+        # estimated_minutes defaults), but with a real caller-provided title/description.
+        fs.create_module(
+            ctx.curriculum_id,
+            input.module_id,
+            {
+                "order": len(existing_modules),
+                "title": input.title,
+                "description": input.description,
+                "objectives": [],
+                "status": "planned",
+                "estimated_minutes": 0,
+            },
+        )
+        _refresh_curriculum_counts(ctx.curriculum_id)
+
+        return {
+            "status": "created",
+            "module_id": input.module_id,
+            "title": input.title,
+            "_ws_event": {
+                "type": "curriculum_updated",
+                "curriculum_id": ctx.curriculum_id,
+                "scope": "module",
+                "module_id": input.module_id,
+            },
+        }
+
+
+class UpdateModuleInput(BaseModel):
+    """Input schema for `UpdateModuleTool`."""
+
+    module_id: str = Field(..., description="The existing module id to update.")
+    title: str | None = Field(
+        None, description="New display title (<=80 chars). Omit to leave the current title unchanged."
+    )
+    description: str | None = Field(
+        None,
+        description="New 1-2 sentence summary (<=300 chars). Omit to leave the current description unchanged.",
+    )
+
+
+class UpdateModuleTool(Tool):
+    name = "update_module"
+    description = (
+        "Update an existing module's display title and/or description during ready/refinement "
+        "— e.g. the user asks to rename a module, or its description has gone stale after "
+        "content changes elsewhere in the module. Provide at least one of title/description; "
+        "whichever you omit is left unchanged. Does NOT touch the module's sections, status, or "
+        "ordering — use write_section/update_section for content and set_module_status for "
+        "status. To create a brand-new module instead, use create_module."
+    )
+    input_model = UpdateModuleInput
+
+    async def execute(self, input: UpdateModuleInput, ctx: AgentContext) -> dict[str, Any]:
+        """Update whichever of a module's title/description fields were provided.
+
+        Args:
+            input (UpdateModuleInput): The validated module_id and optional new title/
+                description (at least one must be set).
+            ctx (AgentContext): The current agent run's context; `ctx.curriculum_id`
+                scopes the update.
+
+        Returns:
+            dict[str, Any]: On success, `{"status": "updated", "module_id",
+                "updated_fields": [...], "_ws_event": {...}}` with a `curriculum_updated`
+                (scope "module") event for the orchestrator to forward. `{"error": "..."}`
+                if the module doesn't exist, if neither field was provided, or if a
+                provided field fails bounds validation (no write performed in any case).
+        """
+        module = fs.get_module(ctx.curriculum_id, input.module_id)
+        if not module:
+            existing_ids = sorted(m["id"] for m in fs.list_modules(ctx.curriculum_id))
+            return {
+                "error": (
+                    f"module {input.module_id!r} not found. Existing module ids: {existing_ids}. "
+                    f"To create a new module, use create_module instead."
+                )
+            }
+
+        if input.title is None and input.description is None:
+            return {"error": "provide at least one of title/description to update."}
+
+        # Only validate/include the fields actually provided — merge update, not overwrite.
+        fields: dict[str, Any] = {}
+        if input.title is not None:
+            title_error = _validate_module_title(input.title)
+            if title_error:
+                return {"error": title_error}
+            fields["title"] = input.title
+        if input.description is not None:
+            description_error = _validate_module_description(input.description)
+            if description_error:
+                return {"error": description_error}
+            fields["description"] = input.description
+
+        fs.update_module(ctx.curriculum_id, input.module_id, fields)
+
+        return {
+            "status": "updated",
+            "module_id": input.module_id,
+            "updated_fields": list(fields.keys()),
+            "_ws_event": {
+                "type": "curriculum_updated",
+                "curriculum_id": ctx.curriculum_id,
+                "scope": "module",
+                "module_id": input.module_id,
+            },
+        }
+
+
 def strip_stale_section_content(conversation_id: str) -> int:
     """Rewrite every non-latest read/write/update_section call per section to drop its content.
 
@@ -593,29 +802,68 @@ def strip_stale_section_content(conversation_id: str) -> int:
 # --------------------------------------------------------------------------------------
 
 
-def _validate_write_target(
-    curriculum_id: str, phase: str, module_id: str, section_id: str, title: str
-) -> str | None:
-    """Guard write_section's target against invented module/section ids.
+def _validate_module_title(title: str) -> str | None:
+    """Validate a module display title against the workflow-card bounds.
 
-    During "writing"/"review" the plan is already approved and materialized, so
-    module_id/section_id must already exist as planned stubs — nothing new may be
-    created here (that would be a phantom doc invented by the model instead of a
-    planned one). During "ready"/"refinement" (the only other phases write_section is
-    registered in), a *new* module or section may be created, but only using the next
-    sequential id so ids stay contiguous — never an arbitrary slug.
+    Shared by `CreateModuleTool` and `UpdateModuleTool` (mirrors the module title check
+    in `tools/planning.py`'s `_validate_plan`, since both persist onto the same field).
+
+    Args:
+        title (str): The candidate module title.
+
+    Returns:
+        str | None: An error message if blank or over 80 chars, else None.
+    """
+    if not title.strip() or len(title) > 80:
+        return (
+            f"title {title!r} is invalid — provide the module's real display title, non-empty "
+            f"and at most 80 characters."
+        )
+    return None
+
+
+def _validate_module_description(description: str) -> str | None:
+    """Validate a module description against the workflow-card/dashboard bounds.
+
+    Shared by `CreateModuleTool` and `UpdateModuleTool` (mirrors the module description
+    check in `tools/planning.py`'s `_validate_plan`).
+
+    Args:
+        description (str): The candidate module description.
+
+    Returns:
+        str | None: An error message if blank or over 300 chars, else None.
+    """
+    if not description.strip() or len(description) > 300:
+        return (
+            "description is invalid — it must be non-empty and at most 300 characters, "
+            "summarizing the module's content (not a copy of its title)."
+        )
+    return None
+
+
+def _validate_write_target(curriculum_id: str, phase: str, module_id: str, section_id: str) -> str | None:
+    """Guard write_section's target against invented modules and existing-section overwrites.
+
+    The target module must already exist in EVERY phase now — write_section never
+    creates a module (create_module is the sole module-creation path). During
+    "writing"/"review" the plan is already approved and materialized, so module_id/
+    section_id must both already exist as planned stubs (an existing section is
+    overwritten by the caller). During "ready"/"refinement" (the only other phases
+    write_section is registered in), write_section may only create a brand-new section
+    at the next sequential id within an already-existing module — an already-existing
+    section is rejected too (edits go through update_section, not write_section).
 
     Args:
         curriculum_id (str): The curriculum being written to.
         phase (str): The current agent phase (`ctx.phase`).
         module_id (str): The module id from the write_section call.
         section_id (str): The section id from the write_section call.
-        title (str): The section title, used to derive an auto-created module's title.
 
     Returns:
         str | None: An error message if the target is invalid for this phase, or None
-            if the write may proceed (existing section overwrite, or a
-            refinement-phase creation that will be handled by the caller as normal).
+            if the write may proceed (an existing planned stub in writing/review, or a
+            brand-new next-sequential-id section in ready/refinement).
     """
     module = fs.get_module(curriculum_id, module_id)
 
@@ -645,55 +893,45 @@ def _validate_write_target(
             )
         return None
 
-    # phase in ("ready", "refinement"): creation is allowed, but only at the next
-    # sequential id — arbitrary slugs are rejected so numbering stays contiguous.
+    # phase in ("ready", "refinement"): a new section may be created, but only inside an
+    # already-existing module — write_section never creates modules (use create_module).
     if not module:
         existing_modules = fs.list_modules(curriculum_id)
+        existing_ids = sorted(m["id"] for m in existing_modules)
         max_n = 0
         for m in existing_modules:
             match = _NUMBERED_MODULE_ID_RE.match(m["id"])
             if match:
                 max_n = max(max_n, int(match.group(1)))
-        expected = f"m{max_n + 1}"
-        if module_id != expected:
-            return (
-                f"module {module_id!r} does not exist and is not the next sequential module id. "
-                f"To create a new module, use exactly {expected!r} (write_section auto-creates "
-                f"it) — arbitrary module ids are rejected."
-            )
-        # Auto-create the module doc — write_section is the only module-creation path
-        # available during refinement (there is no dedicated create_module tool).
-        fs.create_module(
-            curriculum_id,
-            module_id,
-            {
-                "order": len(existing_modules),
-                "title": title.split(":")[0][:80],
-                # No structured description available for a refinement-created module —
-                # left blank (matches the legacy-plan default in materialization).
-                "description": "",
-                "objectives": [],
-                "status": "planned",
-                "estimated_minutes": 0,
-            },
+        return (
+            f"module {module_id!r} does not exist. Existing module ids: {existing_ids}. "
+            f"write_section never creates modules — create the module first with create_module "
+            f"(the next sequential id is 'm{max_n + 1}'), then write its sections."
         )
-        return None
 
+    # An already-existing section may not be overwritten via write_section in ready/
+    # refinement — that path is update_section now, so this only ever creates.
     section = fs.get_section(curriculum_id, module_id, section_id)
-    if not section:
-        existing_sections = fs.list_sections(curriculum_id, module_id)
-        max_k = 0
-        for s in existing_sections:
-            match = _NUMBERED_SECTION_ID_RE.match(s["id"])
-            if match:
-                max_k = max(max_k, int(match.group(1)))
-        expected = f"s{max_k + 1}"
-        if section_id != expected:
-            return (
-                f"section {section_id!r} does not exist in module {module_id!r} and is not the "
-                f"next sequential section id. To add a new section, use exactly {expected!r} — "
-                f"arbitrary slugs are rejected."
-            )
+    if section:
+        return (
+            f"section {section_id!r} already exists in module {module_id!r}. During {phase}, "
+            f"write_section only creates new sections — use update_section to edit existing "
+            f"content."
+        )
+
+    existing_sections = fs.list_sections(curriculum_id, module_id)
+    max_k = 0
+    for s in existing_sections:
+        match = _NUMBERED_SECTION_ID_RE.match(s["id"])
+        if match:
+            max_k = max(max_k, int(match.group(1)))
+    expected = f"s{max_k + 1}"
+    if section_id != expected:
+        return (
+            f"section {section_id!r} does not exist in module {module_id!r} and is not the "
+            f"next sequential section id. To add a new section, use exactly {expected!r} — "
+            f"arbitrary slugs are rejected."
+        )
     return None
 
 

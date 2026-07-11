@@ -21,6 +21,8 @@ ALL_TOOL_NAMES = {
     "update_section",
     "write_curriculum_overview",
     "set_module_status",
+    "create_module",
+    "update_module",
     "request_user_input",
     "update_scratchpad",
     "transition_phase",
@@ -125,6 +127,19 @@ def test_writing_tools_hidden_during_intake(registry):
     names = {s.name for s in registry.specs_for_phase("intake")}
     assert "write_section" not in names
     assert "propose_task_plan" not in names
+
+
+def test_create_and_update_module_available_only_in_ready_and_refinement(registry):
+    """Verify create_module/update_module are exposed in ready/refinement (the only two
+    phases they're registered for) and hidden everywhere else, including writing/review
+    where module structure is fixed by the materialized plan."""
+    for phase in ["ready", "refinement"]:
+        names = {s.name for s in registry.specs_for_phase(phase)}
+        assert {"create_module", "update_module"}.issubset(names)
+    for phase in ["intake", "deep_research", "outline_planning", "awaiting_approval", "writing", "review"]:
+        names = {s.name for s in registry.specs_for_phase(phase)}
+        assert "create_module" not in names
+        assert "update_module" not in names
 
 
 def test_unknown_phase_falls_back_to_always_available(registry):

@@ -71,7 +71,7 @@ tool allowlist (§3) restricting what the LLM can even attempt to call.
 | `writing` | `writing_phase.md` | `writing` | `web_search`, `fetch_url`, `save_sources`, `list_curriculum_structure`, `write_section`, `write_curriculum_overview`, `set_module_status`, `get_task_plan` |
 | `review` | `review_phase.md` | `reviewing` | `list_curriculum_structure`, `read_section`, `write_section`, `write_curriculum_overview`, `set_module_status`, `fetch_url` (re-read saved sources only — no `web_search`/`save_sources`) |
 | `ready` | `refinement_phase.md` | `ready` | full refinement toolset (below) |
-| `refinement` | `refinement_phase.md` | `ready` | `list_curriculum_structure`, `read_section`, `update_section`, `write_section`, `web_search`, `fetch_url`, `save_sources` |
+| `refinement` | `refinement_phase.md` | `ready` | `list_curriculum_structure`, `read_section`, `update_section`, `write_section`, `create_module`, `update_module`, `web_search`, `fetch_url`, `save_sources` |
 
 `_ALWAYS_AVAILABLE = ["get_user_profile", "update_scratchpad", "transition_phase",
 "request_user_input"]` is unioned into every phase's list in
@@ -276,18 +276,17 @@ precisely or if the profile changed mid-run.
   `list_modules`) and `section_id` must already exist under it (else error listing that
   module's existing section ids/titles/statuses, and noting the overview must go
   through `write_curriculum_overview`, never `write_section`) — no new module/section
-  may be invented once the plan is materialized. In `ready`/`refinement`, a *new*
-  module/section may be created, but only at the next sequential id: a missing module
-  must be exactly `m{N+1}` (N = max existing numbered module id), auto-created inline
-  (`order`, `title` from `title.split(':')[0][:80]`, empty `description`/`objectives`,
-  `status="planned"`, `estimated_minutes=0`) since `write_section` is the only
-  module-creation path in refinement; a missing section must be exactly `s{K+1}` (K =
-  max existing numbered section id in that module) — any other id in either phase group
-  is rejected with the exact expected id. Existing sections are always overwritten
-  regardless of phase. **Then validates**: if `content_markdown` is over 400 stripped
-  characters and `citations` is empty, returns an error observation instructing the
-  model to add citations or shorten the section — this is the concrete enforcement of
-  the "citations are non-negotiable" rule. On success: stamps `accessed_at` (server `utcnow()`) onto every
+  may be invented once the plan is materialized; existing sections are overwritten. In
+  `ready`/`refinement`, the module must already exist — `write_section` never creates a
+  module (a missing module errors, naming the next sequential id and pointing to
+  `create_module`) — and only a brand-new section may be created, at exactly the next
+  sequential id `s{K+1}` (K = max existing numbered section id in that module); an
+  already-existing section id is rejected too, directing the model to `update_section`
+  instead; any other new id is rejected with the exact expected `s{K+1}`. **Then
+  validates**: if `content_markdown` is over 400 stripped characters and `citations` is
+  empty, returns an error observation instructing the model to add citations or shorten
+  the section — this is the concrete enforcement of the "citations are non-negotiable"
+  rule. On success: stamps `accessed_at` (server `utcnow()`) onto every
   citation, creates or updates the section doc (preserving `order` if the section
   already existed), marks the matching plan task `"done"` and pops it from the agent
   state's `task_queue` (via the internal `_mark_task_done` helper, matching either the
@@ -323,10 +322,27 @@ precisely or if the profile changed mid-run.
   unchanged.
 - **`set_module_status`** — bookkeeping helper to flip a module's `planned/writing/
   complete` status independent of any specific section write.
+- **`create_module`** — `module_id, title, description`; `ready`/`refinement` only.
+  `module_id` must be exactly the next sequential id `m{N+1}` (else error naming the
+  expected id); an already-existing `module_id` errors too, pointing to `update_module`.
+  `title`/`description` are bounds-checked at runtime (non-empty, <=80/<=300 chars —
+  same limits as `propose_task_plan`'s per-module validation), not via pydantic field
+  constraints, so the error text matches the planning-tool style. On success, creates
+  the module doc (`order` = current module count, `objectives: []`,
+  `status="planned"`, `estimated_minutes=0`), refreshes `module_count`
+  (`_refresh_curriculum_counts`), and emits `curriculum_updated(scope="module")`. This
+  replaces `write_section`'s old auto-create-on-refinement behavior — module creation
+  now always goes through this dedicated tool.
+- **`update_module`** — `module_id`, optional `title`, optional `description`;
+  `ready`/`refinement` only. Errors if the module doesn't exist (lists existing ids) or
+  if neither field is given; otherwise merges only the provided field(s) (same bounds
+  checks as `create_module`) and emits `curriculum_updated(scope="module")`. Leaves
+  sections, status, and ordering untouched.
 
 Internal helpers at the bottom of `curriculum.py` (`_validate_write_target`,
-`_next_section_order`, `_mark_task_done`, `_task_progress`, `_refresh_curriculum_counts`)
-are not tools themselves — they're plain functions the tools above call.
+`_validate_module_title`, `_validate_module_description`, `_next_section_order`,
+`_mark_task_done`, `_task_progress`, `_refresh_curriculum_counts`) are not tools
+themselves — they're plain functions the tools above call.
 
 ### Control tools (`tools/control.py`)
 
