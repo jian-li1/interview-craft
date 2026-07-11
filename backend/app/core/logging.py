@@ -49,39 +49,47 @@ class StructuredFormatter(logging.Formatter):
         return json.dumps(payload, default=str)
 
 
-def configure_logging(level: str = "INFO") -> None:
+def configure_logging(level: str = "INFO", app_level: str | None = None) -> None:
     """Configure the root logger once for the whole process.
 
     Installs a single stdout handler using `StructuredFormatter` and quiets a handful of
     noisy third-party loggers. Safe to call multiple times (e.g. across test re-imports
-    of the app) — if a handler is already attached, only the log level is updated rather
-    than adding a duplicate handler.
+    of the app) — if a handler is already attached, only the log levels are updated
+    rather than adding a duplicate handler.
 
     Args:
-        level (str): The root logger level name (e.g. "DEBUG", "INFO"). Defaults to
-            "INFO".
+        level (str): Root logger level name (e.g. "DEBUG", "INFO"), inherited by every
+            logger without an explicit level — including third-party libraries, whose
+            DEBUG output is extremely noisy (openai dumps full request payloads; primp's
+            Rust crates log per-frame HTTP/2 and DNS chatter). Defaults to "INFO".
+        app_level (str | None): Optional level for this application's own `app.*`
+            loggers, allowing verbose app logs (e.g. "DEBUG" in development) while the
+            root `level` keeps third-party libraries quiet. Defaults to None (app
+            loggers inherit the root level).
 
     Returns:
         None:
     """
     root = logging.getLogger()
+    # Levels are (re)applied on every call; handler install below happens only once.
+    root.setLevel(level)
+    if app_level is not None:
+        logging.getLogger("app").setLevel(app_level)
     if root.handlers:
         # Already configured (e.g. during tests re-importing the app).
-        root.setLevel(level)
         return
 
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(StructuredFormatter())
     root.addHandler(handler)
-    root.setLevel(level)
 
-    # Quiet noisy third-party loggers a bit.
+    # Quiet noisy third-party loggers even further than the root level.
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     logging.getLogger("google").setLevel(logging.WARNING)
     logging.getLogger("urllib3").setLevel(logging.WARNING)
     # openai's DEBUG logs dump full request payloads (entire conversation + prompts);
-    # cap at INFO so root-level DEBUG doesn't leak them into the console.
+    # cap at INFO so even a DEBUG root level can't leak them into the console.
     logging.getLogger("openai").setLevel(logging.INFO)
 
 

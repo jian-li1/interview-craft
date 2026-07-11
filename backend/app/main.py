@@ -24,8 +24,10 @@ def create_app() -> FastAPI:
         FastAPI: A fully configured application instance, ready to be served by uvicorn.
     """
     settings = get_settings()
-    # Verbose logging in development, quieter structured logs in production (Cloud Run).
-    configure_logging("DEBUG" if settings.app_env == "development" else "INFO")
+    # Root stays at INFO everywhere so third-party DEBUG noise (openai request-payload
+    # dumps, primp's Rust HTTP/DNS crates during ddgs searches) never floods the console;
+    # only our own `app.*` loggers go verbose in development.
+    configure_logging("INFO", app_level="DEBUG" if settings.app_env == "development" else None)
 
     app = FastAPI(
         title="InterviewBlueprint API",
