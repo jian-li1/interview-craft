@@ -236,8 +236,8 @@ on change or unmount) and contains the **entire WS-event-to-store dispatch table
 | `compaction_start` | `startCompaction()` | appends a "running" `CompactionItem` chip (no-op if one is already running) |
 | `compaction` | `finishCompaction(summary, tokensBefore, tokensAfter, compactedThrough)` | resolves the running chip in place with the full rolling summary, or (reconnect replay) appends an already-done chip, deduped by `compactedThrough` |
 | `context_usage` | `setContextUsage(tokens, limit, threshold)` | drives the composer's context-usage warning card |
-| `agent_done` | `setAgentRunning(false)` | |
-| `error` | none directly | `toast.error(message)`; if `!recoverable`, also `setAgentRunning(false)` |
+| `agent_done` | `finishRunTiming(elapsed_ms); setAgentRunning(false)` | |
+| `error` | none directly | `toast.error(message)`; if `!recoverable`, also `finishRunTiming()` (local-fallback stamp) + `setAgentRunning(false)` |
 | `pong` | none | no-op |
 
 `useChatSocket` also drives connection-state toasts: a persistent `toast.loading(

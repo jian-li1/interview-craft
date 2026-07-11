@@ -207,6 +207,9 @@ export interface MessageOut {
   tool_calls: ToolCallRecord[];
   created_at: string;
   seq: number;
+  /** Server-measured duration (ms) of the run this message concluded; only present on
+   * run-tail assistant messages, absent on pre-feature history. */
+  run_elapsed_ms?: number | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -381,6 +384,8 @@ export interface ContextUsageEvent {
 export interface AgentDoneEvent {
   type: "agent_done";
   status: string;
+  /** Authoritative server-measured run duration (ms), for the whole run just ended. */
+  elapsed_ms: number;
 }
 
 export interface ErrorEvent {

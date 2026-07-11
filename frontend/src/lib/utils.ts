@@ -36,6 +36,17 @@ export function formatElapsed(ms: number): string {
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
+/** Format a run duration as short text: "18s", "4m 25s", or "1h 4m" (seconds dropped at hour scale). */
+export function formatRunDuration(ms: number): string {
+  const totalSeconds = Math.max(0, Math.round(ms / 1000));
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes < 60) return `${minutes}m ${seconds}s`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ${minutes % 60}m`;
+}
+
 /**
  * Derives up to a two-letter avatar initials string from a display name,
  * e.g. "Jane Doe" -> "JD". Collapses repeated spaces (via `filter(Boolean)`

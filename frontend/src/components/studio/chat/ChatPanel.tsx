@@ -63,6 +63,7 @@ export function ChatPanel({
   const agentRunning = useChatStore((s) => s.agentRunning);
   const connectionState = useChatStore((s) => s.connectionState);
   const addUserMessage = useChatStore((s) => s.addUserMessage);
+  const markRunStart = useChatStore((s) => s.markRunStart);
   const resolvePlan = useChatStore((s) => s.resolvePlan);
   const resolveQuestion = useChatStore((s) => s.resolveQuestion);
   const setAgentRunning = useChatStore((s) => s.setAgentRunning);
@@ -154,6 +155,9 @@ export function ChatPanel({
   function handlePlanDecision(decision: "approve" | "modify", feedback: string | null) {
     socketRef.current?.sendPlanDecision(decision, feedback);
     resolvePlan();
+    // A plan decision starts a new run but adds no local user message, so
+    // addUserMessage's timestamping never fires here — mark run start explicitly.
+    markRunStart();
   }
 
   // Answers a pending request_user_input question via the exact same path as a
@@ -191,6 +195,14 @@ export function ChatPanel({
   // e.g. a reconnect-replayed chip anchored to a message from before hydrateHistory
   // loaded — in which case it falls back to the "before the first message" bucket
   // (keyed by null) rather than silently disappearing.
+  // Id of the newest assistant message — the live-timer target while a run is in flight.
+  const lastAssistantId = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === "assistant") return messages[i].id;
+    }
+    return null;
+  }, [messages]);
+
   const messageIds = useMemo(() => new Set(messages.map((m) => m.id)), [messages]);
   const chipsByAnchor = useMemo(() => {
     const map = new Map<string | null, CompactionItem[]>();
@@ -239,7 +251,8 @@ export function ChatPanel({
               ))}
               {messages.map((m) => (
                 <Fragment key={m.id}>
-                  <MessageBubble message={m} />
+                  {/* isRunTail: newest assistant message of an in-flight run -> live ticking timer */}
+                  <MessageBubble message={m} isRunTail={agentRunning && m.id === lastAssistantId} />
                   {(chipsByAnchor.get(m.id) ?? []).map((c) => (
                     <CompactionChip key={c.id} item={c} />
                   ))}

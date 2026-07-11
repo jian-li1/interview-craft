@@ -30,6 +30,7 @@ export function useChatSocket(conversationId: string | null) {
   const proposePlan = useChatStore((s) => s.proposePlan);
   const askQuestion = useChatStore((s) => s.askQuestion);
   const setAgentRunning = useChatStore((s) => s.setAgentRunning);
+  const finishRunTiming = useChatStore((s) => s.finishRunTiming);
   const startCompaction = useChatStore((s) => s.startCompaction);
   const finishCompaction = useChatStore((s) => s.finishCompaction);
   const setContextUsage = useChatStore((s) => s.setContextUsage);
@@ -148,11 +149,18 @@ export function useChatSocket(conversationId: string | null) {
           setContextUsage(event.tokens, event.limit, event.threshold);
           break;
         case "agent_done":
+          // Freeze the SERVER-measured elapsed onto the run's tail message (authoritative,
+          // overwrites any local approximation) before clearing agentRunning.
+          finishRunTiming(event.elapsed_ms);
           setAgentRunning(false);
           break;
         case "error":
           toast.error(event.message);
-          if (!event.recoverable) setAgentRunning(false);
+          if (!event.recoverable) {
+            // Run is over; stamp whatever elapsed onto the tail message.
+            finishRunTiming();
+            setAgentRunning(false);
+          }
           break;
         case "pong":
           break;

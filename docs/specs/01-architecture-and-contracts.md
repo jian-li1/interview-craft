@@ -240,6 +240,9 @@ conversations/{convId}/messages/{msgId}
                                         # output_preview: short slice for the client UI/WS only
   created_at
   seq: int                                  # monotonic ordering
+  run_elapsed_ms: int|null                  # server-measured duration of the whole agentic
+                                        # run (all ReAct iterations); present only on each
+                                        # run's final assistant message
   # role:"system" — internal agent-control records synthesized by the orchestrator itself
   # (not typed by the user or the LLM), e.g. plan_decision confirmations. They are
   # persisted so they flow through the same context-rebuild path as any other message,
@@ -330,7 +333,11 @@ immediately after reconnecting to a still-running turn.
       # of every build_context call (compacted or not); drives the composer's
       # context-usage warning card, shown at >=70% (COMPACTION_TRIGGER_FRACTION=0.8 is
       # `threshold`, where auto-compaction actually fires)
-{type:"agent_done", status}
+{type:"agent_done", status: "ok"|"paused"|"cancelled"|"max_iterations"|"error", elapsed_ms: int}
+      # elapsed_ms is the server-measured wall-clock for the entire run; emitted on
+      # EVERY terminal path — including LLM-stream failure and internal errors
+      # (status "error"), which previously ended a run with only a recoverable `error`
+      # event and left the client stuck showing the run as still active
 {type:"error", message: str, recoverable: bool}
 {type:"pong"}
 ```

@@ -82,6 +82,19 @@ studio page unmounts.
 - **Tool calls**: each renders as a compact card: icon + tool name + status spinner →
   check/error; expandable to show formatted JSON input and the tool's full output. Group
   consecutive tool cards. This is the agent-transparency UI — make it polished.
+- **Run elapsed time**: small muted `Clock + duration` line under assistant messages showing
+  how long the whole agentic run took (all ReAct iterations, from user send to `agent_done`).
+  While a run is in flight it ticks live (1s, client-side approximation) under the newest
+  assistant message; the frozen total is the server-measured `elapsed_ms` carried on
+  `agent_done` — authoritative, persisted as `run_elapsed_ms` on the run's final assistant
+  message and returned in history, overwriting any local estimate (a non-recoverable
+  `error` with no `agent_done` still falls back to the local `runStartedAt` diff). Format
+  `18s` / `4m 25s` / `1h 4m`. `message_end` no longer clears the running state — it fires
+  between ReAct iterations mid-run; `agent_done` (now emitted on every terminal path,
+  including LLM-stream failures and internal errors) is the sole authority for that. The
+  timestamp-derivation fallback (deriving duration from message timestamps: user/system
+  messages written at run start, each assistant message at its iteration's end) only
+  applies to conversations predating the `run_elapsed_ms` field.
 - **Phase banner**: sticky chip showing current phase from `phase_change`
   (Researching → Planning → Awaiting your approval → Writing → Ready) with animated icon.
 - **Plan approval card (HITL)**: on `plan_proposed`, render a rich card: outline preview,

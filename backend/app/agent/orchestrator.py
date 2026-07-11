@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import time
 from collections import defaultdict
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -234,6 +235,9 @@ class Orchestrator:
         If the lock is already held (a concurrent call for the same conversation), this
         returns immediately with a recoverable ERROR rather than queuing or blocking —
         the caller is expected to surface this to the client rather than retry silently.
+        On every terminal path reached once the lock is held (including the LLM-stream
+        failure path and this method's own outer exception handler) an `agent_done`
+        event is emitted, carrying a server-measured `elapsed_ms` for the whole run.
 
         Args:
             conversation_id (str): The conversation this turn belongs to; also the key
@@ -259,6 +263,9 @@ class Orchestrator:
         """
         lock = get_conversation_lock(conversation_id)
         if lock.locked():
+            # NOTE: do NOT emit agent_done here — another run is genuinely still active
+            # for this conversation, so emitting it would wrongly clear the client's
+            # running state for that other, still-in-flight run.
             await emit(
                 {
                     "type": "error",
@@ -274,6 +281,10 @@ class Orchestrator:
             # brand-new turn to cancel itself on its very first check.
             _clear_cancel(conversation_id)
             cancel_event = _cancel_events[conversation_id]
+            # Server-measured wall-clock start of this run, threaded through to
+            # _run_turn_inner so every terminal path can compute an authoritative
+            # elapsed_ms (the frontend previously only measured this client-side).
+            run_started = time.monotonic()
             try:
                 return await self._run_turn_inner(
                     conversation_id=conversation_id,
@@ -284,6 +295,7 @@ class Orchestrator:
                     cancel_event=cancel_event,
                     llm_provider_override=llm_provider_override,
                     search_provider_override=search_provider_override,
+                    run_started=run_started,
                 )
             except Exception as exc:  # last-resort guard: the loop itself must not crash the WS
                 logger.exception(
@@ -291,6 +303,15 @@ class Orchestrator:
                     extra={"extra_fields": {"conversation_id": conversation_id}},
                 )
                 await emit({"type": "error", "message": f"internal error: {exc}", "recoverable": True})
+                # Without this, an internal error here (outside _run_turn_inner's own
+                # handling) would leave the client stuck showing the run as "running".
+                await emit(
+                    {
+                        "type": "agent_done",
+                        "status": "error",
+                        "elapsed_ms": int((time.monotonic() - run_started) * 1000),
+                    }
+                )
                 return RunResult(TurnOutcome.ERROR, str(exc))
 
     async def compact_now(
@@ -428,6 +449,7 @@ class Orchestrator:
         cancel_event: asyncio.Event,
         llm_provider_override: str | None,
         search_provider_override: str | None,
+        run_started: float,
     ) -> RunResult:
         """Run the actual ReAct loop body, already holding the per-conversation lock.
 
@@ -450,10 +472,43 @@ class Orchestrator:
             llm_provider_override (str | None): Optional per-call LLM provider override.
             search_provider_override (str | None): Optional per-call search provider
                 override.
+            run_started (float): `time.monotonic()` timestamp captured by `run_turn`
+                right before this call, used to compute the server-measured
+                `elapsed_ms` stamped on `agent_done` and on the run's tail message.
 
         Returns:
             RunResult: The terminal outcome (DONE/PAUSED/CANCELLED/ERROR) for this turn.
         """
+
+        def _elapsed_ms() -> int:
+            """Return milliseconds elapsed since this run started."""
+            return int((time.monotonic() - run_started) * 1000)
+
+        # Id of the assistant message most recently persisted this run — set after every
+        # assistant-role append_message call below so _finish_run knows which message is
+        # this run's tail (the one to stamp run_elapsed_ms onto).
+        last_assistant_msg_id: str | None = None
+
+        async def _finish_run(status: str) -> int:
+            """Stamp elapsed time on the run's tail message and emit the terminal agent_done.
+
+            The tail message is often only known to be the tail AFTER it was persisted
+            (pause/max-iterations/cancel all persist mid-loop), so a merge-update here is
+            the uniform way to stamp `run_elapsed_ms` regardless of which path finished.
+
+            Args:
+                status (str): The terminal status to report on the `agent_done` event
+                    ("ok" | "paused" | "cancelled" | "max_iterations" | "error").
+
+            Returns:
+                int: The computed elapsed milliseconds, for callers that also want it.
+            """
+            elapsed = _elapsed_ms()
+            if last_assistant_msg_id is not None:
+                fs.update_message(conversation_id, last_assistant_msg_id, {"run_elapsed_ms": elapsed})
+            await emit({"type": "agent_done", "status": status, "elapsed_ms": elapsed})
+            return elapsed
+
         user = fs.get_user(owner_uid) or {}
         user_settings = user.get("settings", {}) if isinstance(user, dict) else {}
         llm = get_llm_provider(llm_provider_override or user_settings.get("llm_provider"), self._settings)
@@ -490,7 +545,7 @@ class Orchestrator:
             # (See below for check #2, mid-stream, and the post-stream re-check.)
             if cancel_event.is_set():
                 fs.set_agent_state(curriculum_id, {"iteration_count": iteration})
-                await emit({"type": "agent_done", "status": "cancelled"})
+                await _finish_run("cancelled")
                 return RunResult(TurnOutcome.CANCELLED)
 
             # Re-read phase fresh from Firestore every iteration (not cached from the
@@ -639,6 +694,10 @@ class Orchestrator:
                 logger.exception("LLM stream failed", extra={"extra_fields": {"conversation_id": conversation_id}})
                 await emit({"type": "error", "message": f"LLM error: {exc}", "recoverable": True})
                 await emit({"type": "message_end", "message_id": message_id})
+                # BUG FIX: previously no agent_done fired on this path, leaving the client
+                # stuck showing the run as "running" forever. This also stamps
+                # run_elapsed_ms on any tail message persisted by earlier iterations.
+                await _finish_run("error")
                 return RunResult(TurnOutcome.ERROR, str(exc))
             finally:
                 # If we broke out early due to cancellation, the async generator is still
@@ -654,26 +713,28 @@ class Orchestrator:
             # partial text/reasoning was accumulated before the cancellation was noticed,
             # rather than silently discarding it.
             if cancel_event.is_set():
-                fs.append_message(
+                stored = fs.append_message(
                     conversation_id,
                     {"role": "assistant", "content": text_acc, "reasoning": reasoning_acc or None, "tool_calls": []},
                 )
+                last_assistant_msg_id = stored["id"]  # this run's tail message so far
                 fs.set_agent_state(curriculum_id, {"iteration_count": iteration})
                 await emit({"type": "message_end", "message_id": message_id})
-                await emit({"type": "agent_done", "status": "cancelled"})
+                await _finish_run("cancelled")
                 return RunResult(TurnOutcome.CANCELLED)
 
             if not tool_calls:
                 # No tool calls this iteration means the model produced a final answer:
                 # persist it and end the turn as DONE (no further looping needed).
-                fs.append_message(
+                stored = fs.append_message(
                     conversation_id,
                     {"role": "assistant", "content": text_acc, "reasoning": reasoning_acc or None, "tool_calls": []},
                 )
+                last_assistant_msg_id = stored["id"]  # this run's (final) tail message
                 await emit({"type": "message_end", "message_id": message_id})
                 fs.set_agent_state(curriculum_id, {"iteration_count": iteration + 1})
 
-                await emit({"type": "agent_done", "status": "ok"})
+                await _finish_run("ok")
                 return RunResult(TurnOutcome.DONE)
 
             tool_call_records: list[dict[str, Any]] = []
@@ -804,7 +865,7 @@ class Orchestrator:
 
             if tool_batch_cancelled:
                 # Persist what ran (including cancelled tool records) and end turn.
-                fs.append_message(
+                stored = fs.append_message(
                     conversation_id,
                     {
                         "role": "assistant",
@@ -813,12 +874,13 @@ class Orchestrator:
                         "tool_calls": tool_call_records,
                     },
                 )
+                last_assistant_msg_id = stored["id"]  # this run's tail message so far
                 fs.set_agent_state(curriculum_id, {"iteration_count": iteration})
                 await emit({"type": "message_end", "message_id": message_id})
-                await emit({"type": "agent_done", "status": "cancelled"})
+                await _finish_run("cancelled")
                 return RunResult(TurnOutcome.CANCELLED)
 
-            fs.append_message(
+            stored = fs.append_message(
                 conversation_id,
                 {
                     "role": "assistant",
@@ -827,6 +889,7 @@ class Orchestrator:
                     "tool_calls": tool_call_records,
                 },
             )
+            last_assistant_msg_id = stored["id"]  # this run's tail message so far
             await emit({"type": "message_end", "message_id": message_id})
 
             if any_fetch_succeeded:
@@ -845,7 +908,7 @@ class Orchestrator:
                 # Pause immediately even if this wasn't the last tool call batched this
                 # step and even if max_iterations hasn't been reached — a gate call
                 # always ends the turn, per app/agent/CLAUDE.md.
-                await emit({"type": "agent_done", "status": "paused"})
+                await _finish_run("paused")
                 return RunResult(TurnOutcome.PAUSED)
 
             # Otherwise loop again: tool observations are now in context for next iteration.
@@ -857,7 +920,7 @@ class Orchestrator:
                 "recoverable": True,
             }
         )
-        await emit({"type": "agent_done", "status": "max_iterations"})
+        await _finish_run("max_iterations")
         return RunResult(TurnOutcome.ERROR, "max iterations")
 
     async def _apply_plan_decision(

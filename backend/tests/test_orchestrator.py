@@ -160,6 +160,15 @@ async def test_run_turn_pauses_on_hitl_gate_tool_call(monkeypatch, fake_fs, orch
     assert "plan_proposed" in event_types
     assert event_types[-1] == "agent_done"
     assert events[-1]["status"] == "paused"
+    assert isinstance(events[-1]["elapsed_ms"], int)
+    assert events[-1]["elapsed_ms"] >= 0
+
+    # The gate call's own message is this run's tail — it gets the server-measured
+    # run_elapsed_ms stamp too, not just non-paused terminal paths.
+    messages = fake_fs.fs.list_messages(conv["id"])
+    assistant_msgs = [m for m in messages if m["role"] == "assistant"]
+    assert isinstance(assistant_msgs[-1]["run_elapsed_ms"], int)
+    assert assistant_msgs[-1]["run_elapsed_ms"] >= 0
 
     # phase_change/progress must be emitted live (not just on reconnect) so the sticky
     # phase banner updates immediately when the plan is proposed, and both must arrive
@@ -300,7 +309,12 @@ async def test_run_turn_plain_text_answer_completes_done(monkeypatch, fake_fs, o
     )
 
     assert result.outcome == TurnOutcome.DONE
-    assert events[-1] == {"type": "agent_done", "status": "ok"}
+    # agent_done now carries a server-measured elapsed_ms — assert type+status and that
+    # elapsed_ms is a sane non-negative int rather than an exact value (timing-dependent).
+    assert events[-1]["type"] == "agent_done"
+    assert events[-1]["status"] == "ok"
+    assert isinstance(events[-1]["elapsed_ms"], int)
+    assert events[-1]["elapsed_ms"] >= 0
 
     messages = fake_fs.fs.list_messages(conv["id"])
     # user message + assistant message appended
@@ -309,6 +323,138 @@ async def test_run_turn_plain_text_answer_completes_done(monkeypatch, fake_fs, o
     assert len(assistant_msgs) == 1
     assert assistant_msgs[0]["content"] == "Sure, here's an explanation."
     assert assistant_msgs[0]["reasoning"] == "just answer"
+    # The run's tail (only) assistant message is stamped with the server-measured duration.
+    assert isinstance(assistant_msgs[0]["run_elapsed_ms"], int)
+    assert assistant_msgs[0]["run_elapsed_ms"] >= 0
+
+
+@pytest.mark.asyncio
+async def test_run_turn_stamps_run_elapsed_ms_on_last_message_of_multi_iteration_run(
+    monkeypatch, fake_fs, orchestrator
+):
+    """Verify a run spanning two ReAct iterations (a non-gate tool call, then a plain-text
+    answer) stamps `run_elapsed_ms` only on the LAST assistant message — not the earlier
+    tool-call message — and the final `agent_done` event carries the same elapsed_ms.
+    """
+    conv, curriculum = _setup_conversation(fake_fs, phase="deep_research")
+
+    class _TwoTurnLLM:
+        """Fake LLMProvider: a tool call on the first chat_stream call, plain text on the second."""
+
+        def __init__(self) -> None:
+            """Track how many times chat_stream has been invoked."""
+            self._calls = 0
+
+        async def chat_stream(self, messages, tools=None, small: bool = False):
+            """Yield a tool-call script on call 1, a plain-text script on call 2+."""
+            self._calls += 1
+            if self._calls == 1:
+                events = [
+                    TextDelta(text="Let me search."),
+                    ToolCallDelta(id="call_1", name="web_search", arguments={"query": "interview tips"}),
+                    Done(),
+                ]
+            else:
+                events = [TextDelta(text="Here's what I found."), Done()]
+            for event in events:
+                yield event
+
+        async def complete(self, messages, small: bool = False) -> str:
+            """Unused by this test; present to satisfy the LLMProvider protocol."""
+            return "stub completion"
+
+    scripted = _TwoTurnLLM()
+    monkeypatch.setattr("app.agent.orchestrator.get_llm_provider", lambda *a, **k: scripted)
+    monkeypatch.setattr("app.agent.orchestrator.get_search_provider", lambda *a, **k: StubSearch())
+
+    from app.agent.tools.registry import ToolResult
+
+    async def fake_execute(tool_name, raw_input, ctx):
+        """Return a canned successful web_search result without touching real network plumbing."""
+        return ToolResult({"results": []}, "ok", 5)
+
+    monkeypatch.setattr(orchestrator._registry, "execute", fake_execute)
+
+    events = []
+
+    async def emit(event):
+        events.append(event)
+
+    result = await orchestrator.run_turn(
+        conversation_id=conv["id"],
+        curriculum_id=curriculum["id"],
+        owner_uid="uid1",
+        user_input="find me some tips",
+        emit=emit,
+    )
+
+    assert result.outcome == TurnOutcome.DONE
+    assert events[-1]["type"] == "agent_done"
+    assert events[-1]["status"] == "ok"
+    assert isinstance(events[-1]["elapsed_ms"], int)
+    assert events[-1]["elapsed_ms"] >= 0
+
+    messages = fake_fs.fs.list_messages(conv["id"])
+    assistant_msgs = [m for m in messages if m["role"] == "assistant"]
+    assert len(assistant_msgs) == 2
+    # First iteration's message (the tool call) is untouched by the stamp.
+    assert assistant_msgs[0].get("run_elapsed_ms") is None
+    # Second (last) iteration's message — the true run tail — gets the stamp.
+    assert isinstance(assistant_msgs[1]["run_elapsed_ms"], int)
+    assert assistant_msgs[1]["run_elapsed_ms"] >= 0
+    assert assistant_msgs[1]["run_elapsed_ms"] == events[-1]["elapsed_ms"]
+
+
+@pytest.mark.asyncio
+async def test_run_turn_llm_stream_failure_still_emits_agent_done_error(monkeypatch, fake_fs, orchestrator):
+    """Verify an LLM stream that raises mid-run still ends with a terminal `agent_done`
+    (status "error", carrying an int elapsed_ms) after the recoverable `error` event —
+    previously this path never fired agent_done, leaving the client stuck "running".
+    """
+    conv, curriculum = _setup_conversation(fake_fs, phase="refinement")
+
+    class _RaisingLLM:
+        """Fake LLMProvider whose chat_stream raises partway through, simulating a
+        genuine provider/network failure mid-stream.
+        """
+
+        async def chat_stream(self, messages, tools=None, small: bool = False):
+            """Yield one delta, then raise instead of completing the stream."""
+            yield TextDelta(text="Starting to answer...")
+            raise RuntimeError("simulated provider failure")
+
+        async def complete(self, messages, small: bool = False) -> str:
+            """Unused by this test; present to satisfy the LLMProvider protocol."""
+            return "stub completion"
+
+    monkeypatch.setattr("app.agent.orchestrator.get_llm_provider", lambda *a, **k: _RaisingLLM())
+    monkeypatch.setattr("app.agent.orchestrator.get_search_provider", lambda *a, **k: StubSearch())
+
+    events = []
+
+    async def emit(event):
+        events.append(event)
+
+    result = await orchestrator.run_turn(
+        conversation_id=conv["id"],
+        curriculum_id=curriculum["id"],
+        owner_uid="uid1",
+        user_input="explain module 3",
+        emit=emit,
+    )
+
+    assert result.outcome == TurnOutcome.ERROR
+
+    event_types = [e["type"] for e in events]
+    # A recoverable error event fires first (surfacing the failure), then message_end,
+    # then the terminal agent_done that unconditionally ends the run for the client.
+    error_events = [e for e in events if e["type"] == "error"]
+    assert len(error_events) == 1
+    assert error_events[0]["recoverable"] is True
+    assert event_types[-1] == "agent_done"
+    assert events[-1]["status"] == "error"
+    assert isinstance(events[-1]["elapsed_ms"], int)
+    assert events[-1]["elapsed_ms"] >= 0
 
 
 @pytest.mark.asyncio
@@ -704,7 +850,12 @@ async def test_run_turn_cancels_mid_tool_call(monkeypatch, fake_fs, orchestrator
     assert tool_results[0]["tool_call_id"] == "call_1"
     assert "cancelled" in tool_results[0]["output_preview"]
 
-    assert events[-1] == {"type": "agent_done", "status": "cancelled"}
+    # agent_done now carries a server-measured elapsed_ms — assert type+status and that
+    # elapsed_ms is a sane non-negative int rather than an exact value (timing-dependent).
+    assert events[-1]["type"] == "agent_done"
+    assert events[-1]["status"] == "cancelled"
+    assert isinstance(events[-1]["elapsed_ms"], int)
+    assert events[-1]["elapsed_ms"] >= 0
 
     # The aborted call's record was still persisted so the next turn's context reflects
     # what actually happened this iteration.

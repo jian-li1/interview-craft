@@ -110,6 +110,10 @@ tool allowlist (§3) restricting what the LLM can even attempt to call.
 4. Enters the iteration loop (`for iteration in range(max_iterations)`):
    - **Cancellation check** (top of loop): if the cancel event is set, persists
      `iteration_count`, emits `agent_done(status="cancelled")`, returns `CANCELLED`.
+     Every terminal `agent_done` (this one included) carries a server-measured
+     `elapsed_ms` for the whole run and stamps that same value as `run_elapsed_ms` onto
+     the run's tail assistant message (a merge-update, since the tail is often only
+     known once it's been persisted).
    - Re-reads the agent state fresh from Firestore every iteration (`phase` may have
      changed due to a `transition_phase` call in the previous iteration).
    - Calls `MemoryManager.build_context(...)` (§5) to assemble the full message list,
@@ -131,7 +135,9 @@ tool allowlist (§3) restricting what the LLM can even attempt to call.
      parsing needed); checks the cancel event between chunks too (not just at loop top)
      so a `stop` mid-generation is responsive. `ToolCallDelta`s accumulate into a list;
      `Done` is a no-op marker.
-   - On LLM stream exception: logs, emits `error` + `message_end`, returns `ERROR`
+   - On LLM stream exception: logs, emits `error` + `message_end` + now also
+     `agent_done(status="error")` (previously this path never fired `agent_done`,
+     leaving the client stuck showing the run as still active), returns `ERROR`
      immediately (no retry).
    - On cancellation mid-stream: still persists the partial assistant message (with
      whatever reasoning/text accumulated so far) to Firestore before returning

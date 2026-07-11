@@ -62,8 +62,10 @@ on `useChatStore`); `curriculum_updated`→`useCurriculumStore.refetch` (a **dif
 store — REST refetch, not a chat-store field); `compaction_start`→`startCompaction`,
 `compaction`→`finishCompaction` (renders/resolves the inline transcript chip — no longer
 toast-only), `context_usage`→`setContextUsage` (drives the composer's warning card);
-`error` → toast only (also calls `setAgentRunning(false)` if not recoverable);
-`agent_done`→`setAgentRunning(false)`; `pong` → no-op.
+`error` → toast only (also calls `finishRunTiming()` + `setAgentRunning(false)` if not
+recoverable); `agent_done`→`finishRunTiming(elapsed_ms)` + `setAgentRunning(false)`
+(`agent_done` is the sole authority for clearing `agentRunning` — `endMessage` no longer
+touches it, since `message_end` fires between ReAct iterations mid-run); `pong` → no-op.
 
 When adding a new server event type: add it to `ServerEvent` in `lib/types.ts`, add a
 case in `useChatSocket.ts`'s dispatch, then add/extend the store action — in that

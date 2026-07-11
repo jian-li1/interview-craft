@@ -28,6 +28,8 @@ export interface ChatMessage {
   tool_calls: ToolCallRecord[];
   created_at: string;
   seq: number;
+  /** Total wall-clock duration of the agentic run this message concluded — present only on each run's final assistant message. */
+  runElapsedMs?: number;
 }
 
 /** The task plan currently proposed by the agent, awaiting a user approve/modify decision (HITL flow). */
@@ -101,6 +103,8 @@ interface ChatState {
   /** Set while a `request_user_input` HITL gate is awaiting an answer; null otherwise. */
   pendingQuestion: PendingQuestion | null;
   agentRunning: boolean;
+  /** Epoch-ms when the in-flight run started (user send / plan decision), null when idle. */
+  runStartedAt: number | null;
   /** Most-recent-first feed of tool-call activity, capped at 30 entries — see `startToolCall`/`pushActivity` for why. */
   activity: ActivityItem[];
   connectionState: "idle" | "connecting" | "open" | "reconnecting" | "closed";
@@ -122,10 +126,14 @@ interface ChatState {
   appendReasoningDelta: (id: string, delta: string) => void;
   /** Appends a visible-content delta to the message and sets `contentStreaming: true`. */
   appendTextDelta: (id: string, delta: string) => void;
-  /** Marks a message's streaming flags false (both reasoning and content) and clears `agentRunning` — called on the `message_end` WS event. */
+  /** Marks a message's streaming flags false (both reasoning and content) — called on the `message_end` WS event. Does NOT clear `agentRunning`: `message_end` fires between ReAct iterations mid-run, so `agent_done` (guaranteed on every terminal path) is the sole authority for that. */
   endMessage: (id: string) => void;
   /** Optimistically appends a locally-authored user message (synthetic id/timestamp) before the server round-trip confirms it. */
   addUserMessage: (content: string) => void;
+  /** Marks the start of a new agentic run (idempotent — never overwrites an already-set `runStartedAt`). */
+  markRunStart: () => void;
+  /** Freezes the elapsed run time onto the run's final assistant message and clears `runStartedAt`. Uses the server-measured `elapsedMs` (from `agent_done`) when given — overwriting any local/legacy value, since the server value is authoritative — else falls back to the local `runStartedAt` diff (matches prior no-arg behavior, e.g. the non-recoverable `error` path). No-op if no run is in flight AND no `elapsedMs` given. */
+  finishRunTiming: (elapsedMs?: number) => void;
 
   /** Appends a new `running` tool call to the target message and pushes a matching entry onto `activity`. */
   startToolCall: (
@@ -190,6 +198,9 @@ function toChatMessage(m: MessageOut & { role: Exclude<MessageRole, "system"> })
     tool_calls: m.tool_calls,
     created_at: m.created_at,
     seq: m.seq,
+    // Persisted server measurement, when present (new runs); undefined on pre-feature
+    // history, where hydrateHistory's timestamp-derivation fallback fills the gap.
+    runElapsedMs: m.run_elapsed_ms ?? undefined,
   };
 }
 
@@ -227,6 +238,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   planAwaitingDecision: false,
   pendingQuestion: null,
   agentRunning: false,
+  runStartedAt: null,
   activity: [],
   connectionState: "idle",
   compactions: [],
@@ -239,6 +251,36 @@ export const useChatStore = create<ChatState>((set, get) => ({
   // the Live Activity panel isn't empty after a refresh.
   hydrateHistory: (messages) =>
     set(() => {
+      // LEGACY FALLBACK ONLY: persisted `run_elapsed_ms` (stamped by the backend on
+      // every run since this field was added) is now the preferred source — see
+      // toChatMessage — and covers all new runs directly from the message doc. This
+      // timestamp-derivation block only fills the gap for conversations from before
+      // the field existed, where messages carry no run_elapsed_ms at all. Must run
+      // BEFORE filtering out system messages: the user message (or system-role
+      // plan-decision record) is persisted at run START, and each assistant message
+      // at the END of its ReAct iteration, so a run's final assistant message's
+      // created_at ~= run end, and the most recent preceding user/system message's
+      // created_at ~= run start.
+      const raw = [...messages].sort((a, b) => a.seq - b.seq);
+      const elapsedById = new Map<string, number>();
+      let runStartMs: number | null = null;
+      raw.forEach((m, i) => {
+        if (m.role === "user" || m.role === "system") {
+          runStartMs = Date.parse(m.created_at);
+          return;
+        }
+        // Assistant message: it's a run's tail if the next raw message starts a
+        // new run (user/system) or there is no next message at all.
+        const next = raw[i + 1];
+        const isRunTail = !next || next.role === "user" || next.role === "system";
+        if (isRunTail && runStartMs !== null) {
+          const elapsed = Date.parse(m.created_at) - runStartMs;
+          if (Number.isFinite(elapsed) && elapsed > 0) {
+            elapsedById.set(m.id, elapsed);
+          }
+        }
+      });
+
       // System-role messages are internal bookkeeping (auto-continue nudges,
       // plan-approval records) and must never be rendered in the chat UI.
       const chatMessages = messages
@@ -247,7 +289,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
             m.role !== "system"
         )
         .map(toChatMessage)
-        .sort((a, b) => a.seq - b.seq);
+        .sort((a, b) => a.seq - b.seq)
+        // Prefer the persisted server value (already set by toChatMessage); only fall
+        // back to the derived-from-timestamps estimate for pre-feature history.
+        .map((m) => ({ ...m, runElapsedMs: m.runElapsedMs ?? elapsedById.get(m.id) }));
 
       // Flatten tool_calls into ActivityItems (newest-first, capped at 30).
       const flattened: ActivityItem[] = chatMessages.flatMap((m) =>
@@ -280,6 +325,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       planAwaitingDecision: false,
       pendingQuestion: null,
       agentRunning: false,
+      runStartedAt: null,
       activity: [],
       compactions: [],
       contextUsage: null,
@@ -301,6 +347,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
           seq: s.messages.length,
         },
       ],
+      // Send time = run start; covers both composer sends and question-card answers.
+      runStartedAt: Date.now(),
     })),
 
   startMessage: (id) =>
@@ -309,6 +357,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
       return {
         messages: [...s.messages, stubAssistantMessage(id, s.messages.length)],
         agentRunning: true,
+        // Fallback in case the send moment wasn't captured (e.g. plan-decision resume).
+        runStartedAt: s.runStartedAt ?? Date.now(),
       };
     }),
 
@@ -324,6 +374,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
             ? { ...m, reasoning: (m.reasoning ?? "") + delta, reasoningStreaming: true }
             : m
         ),
+        // Fallback so the timer still runs after a reconnect that skipped message_start.
+        runStartedAt: s.runStartedAt ?? Date.now(),
       };
     }),
 
@@ -336,17 +388,22 @@ export const useChatStore = create<ChatState>((set, get) => ({
         messages: base.map((m) =>
           m.id === id ? { ...m, content: m.content + delta, contentStreaming: true } : m
         ),
+        // Fallback so the timer still runs after a reconnect that skipped message_start.
+        runStartedAt: s.runStartedAt ?? Date.now(),
       };
     }),
 
   endMessage: (id) =>
+    // `agent_done` is now guaranteed on every terminal path (including errors) and is
+    // the sole authority for clearing `agentRunning`; `message_end` fires between
+    // ReAct iterations mid-run, so clearing it here made the Stop button and the live
+    // run timer flicker between iterations. Only the streaming flags clear here.
     set((s) => ({
       messages: s.messages.map((m) =>
         m.id === id
           ? { ...m, contentStreaming: false, reasoningStreaming: false }
           : m
       ),
-      agentRunning: false,
     })),
 
   // Reconnect-resilient: synthesize stub if messageId is unknown.
@@ -381,6 +438,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
           } satisfies ActivityItem,
           ...s.activity,
         ].slice(0, 30),
+        // Fallback so the timer still runs after a reconnect that skipped message_start.
+        runStartedAt: s.runStartedAt ?? Date.now(),
       };
     }),
 
@@ -411,6 +470,54 @@ export const useChatStore = create<ChatState>((set, get) => ({
   resolvePlan: () => set({ planAwaitingDecision: false }),
   askQuestion: (question, options) => set({ pendingQuestion: { question, options } }),
   resolveQuestion: () => set({ pendingQuestion: null }),
+  // Idempotent: never overwrites an already-set runStartedAt, so a late fallback
+  // call (e.g. from startMessage after a reconnect) never clobbers the true send time.
+  markRunStart: () => set((s) => ({ runStartedAt: s.runStartedAt ?? Date.now() })),
+
+  finishRunTiming: (elapsedMs) =>
+    set((s) => {
+      // Find the last assistant message (the run's tail) from the end — needed by
+      // both branches below.
+      let lastAssistantIdx = -1;
+      for (let i = s.messages.length - 1; i >= 0; i--) {
+        if (s.messages[i].role === "assistant") {
+          lastAssistantIdx = i;
+          break;
+        }
+      }
+
+      if (elapsedMs !== undefined) {
+        // Authoritative server-measured value (from agent_done): stamp it on the tail
+        // message, OVERWRITING any locally/legacy-derived value — the server wins.
+        // Always clear runStartedAt regardless of whether a tail message was found.
+        if (lastAssistantIdx === -1) return { runStartedAt: null };
+        const tail = s.messages[lastAssistantIdx];
+        // A run that failed before producing any assistant message (e.g. an internal
+        // error at run start) must not clobber the PREVIOUS run's stamp: only overwrite
+        // an already-stamped tail if it was created during this run (1s slack covers
+        // the stub whose created_at lands the same tick as the runStartedAt fallback).
+        const belongsToRun =
+          s.runStartedAt === null || Date.parse(tail.created_at) >= s.runStartedAt - 1000;
+        if (tail.runElapsedMs !== undefined && !belongsToRun) return { runStartedAt: null };
+        const messages = [...s.messages];
+        messages[lastAssistantIdx] = { ...messages[lastAssistantIdx], runElapsedMs: elapsedMs };
+        return { messages, runStartedAt: null };
+      }
+
+      // No server value given (e.g. the non-recoverable `error` path): fall back to
+      // the local runStartedAt diff, exactly as before this feature.
+      if (s.runStartedAt === null) return s;
+      const elapsed = Date.now() - s.runStartedAt;
+      // Guard: a run that produced no assistant message (or already-stamped tail
+      // from a previous run) must not restamp the wrong message.
+      if (lastAssistantIdx === -1 || s.messages[lastAssistantIdx].runElapsedMs !== undefined) {
+        return { runStartedAt: null };
+      }
+      const messages = [...s.messages];
+      messages[lastAssistantIdx] = { ...messages[lastAssistantIdx], runElapsedMs: elapsed };
+      return { messages, runStartedAt: null };
+    }),
+
   setAgentRunning: (running) => set({ agentRunning: running }),
   setConnectionState: (connectionState) => set({ connectionState }),
   pushActivity: (item) =>

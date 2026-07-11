@@ -1,14 +1,15 @@
 "use client";
 
-import { memo } from "react";
+import { memo, useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
-import { User, Sparkles } from "lucide-react";
+import { User, Sparkles, Clock } from "lucide-react";
 import { ReasoningBlock } from "@/components/studio/chat/ReasoningBlock";
 import { ToolCallGroup } from "@/components/studio/chat/ToolCallCard";
-import { cn } from "@/lib/utils";
+import { cn, formatRunDuration } from "@/lib/utils";
+import { useChatStore } from "@/stores/useChatStore";
 import type { ChatMessage } from "@/stores/useChatStore";
 
 /**
@@ -28,8 +29,11 @@ import type { ChatMessage } from "@/stores/useChatStore";
  * `message.contentStreaming` (true while `text_delta`s are still arriving
  * for this message, before `message_end`) drives the blinking caret shown
  * after the rendered Markdown so the user gets a visual "still typing" cue.
+ *
+ * `isRunTail` — true when this is the newest assistant message of an
+ * in-flight run — shows the live ticking timer (`LiveRunTimer`, below).
  */
-function MessageBubbleImpl({ message }: { message: ChatMessage }) {
+function MessageBubbleImpl({ message, isRunTail }: { message: ChatMessage; isRunTail?: boolean }) {
   const isUser = message.role === "user";
 
   return (
@@ -85,6 +89,17 @@ function MessageBubbleImpl({ message }: { message: ChatMessage }) {
             )}
           </div>
         )}
+
+        {/* Run-elapsed indicator (assistant only): frozen total once the run has
+            concluded, or a live ticking timer while this message is the run's tail. */}
+        {!isUser && message.runElapsedMs != null ? (
+          <span className="flex items-center gap-1 text-xs text-muted-foreground">
+            <Clock className="h-3 w-3" aria-hidden="true" />
+            {formatRunDuration(message.runElapsedMs)}
+          </span>
+        ) : (
+          !isUser && isRunTail && <LiveRunTimer />
+        )}
       </div>
     </motion.div>
   );
@@ -94,3 +109,28 @@ function MessageBubbleImpl({ message }: { message: ChatMessage }) {
 // appending to the last message) doesn't force every prior MessageBubble in
 // a long transcript to re-render.
 export const MessageBubble = memo(MessageBubbleImpl);
+
+/**
+ * Live 1s-ticking elapsed-time readout for the run's tail assistant message.
+ * Isolated into its own leaf component so the per-second re-render stays
+ * scoped here instead of forcing the (memoized) MessageBubble tree to re-render.
+ */
+function LiveRunTimer() {
+  // Subscribe to the run's start time; re-renders when a new run begins.
+  const runStartedAt = useChatStore((s) => s.runStartedAt);
+  const [now, setNow] = useState(() => Date.now());
+
+  // Tick once per second while mounted (only mounted for the in-flight run's tail message).
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  if (runStartedAt === null) return null;
+  return (
+    <span className="flex items-center gap-1 text-xs text-muted-foreground">
+      <Clock className="h-3 w-3" aria-hidden="true" />
+      {formatRunDuration(now - runStartedAt)}
+    </span>
+  );
+}

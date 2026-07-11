@@ -49,6 +49,9 @@ class Message(ApiModel):
         created_at (dt.datetime): Timestamp the message was created.
         seq (int): Monotonically increasing sequence number within the conversation,
             used for ordering.
+        run_elapsed_ms (int | None): Server-measured wall-clock duration (ms) of the
+            whole agentic run this message concluded; stamped only on each run's final
+            assistant message. None on all other messages and on pre-feature history.
     """
 
     id: str
@@ -58,6 +61,7 @@ class Message(ApiModel):
     tool_calls: list[ToolCallRecord] = Field(default_factory=list)
     created_at: dt.datetime
     seq: int
+    run_elapsed_ms: int | None = None
 
 
 class MessageOut(Message):
