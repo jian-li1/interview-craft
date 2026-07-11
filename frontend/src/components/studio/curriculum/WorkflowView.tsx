@@ -42,7 +42,10 @@ const NODE_WIDTH = 280;
 // only so the MiniMap can draw node rects without waiting on DOM measurement
 // (see WorkflowView minimap notes below).
 const NODE_HEIGHT = 188;
-const START_NODE_HEIGHT = 64;
+// Approximate rendered height of a StartNode card with a 2-line title and a
+// 3-line description — used (like NODE_HEIGHT) only for minimap rects and
+// the START_NODE_Y centering math below.
+const START_NODE_HEIGHT = 140;
 const H_GAP = 80;
 // React Flow anchors Handles at CSS top:50% of the node wrapper's declared inline
 // height. Centering the shorter start node against the module cards' vertical
@@ -87,7 +90,8 @@ function buildLayout(curriculum: CurriculumFull) {
       position: { x: 0, y: START_NODE_Y },
       width: START_NODE_WIDTH,
       height: START_NODE_HEIGHT,
-      data: { title: curriculum.title, emoji: curriculum.emoji },
+      // description is the agent-written curriculum summary, shown under the title
+      data: { title: curriculum.title, emoji: curriculum.emoji, description: curriculum.description },
     },
   ];
 
