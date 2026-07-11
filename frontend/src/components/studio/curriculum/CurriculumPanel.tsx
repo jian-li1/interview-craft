@@ -3,7 +3,7 @@
 import dynamic from "next/dynamic";
 import { memo, useCallback, useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import { BookOpen, Loader2, Workflow as WorkflowIcon } from "lucide-react";
+import { BookOpen, Loader2, Maximize2, Minimize2, Workflow as WorkflowIcon } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/Tabs";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ActivityFeed } from "@/components/studio/curriculum/ActivityFeed";
@@ -53,6 +53,9 @@ function CurriculumPanelImpl({ curriculumId, onExplain }: CurriculumPanelProps) 
   const loading = useCurriculumStore((s) => s.loading);
   const error = useCurriculumStore((s) => s.error);
   const fetchCurriculum = useCurriculumStore((s) => s.fetchCurriculum);
+  // Full-screen focus mode: hides app chrome + chat (see AppShell/StudioPage).
+  const focusMode = useCurriculumStore((s) => s.focusMode);
+  const setFocusMode = useCurriculumStore((s) => s.setFocusMode);
 
   const activity = useChatStore((s) => s.activity);
   const phaseLabel = useChatStore((s) => s.phaseLabel);
@@ -69,6 +72,26 @@ function CurriculumPanelImpl({ curriculumId, onExplain }: CurriculumPanelProps) 
     setActiveSelection(null);
     if (curriculumId) void fetchCurriculum(curriculumId);
   }, [curriculumId, fetchCurriculum]);
+
+  // Safety net: force-clear focus mode on unmount so navigating away from the
+  // studio never leaves the app shell (sidebar/header) permanently hidden.
+  useEffect(() => {
+    return () => setFocusMode(false);
+  }, [setFocusMode]);
+
+  // While focus mode is active, Escape exits it — unless a modal (e.g. the
+  // Mermaid fullscreen viewer, which sets aria-modal="true") is open, in
+  // which case Escape should close that modal instead.
+  useEffect(() => {
+    if (!focusMode) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== "Escape") return;
+      if (document.querySelector('[aria-modal="true"]')) return; // let the open dialog handle Escape
+      setFocusMode(false);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [focusMode, setFocusMode]);
 
   // Memoized: prevents identity churn that rebuilds all React Flow nodes on every
   // CurriculumPanel render (including unrelated chat-store updates), which caused
@@ -102,22 +125,38 @@ function CurriculumPanelImpl({ curriculumId, onExplain }: CurriculumPanelProps) 
             {curriculum ? `${curriculum.emoji ?? "📘"} ${curriculum.title}` : "Curriculum"}
           </p>
         </div>
-        <Tabs value={view} onValueChange={(v) => setView(v as View)}>
-          <TabsList aria-label="Curriculum view">
-            <TabsTrigger value="workflow">
-              <span className="flex items-center gap-1.5">
-                <WorkflowIcon className="h-3.5 w-3.5" aria-hidden="true" />
-                Workflow
-              </span>
-            </TabsTrigger>
-            <TabsTrigger value="reader">
-              <span className="flex items-center gap-1.5">
-                <BookOpen className="h-3.5 w-3.5" aria-hidden="true" />
-                Reader
-              </span>
-            </TabsTrigger>
-          </TabsList>
-        </Tabs>
+        <div className="flex items-center gap-2">
+          <Tabs value={view} onValueChange={(v) => setView(v as View)}>
+            <TabsList aria-label="Curriculum view">
+              <TabsTrigger value="workflow">
+                <span className="flex items-center gap-1.5">
+                  <WorkflowIcon className="h-3.5 w-3.5" aria-hidden="true" />
+                  Workflow
+                </span>
+              </TabsTrigger>
+              <TabsTrigger value="reader">
+                <span className="flex items-center gap-1.5">
+                  <BookOpen className="h-3.5 w-3.5" aria-hidden="true" />
+                  Reader
+                </span>
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
+          {/* Full-screen focus toggle: hides app header/sidebar/chat, leaving only this panel. */}
+          <button
+            type="button"
+            onClick={() => setFocusMode(!focusMode)}
+            aria-label={focusMode ? "Exit full screen" : "Focus curriculum (full screen)"}
+            title={focusMode ? "Exit full screen" : "Focus curriculum (full screen)"}
+            className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+          >
+            {focusMode ? (
+              <Minimize2 className="h-4 w-4" aria-hidden="true" />
+            ) : (
+              <Maximize2 className="h-4 w-4" aria-hidden="true" />
+            )}
+          </button>
+        </div>
       </div>
 
       <div className="min-h-0 flex-1">

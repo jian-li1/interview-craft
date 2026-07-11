@@ -177,21 +177,32 @@ function DiagramViewer({ svg, chart, isFullscreen = false, onExpand, onClose }: 
   }
 
   return (
-    // `relative` anchors the overlay cluster; fullscreen fills the modal panel's full height.
-    <div className={cn("mermaid-container relative", isFullscreen && "h-full")}>
+    // `relative` anchors the overlay cluster; `group` lets the controls react to hover on this
+    // whole viewer (inline instance only — see the controls div below); fullscreen fills the
+    // modal panel's full height.
+    <div className={cn("mermaid-container relative group", isFullscreen && "h-full")}>
       <TransformWrapper
         minScale={0.4}
         maxScale={4}
         // Plain wheel zoom, no modifier key required. In smooth mode the lib zooms by
-        // exp(step * |deltaY|), so step must be tiny: 0.004 ≈ 1.5x per mouse notch (deltaY 100).
-        wheel={{ step: 0.004 }}
+        // exp(step * |deltaY|), so step must be tiny: 0.002 ≈ 1.22x per mouse notch (deltaY 100).
+        wheel={{ step: 0.002 }}
         doubleClick={{ mode: "zoomIn" }}
         limitToBounds={false} // allow panning large diagrams freely past their natural bounds
       >
         {({ zoomIn, zoomOut, resetTransform }) => (
           <>
-            {/* Overlay control cluster: zoom in/out, reset, copy source, expand/close. */}
-            <div className="absolute right-2 top-2 z-10 flex items-center gap-1 rounded-md border border-border bg-card/80 p-1 backdrop-blur">
+            {/* Overlay control cluster: zoom in/out, reset, copy source, expand/close. Hover-reveal
+                is inline-only (isFullscreen false) — the fullscreen modal keeps controls always visible. */}
+            <div
+              className={cn(
+                "absolute right-2 top-2 z-10 flex items-center gap-1 rounded-md border border-border bg-card/80 p-1 backdrop-blur",
+                // has-[:focus-visible] (not focus-within) keeps controls shown for keyboard tabbing
+                // without pinning them visible after a mouse click (clicks focus but aren't :focus-visible);
+                // pointer-coarse keeps controls visible on touch devices, where hover never fires.
+                !isFullscreen && "opacity-0 transition-opacity duration-150 group-hover:opacity-100 has-[:focus-visible]:opacity-100 pointer-coarse:opacity-100"
+              )}
+            >
               <button
                 type="button"
                 onClick={() => zoomIn()}

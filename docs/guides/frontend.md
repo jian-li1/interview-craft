@@ -52,19 +52,24 @@ chat and curriculum Zustand stores, sets the new `conversationId`, then fetches
 `conversationsApi.messages(conversationId)` and calls `hydrateHistory(messages)`.
 `useIsMobile()` returns `boolean | null`; while `null` it renders an empty placeholder to
 avoid a layout flash before the viewport check resolves. Desktop: drag-resizable flex
-split — chat panel width is state (`chatWidth`, default 480px, lazily initialized from
-`localStorage` key `ic:studio-chat-width`), clamped to `[340, min(720, 0.6 * innerWidth)]`;
-a `role="separator"` divider between the panels handles pointer drag (`setPointerCapture`
-on `pointerdown`, width recomputed on `pointermove`, persisted to `localStorage` on
-`pointerup`/`pointercancel`) and ArrowLeft/ArrowRight keyboard nudges (24px/step, same
-clamp+persist); curriculum panel stays `flex-1`. Both panel wrappers get
-`pointer-events-none` while dragging so the React Flow canvas/chat can't swallow the
-pointer stream mid-drag. Mobile: a `Tabs` switcher between "chat" and "curriculum" where
-**only one subtree is mounted at a time** (an explicit choice to avoid double-mounting
-React Flow / Mermaid instances).
+split — chat panel width comes from `usePanelResize` (`src/hooks/usePanelResize.ts`, a
+shared hook also used by `ReaderView`'s TOC sidebar), default 480px, lazily initialized
+from `localStorage` key `ic:studio-chat-width`, clamped to `[340, min(720, 0.6 *
+innerWidth)]`; the returned `separatorProps` spread onto a `role="separator"` divider
+handle pointer drag (`setPointerCapture` on `pointerdown`, width recomputed on
+`pointermove`, persisted to `localStorage` on `pointerup`/`pointercancel`) and
+ArrowLeft/ArrowRight keyboard nudges (24px/step, same clamp+persist); curriculum panel
+stays `flex-1`. Both panel wrappers get `pointer-events-none` while dragging so the React
+Flow canvas/chat can't swallow the pointer stream mid-drag. Mobile: a `Tabs` switcher
+between "chat" and "curriculum" where **only one subtree is mounted at a time** (an
+explicit choice to avoid double-mounting React Flow / Mermaid instances).
 `handleExplain(prompt)` — wired up from `SectionContent`'s per-heading "Explain" button
 through `CurriculumPanel` — prefills the chat composer and, on mobile, switches the
-active tab to "chat".
+active tab to "chat". The curriculum panel header has a full-screen "focus mode" toggle
+(`useCurriculumStore.focusMode`, toggled via `CurriculumPanel`, also exits on Escape
+unless a modal is open) that CSS-hides the app header/sidebar/chat column so the
+curriculum panel fills the viewport; force-cleared on the studio page's unmount as a
+safety net (see `AppShell.tsx`, `CurriculumPanel.tsx`).
 
 ## 2. Auth guard flow
 
@@ -392,10 +397,17 @@ switches to `"reader"`.
   `DiagramViewer` subcomponent wrapping the SVG in `react-zoom-pan-pinch`'s
   `TransformWrapper`/`TransformComponent` (statically imported —
   it's a plain React component, not a DOM-touching library like mermaid, so the
-  `ssr:false` rule doesn't apply to it) for wheel-zoom (no modifier key) and drag-to-pan,
-  plus an absolutely-positioned top-right overlay of icon buttons (zoom in/out, reset
-  view, copy source — the last flips to a checkmark for ~1.5s via a `copied` state and
-  timeout) styled to match `ui/Button.tsx`'s ghost/icon treatment. A fifth overlay button
+  `ssr:false` rule doesn't apply to it) for wheel-zoom (no modifier key, gentle step —
+  `0.002` in the lib's `exp(step * |deltaY|)` smooth-zoom formula, ~1.22x per mouse notch)
+  and drag-to-pan, plus an absolutely-positioned top-right overlay of icon buttons (zoom
+  in/out, reset view, copy source — the last flips to a checkmark for ~1.5s via a `copied`
+  state and timeout) styled to match `ui/Button.tsx`'s ghost/icon treatment. In the inline
+  (embedded reader) instance only, the overlay cluster is hover-revealed (`opacity-0` ->
+  `group-hover:opacity-100`, plus `has-[:focus-visible]:opacity-100` for keyboard users
+  tabbing in — deliberately not `focus-within`, which would pin the cluster visible after
+  a mouse click on a control since clicks focus the button too, and
+  `pointer-coarse:opacity-100` for touch devices where hover never fires) — the
+  fullscreen modal instance keeps it always visible. A fifth overlay button
   (`Maximize2`) opens a GitHub-style full-screen popup: a near-full-viewport panel
   hosting a second, fresh `DiagramViewer` instance (so its transform starts at scale 1 —
   no zoom-state syncing) whose expand slot becomes an `X` close control. The modal
@@ -409,7 +421,11 @@ switches to `"reader"`.
   mini-TOC (module/section tree with status icons: `Circle`/`Loader2`/`CheckCircle2` for
   planned/writing/complete) rendered as a sidebar at `lg+`; below `lg` the same tree is
   available from a sticky "Contents" header row that opens an animated dropdown (Framer
-  Motion, click-outside-to-close, mirroring the `UserMenu.tsx` pattern). Both set the
+  Motion, click-outside-to-close, mirroring the `UserMenu.tsx` pattern). The `lg+` sidebar
+  is drag/keyboard-resizable via the same `usePanelResize` hook the studio page's chat
+  divider uses (`ic:reader-toc-width`, default 224px, clamped to `[180, min(400, 0.4 *
+  innerWidth)]`); its `role="separator"` divider is `hidden lg:block` since the compact
+  dropdown TOC below `lg` has no sidebar to resize. Both set the
   active section directly via the controlled `activeSelection`/`onSelectSection` props
   from `CurriculumPanel` — no `scrollIntoView` involved. The content pane renders only the
   active module's active section (module context header + section title/body;
@@ -458,7 +474,17 @@ switches to `"reader"`.
   `status` (via CSS custom properties: `--muted-foreground`/`--accent`/`--success` for
   planned/writing/complete, `--accent` for the Start node) plus
   `nodeStrokeColor`/`nodeBorderRadius` and a `maskColor` built from `color-mix(...
-  var(--background) ...)` so it stays legible in both themes. Note: **`dagre` is listed in
+  var(--background) ...)` so it stays legible in both themes. Pan/zoom persists across
+  Workflow↔Reader switches even though this component unmounts on every switch (`CurriculumPanel`
+  renders one view at a time): `WorkflowInner` reads
+  `useCurriculumStore.getState().workflowViewport` once via a `useState` initializer (a plain
+  reactive subscription would re-render on every `onMoveEnd` write), passes it as
+  `defaultViewport` and sets `fitView={initialViewport ? undefined : true}` so a fresh canvas
+  still auto-fits but a restored one doesn't get re-fit over it; the module-count re-fit effect
+  skips while a viewport was restored and the module count still equals its mount-time value
+  (an idempotent comparison — a consume-once ref failed under StrictMode's dev double-invoke).
+  `onMoveEnd` writes the latest `{x, y, zoom}` back to the store on every settle. The store
+  clears `workflowViewport` to `null` whenever the loaded curriculum id changes. Note: **`dagre` is listed in
   `package.json` but is not imported or used anywhere in this file** — the layout is
   entirely hand-rolled positional math, not a dagre auto-layout call; this looks like a
   leftover dependency from an earlier layout approach.

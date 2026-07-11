@@ -95,6 +95,10 @@ export function TabsTrigger({
       {active && (
         <motion.span
           layoutId={`tabs-active-${ctx.name}`}
+          // Only animate the layout transition when the active tab itself changes — not when
+          // outer page layout shifts move this pill's on-screen position (e.g. focus-mode
+          // toggling hiding the app header); tab switches still animate via the shared layoutId.
+          layoutDependency={ctx.value}
           // dark:bg-foreground/10 layers a subtle overlay so the pill reads against bg-muted (both are near-black in dark mode otherwise)
           className="absolute inset-0 -z-10 rounded-md bg-card shadow-sm dark:bg-foreground/10"
           transition={{ type: "spring", duration: 0.4, bounce: 0.2 }}

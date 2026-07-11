@@ -12,6 +12,7 @@ import {
   Loader2,
 } from "lucide-react";
 import { SectionContent } from "@/components/studio/curriculum/SectionContent";
+import { usePanelResize } from "@/hooks/usePanelResize";
 import { cn } from "@/lib/utils";
 import type { CurriculumFull, ModuleOut, ModuleStatus, SectionOut, SectionStatus } from "@/lib/types";
 import type { ActiveSelection } from "@/components/studio/curriculum/CurriculumPanel";
@@ -96,6 +97,16 @@ export function ReaderView({
     }
     return entries;
   }, [modules]);
+
+  // Resizable lg+ mini-TOC width, via the same drag/keyboard hook the studio
+  // page uses for its chat/curriculum divider.
+  const { width: tocWidth, isDragging: tocDragging, separatorProps: tocSeparatorProps } = usePanelResize({
+    storageKey: "ic:reader-toc-width",
+    defaultWidth: 224,
+    minWidth: 180,
+    maxWidth: 400,
+    maxViewportRatio: 0.4,
+  });
 
   // `tocOpen` only matters for the compact (below-lg) dropdown TOC toggle;
   // the lg+ mini TOC in the sidebar is always visible and ignores this state.
@@ -272,16 +283,37 @@ export function ReaderView({
         </AnimatePresence>
       </div>
 
-      {/* Mini TOC (lg+) */}
+      {/* Mini TOC (lg+) — width is drag/keyboard-resizable; the divider below is now the visual border. */}
       <nav
         aria-label="Table of contents"
-        className="hidden w-56 shrink-0 overflow-y-auto border-r border-border p-3 scrollbar-thin lg:block"
+        style={{ width: tocWidth }}
+        className={cn(
+          "hidden shrink-0 overflow-y-auto p-3 scrollbar-thin lg:block",
+          tocDragging && "pointer-events-none"
+        )}
       >
         {tocList}
       </nav>
 
+      {/* Resize divider for the mini-TOC; hidden below lg where the TOC is a dropdown instead. */}
+      <div
+        {...tocSeparatorProps}
+        aria-label="Resize table of contents"
+        className={cn(
+          "hidden h-full w-1.5 shrink-0 cursor-col-resize touch-none bg-border transition-colors lg:block",
+          "hover:bg-primary/50 focus-visible:bg-primary/50 focus-visible:outline-none",
+          tocDragging && "bg-primary/50"
+        )}
+      />
+
       {/* Content: one section at a time */}
-      <div ref={contentRef} className="min-w-0 flex-1 overflow-y-auto p-6 scrollbar-thin">
+      <div
+        ref={contentRef}
+        className={cn(
+          "min-w-0 flex-1 overflow-y-auto p-6 scrollbar-thin",
+          tocDragging && "pointer-events-none"
+        )}
+      >
         <AnimatePresence mode="wait" initial={false}>
           {currentModule && (
             <motion.div

@@ -10,7 +10,7 @@
 // Do not add a plain top-level `import { WorkflowView } from ...` anywhere
 // else (e.g. a server component, a page, another panel) — that would defeat
 // the dynamic-import boundary and break the build/hydration.
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import {
   ReactFlow,
   Background,
@@ -21,6 +21,7 @@ import {
   type NodeTypes,
   type EdgeTypes,
   type NodeMouseHandler,
+  type Viewport,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { useTheme } from "next-themes";
@@ -32,6 +33,7 @@ import {
 import { ModuleNode, type ModuleNodeType } from "@/components/studio/curriculum/nodes/ModuleNode";
 import { StatusEdge, type StatusEdgeType } from "@/components/studio/curriculum/edges/StatusEdge";
 import type { CurriculumFull, ModuleStatus } from "@/lib/types";
+import { useCurriculumStore } from "@/stores/useCurriculumStore";
 import { useEffect } from "react";
 
 const NODE_WIDTH = 280;
@@ -156,7 +158,11 @@ function minimapNodeColor(node: { type?: string; data?: unknown }): string {
  * `WorkflowView` below) because it calls `useReactFlow()` to imperatively
  * fit the view. Rebuilds the node/edge layout via `buildLayout` whenever the
  * curriculum changes, and re-fits the camera whenever the module count
- * changes (e.g. the agent adds a new module).
+ * changes (e.g. the agent adds a new module). Pan/zoom persists across
+ * Workflow<->Reader switches: this component unmounts on every switch, so the
+ * last user-set viewport is saved to `useCurriculumStore.workflowViewport` on
+ * move-end and restored via `defaultViewport` on remount (see `initialViewport`
+ * below), skipping the auto-fit-on-mount when a saved camera exists.
  */
 function WorkflowInner({ curriculum, onSelectModule }: WorkflowViewProps) {
   const { resolvedTheme } = useTheme();
@@ -164,15 +170,34 @@ function WorkflowInner({ curriculum, onSelectModule }: WorkflowViewProps) {
 
   const { nodes, edges } = useMemo(() => buildLayout(curriculum), [curriculum]);
 
+  // Read the saved viewport once at mount (non-reactively — a useState
+  // initializer runs only once), so later onMoveEnd writes to the store don't
+  // re-render/re-trigger this component.
+  const [initialViewport] = useState(() => useCurriculumStore.getState().workflowViewport);
+
+  // Module count as of mount — the re-fit effect below skips while it's unchanged
+  // and a saved viewport was restored. Must be an idempotent comparison, NOT a
+  // consume-once ref: React StrictMode double-invokes effects in dev, and a
+  // consumed flag let the second invocation fitView over the restored camera.
+  const initialModuleCountRef = useRef(curriculum.modules.length);
+
   // Re-fit the camera (with a short animated transition) whenever the module
   // count changes, e.g. a new module is added while the agent is planning.
   // Deferred to requestAnimationFrame so it runs after React Flow has laid
   // out the newly-added node(s), rather than fitting to the stale bounds
   // from the previous render.
   useEffect(() => {
+    // Restored camera + no modules added since mount -> keep the user's viewport.
+    if (initialViewport && curriculum.modules.length === initialModuleCountRef.current) return;
     const id = requestAnimationFrame(() => fitView({ padding: 0.25, duration: 300 }));
     return () => cancelAnimationFrame(id);
-  }, [curriculum.modules.length, fitView]);
+  }, [curriculum.modules.length, fitView, initialViewport]);
+
+  // Persist pan/zoom on every move/zoom settle (drag, wheel, or a fitView
+  // call), so WorkflowInner's next mount can restore it via defaultViewport.
+  const handleMoveEnd = useCallback((_event: MouseEvent | TouchEvent | null, viewport: Viewport) => {
+    useCurriculumStore.getState().setWorkflowViewport(viewport);
+  }, []);
 
   // Single click path: React Flow's NodeWrapper only drops pointer-events:none
   // on a node when it's selectable/draggable OR an onNodeClick handler is
@@ -193,7 +218,11 @@ function WorkflowInner({ curriculum, onSelectModule }: WorkflowViewProps) {
       nodeTypes={nodeTypes}
       edgeTypes={edgeTypes}
       colorMode={resolvedTheme === "dark" ? "dark" : "light"}
-      fitView
+      // Only auto-fit on a fresh canvas (no saved camera); a restored viewport
+      // supplies its own initial framing via defaultViewport below.
+      fitView={initialViewport ? undefined : true}
+      defaultViewport={initialViewport ?? undefined}
+      onMoveEnd={handleMoveEnd}
       // The canvas is read-only / navigation-only: users can't rearrange or
       // rewire nodes — clicking a ModuleNode navigates to the reader view via
       // onNodeClick below (not React Flow's built-in selection model).

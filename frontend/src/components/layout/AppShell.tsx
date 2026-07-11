@@ -6,6 +6,7 @@ import { Menu, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { Sidebar, MobileSidebarClose } from "@/components/layout/Sidebar";
 import { UserMenu } from "@/components/layout/UserMenu";
 import { ThemeToggle } from "@/components/layout/ThemeToggle";
+import { useCurriculumStore } from "@/stores/useCurriculumStore";
 import { cn } from "@/lib/utils";
 
 // Persists whether the desktop sidebar is expanded across visits.
@@ -27,6 +28,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   // localStorage in an effect (not the initializer) to avoid an SSR/client
   // hydration mismatch — this component renders on the server first.
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  // Focus mode (curriculum full-screen) hides all app chrome below; only ever
+  // set from the studio's CurriculumPanel and force-cleared on its unmount.
+  const focusMode = useCurriculumStore((s) => s.focusMode);
 
   useEffect(() => {
     const stored = window.localStorage.getItem(SIDEBAR_OPEN_STORAGE_KEY);
@@ -44,13 +48,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="flex h-screen overflow-hidden bg-background">
-      {/* Desktop sidebar: animates width to collapse/expand, border drops when closed. */}
+      {/* Desktop sidebar: animates width to collapse/expand, border drops when closed.
+          Hidden entirely in focus mode (curriculum full-screen). */}
       <motion.aside
         animate={{ width: sidebarOpen ? SIDEBAR_WIDTH : 0 }}
         transition={{ type: "tween", duration: 0.2 }}
         className={cn(
           "hidden shrink-0 overflow-hidden md:block",
-          sidebarOpen && "border-r border-border"
+          sidebarOpen && "border-r border-border",
+          // md:hidden (not plain hidden): the base classes end in md:block, which would win
+          // the display conflict at md+ — twMerge resolves md:block vs md:hidden to this.
+          focusMode && "md:hidden"
         )}
       >
         {/* Fixed-width inner wrapper so Sidebar content doesn't reflow while animating. */}
@@ -85,7 +93,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       </AnimatePresence>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-14 shrink-0 items-center justify-between border-b border-border px-4">
+        {/* Header hides in focus mode along with the sidebar above. */}
+        <header
+          className={cn(
+            "flex h-14 shrink-0 items-center justify-between border-b border-border px-4",
+            focusMode && "hidden"
+          )}
+        >
           <button
             type="button"
             onClick={() => setMobileOpen(true)}

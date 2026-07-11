@@ -66,7 +66,11 @@ Split layout: chat panel left, curriculum panel right, separated by a drag-resiz
 divider (pointer-drag + ArrowLeft/ArrowRight keyboard support on a focusable
 `role="separator"`). Chat column defaults to 480px, clamped to [340px, min(720px, 60vw)],
 persisted across visits in `localStorage` under `ic:studio-chat-width`. Mobile: tabbed
-switcher (unaffected by the divider).
+switcher (unaffected by the divider). The curriculum panel header also has a full-screen
+"focus mode" toggle (also exits on Escape) that hides the app header, nav sidebar, and
+chat column — the chat column stays mounted, just CSS-hidden, so its scroll/draft state
+survives; state lives on `useCurriculumStore.focusMode` and is force-cleared when the
+studio page unmounts.
 
 ### Chat panel (Claude/ChatGPT-grade)
 - Message list with user/assistant bubbles, markdown rendering in assistant messages.
@@ -134,7 +138,12 @@ Two views, toggle: **Workflow** and **Reader**.
   check), section count, estimated minutes. Clicking a module node resolves that module's
   first section (lowest `order`) and switches to the Reader view focused there (module with
   no sections yet: Reader still switches to that module, showing its "not written" state).
-  Auto-fit view; smooth node status animations as `curriculum_updated` events arrive. Every
+  Auto-fit view; smooth node status animations as `curriculum_updated` events arrive. The
+  canvas's pan/zoom persists across Workflow↔Reader switches (the view unmounts on switch):
+  saved to `useCurriculumStore.workflowViewport` on move-end, restored via `defaultViewport`
+  on remount, with the auto-fit-on-mount skipped whenever a saved viewport is being restored;
+  cleared to `null` when the loaded curriculum changes (a saved camera from one curriculum
+  doesn't apply to another). Every
   node object also carries explicit `width`/`height` (matching its rendered card size) so
   the `MiniMap` can draw node rectangles without depending on DOM measurement; the minimap
   gives each node an explicit `nodeColor` keyed off status (planned=muted, writing=accent,
@@ -143,12 +152,16 @@ Two views, toggle: **Workflow** and **Reader**.
 - **Reader view**: left mini-TOC (modules→sections, status icons) + a single-section content
   pane — only the active module's active section is rendered at a time (not a long
   all-sections scroll). Selecting a TOC entry (desktop nav or mobile dropdown) sets the
-  active section directly rather than scrolling to it. Content: module context header
-  (module title/order/status) above the section title + body, rendered via react-markdown +
-  remark-gfm + rehype-highlight; **Mermaid** code fences rendered as diagrams (client
-  component, re-render on theme change) — an interactive viewer (react-zoom-pan-pinch)
-  with wheel-zoom/drag-pan plus a zoom-in/zoom-out/reset/copy-source/full-screen overlay
-  control cluster, a near-full-viewport full-screen popup modal (rendered through a
+  active section directly rather than scrolling to it. The lg+ mini-TOC is drag/keyboard-
+  resizable (same separator pattern as the studio page's chat divider), clamped to
+  [180px, min(400px, 40vw)] and persisted under `ic:reader-toc-width`. Content: module
+  context header (module title/order/status) above the section title + body, rendered via
+  react-markdown + remark-gfm + rehype-highlight; **Mermaid** code fences rendered as
+  diagrams (client component, re-render on theme change) — an interactive viewer
+  (react-zoom-pan-pinch) with wheel-zoom/drag-pan (gentle step, ~1.22x per mouse notch)
+  plus a zoom-in/zoom-out/reset/copy-source/full-screen overlay control cluster that's
+  hover-revealed in the inline view (always visible in the full-screen modal), a
+  near-full-viewport full-screen popup modal (rendered through a
   portal to `document.body` so transformed ancestors can't clip it; Escape and backdrop
   click close it) hosting the same shared viewer, and a post-render contrast pass that
   recolors labels sitting on hardcoded

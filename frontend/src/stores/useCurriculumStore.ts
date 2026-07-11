@@ -28,6 +28,16 @@ interface CurriculumState {
    * used to make the fetch itself partial.
    */
   lastUpdatedScope: { scope: string; moduleId?: string; sectionId?: string } | null;
+  /** Whether the curriculum panel is in full-screen focus mode (hides app chrome + chat; see AppShell/StudioPage/CurriculumPanel). */
+  focusMode: boolean;
+  /**
+   * Last user-set pan/zoom of the Workflow canvas, saved on move-end so the
+   * camera survives Workflow<->Reader switches (WorkflowView unmounts on
+   * switch). null = never moved yet, let fitView run. Shape mirrors React
+   * Flow's Viewport but is defined inline — this store stays free of any
+   * @xyflow/react coupling.
+   */
+  workflowViewport: { x: number; y: number; zoom: number } | null;
   /** Loads a curriculum by id from scratch, clearing any previously-loaded curriculum first if the id is changing (see in-line comment below). */
   fetchCurriculum: (id: string) => Promise<void>;
   /**
@@ -36,6 +46,10 @@ interface CurriculumState {
    * through the event's `scope`/`module_id`/`section_id` as `lastUpdatedScope`.
    */
   refetch: (scope?: { scope: string; moduleId?: string; sectionId?: string }) => Promise<void>;
+  /** Toggles full-screen focus mode; see `focusMode` doc comment above. */
+  setFocusMode: (on: boolean) => void;
+  /** Saves the Workflow canvas's pan/zoom; see `workflowViewport` doc comment above. */
+  setWorkflowViewport: (viewport: { x: number; y: number; zoom: number }) => void;
   reset: () => void;
 }
 
@@ -45,6 +59,8 @@ export const useCurriculumStore = create<CurriculumState>((set, get) => ({
   loading: false,
   error: null,
   lastUpdatedScope: null,
+  focusMode: false,
+  workflowViewport: null,
 
   fetchCurriculum: async (id: string) => {
     // Set currentId synchronously so out-of-order responses (and refetch,
@@ -56,7 +72,8 @@ export const useCurriculumStore = create<CurriculumState>((set, get) => ({
       currentId: id,
       loading: true,
       error: null,
-      ...(switchingCurriculum ? { curriculum: null, lastUpdatedScope: null } : {}),
+      // A saved camera from one curriculum makes no sense on another, so clear it too.
+      ...(switchingCurriculum ? { curriculum: null, lastUpdatedScope: null, workflowViewport: null } : {}),
     });
     try {
       const curriculum = await curriculaApi.get(id);
@@ -82,6 +99,20 @@ export const useCurriculumStore = create<CurriculumState>((set, get) => ({
     }
   },
 
+  // Simple setter: just flips the flag; consumers (AppShell/StudioPage/CurriculumPanel) react to it.
+  setFocusMode: (on: boolean) => set({ focusMode: on }),
+
+  // Simple setter: overwrites the saved camera; called from WorkflowView's onMoveEnd.
+  setWorkflowViewport: (viewport) => set({ workflowViewport: viewport }),
+
   reset: () =>
-    set({ curriculum: null, currentId: null, loading: false, error: null, lastUpdatedScope: null }),
+    set({
+      curriculum: null,
+      currentId: null,
+      loading: false,
+      error: null,
+      lastUpdatedScope: null,
+      focusMode: false,
+      workflowViewport: null,
+    }),
 }));

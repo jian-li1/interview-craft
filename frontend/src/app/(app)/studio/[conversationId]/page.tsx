@@ -8,28 +8,11 @@ import { CurriculumPanel } from "@/components/studio/curriculum/CurriculumPanel"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/Tabs";
 import { useChatSocket } from "@/hooks/useChatSocket";
 import { useIsMobile } from "@/hooks/useIsMobile";
+import { usePanelResize } from "@/hooks/usePanelResize";
 import { useChatStore } from "@/stores/useChatStore";
 import { useCurriculumStore } from "@/stores/useCurriculumStore";
 import { conversationsApi, ApiError } from "@/lib/api";
 import { cn } from "@/lib/utils";
-
-// Persisted chat-column width (px) for the desktop split; default + clamp bounds.
-const CHAT_WIDTH_STORAGE_KEY = "ic:studio-chat-width";
-const DEFAULT_CHAT_WIDTH = 480;
-const MIN_CHAT_WIDTH = 340;
-const MAX_CHAT_WIDTH = 720;
-const MAX_CHAT_WIDTH_VIEWPORT_RATIO = 0.6;
-// Arrow-key resize step (px) for the keyboard-accessible divider.
-const ARROW_KEY_STEP = 24;
-
-// Clamp helper shared by pointer-drag and keyboard resize paths.
-function clampChatWidth(width: number): number {
-  const maxWidth =
-    typeof window === "undefined"
-      ? MAX_CHAT_WIDTH
-      : Math.min(MAX_CHAT_WIDTH, window.innerWidth * MAX_CHAT_WIDTH_VIEWPORT_RATIO);
-  return Math.min(Math.max(width, MIN_CHAT_WIDTH), maxWidth);
-}
 
 interface StudioPageProps {
   // Next.js 15 App Router passes dynamic route params as a Promise (to
@@ -87,6 +70,9 @@ export default function StudioPage({ params }: StudioPageProps) {
   const hydrateHistory = useChatStore((s) => s.hydrateHistory);
   const resetChat = useChatStore((s) => s.reset);
   const resetCurriculum = useCurriculumStore((s) => s.reset);
+  // Focus mode (set from CurriculumPanel's full-screen toggle): hides the chat
+  // column and lets the curriculum panel claim the full viewport height.
+  const focusMode = useCurriculumStore((s) => s.focusMode);
   // Boolean selector (not the raw array) so this page doesn't re-render on
   // every streaming text delta — the messages array identity changes per
   // delta, but this boolean only flips once (empty -> non-empty).
@@ -100,65 +86,15 @@ export default function StudioPage({ params }: StudioPageProps) {
   const [prefillText, setPrefillText] = useState<string | undefined>(undefined);
   const [mobileTab, setMobileTab] = useState<"chat" | "curriculum">("chat");
 
-  // Desktop chat-column width (px), lazily read from localStorage so the
-  // user's last drag persists across visits. Safe to touch `window` here
-  // (no SSR) because the desktop layout only renders after the
-  // `isMobile === null` placeholder gate below.
-  const [chatWidth, setChatWidth] = useState<number>(() => {
-    if (typeof window === "undefined") return DEFAULT_CHAT_WIDTH;
-    const stored = window.localStorage.getItem(CHAT_WIDTH_STORAGE_KEY);
-    const parsed = stored ? Number(stored) : NaN;
-    return Number.isFinite(parsed) ? clampChatWidth(parsed) : DEFAULT_CHAT_WIDTH;
+  // Desktop chat-column resize: drag/keyboard behavior extracted into a shared
+  // hook (also used by ReaderView's TOC sidebar) — see usePanelResize.ts.
+  const { width: chatWidth, isDragging, separatorProps: chatSeparatorProps } = usePanelResize({
+    storageKey: "ic:studio-chat-width",
+    defaultWidth: 480,
+    minWidth: 340,
+    maxWidth: 720,
+    maxViewportRatio: 0.6,
   });
-  // True while the divider is being pointer-dragged; disables pointer events
-  // on both panels so React Flow/text selection don't swallow the drag.
-  const [isDragging, setIsDragging] = useState(false);
-  // Drag bookkeeping kept in refs (not state) since they don't need renders.
-  const dragStartXRef = useRef(0);
-  const dragStartWidthRef = useRef(DEFAULT_CHAT_WIDTH);
-
-  // Pointer-driven resize: capture the pointer on the divider itself so drag
-  // continues even if the cursor leaves the narrow hit area mid-move.
-  const handleDividerPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    e.currentTarget.setPointerCapture(e.pointerId);
-    dragStartXRef.current = e.clientX;
-    dragStartWidthRef.current = chatWidth;
-    setIsDragging(true);
-    // Prevent text selection/cursor flicker over iframes/canvas while dragging.
-    document.body.style.userSelect = "none";
-    document.body.style.cursor = "col-resize";
-  }, [chatWidth]);
-
-  const handleDividerPointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    if (!isDragging) return;
-    const delta = e.clientX - dragStartXRef.current;
-    setChatWidth(clampChatWidth(dragStartWidthRef.current + delta));
-  }, [isDragging]);
-
-  const endDrag = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    if (!isDragging) return;
-    e.currentTarget.releasePointerCapture(e.pointerId);
-    setIsDragging(false);
-    document.body.style.userSelect = "";
-    document.body.style.cursor = "";
-    // Persist the final width so it survives a reload/revisit.
-    setChatWidth((current) => {
-      window.localStorage.setItem(CHAT_WIDTH_STORAGE_KEY, String(current));
-      return current;
-    });
-  }, [isDragging]);
-
-  // Keyboard resize: ArrowLeft/ArrowRight nudge by a fixed step, clamped and persisted.
-  const handleDividerKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
-    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
-    e.preventDefault();
-    const step = e.key === "ArrowRight" ? ARROW_KEY_STEP : -ARROW_KEY_STEP;
-    setChatWidth((current) => {
-      const next = clampChatWidth(current + step);
-      window.localStorage.setItem(CHAT_WIDTH_STORAGE_KEY, String(next));
-      return next;
-    });
-  }, []);
 
   const socketRef = useChatSocket(conversationId);
   const initialPromptSent = useRef(false);
@@ -259,13 +195,15 @@ export default function StudioPage({ params }: StudioPageProps) {
 
   if (isMobile) {
     return (
-      <div className="flex h-[calc(100vh-3.5rem)] min-h-0 flex-col">
+      // Focus mode hides the app header, so the page claims the full viewport height instead.
+      <div className={cn("flex min-h-0 flex-col", focusMode ? "h-screen" : "h-[calc(100vh-3.5rem)]")}>
         <Tabs
           value={mobileTab}
           onValueChange={(v) => setMobileTab(v as "chat" | "curriculum")}
           className="flex min-h-0 flex-1 flex-col"
         >
-          <div className="flex shrink-0 justify-center border-b border-border p-2">
+          {/* Tab switcher hidden in focus mode — the focus button only reaches curriculum, so it's already the visible tab. */}
+          <div className={cn("flex shrink-0 justify-center border-b border-border p-2", focusMode && "hidden")}>
             <TabsList aria-label="Studio view">
               <TabsTrigger value="chat">
                 <span className="flex items-center gap-1.5">
@@ -293,32 +231,29 @@ export default function StudioPage({ params }: StudioPageProps) {
   }
 
   return (
-    <div className="flex h-[calc(100vh-3.5rem)] min-h-0">
+    // Focus mode hides the app header, so the page claims the full viewport height instead.
+    <div className={cn("flex min-h-0", focusMode ? "h-screen" : "h-[calc(100vh-3.5rem)]")}>
       {/* Chat column: width is drag-resizable via the divider; pointer-events
           disabled while dragging so a fast drag doesn't get swallowed by
-          content underneath (e.g. iframes) or trigger text selection. */}
+          content underneath (e.g. iframes) or trigger text selection.
+          CSS-hidden (not unmounted) in focus mode so composer draft/scroll survive toggling. */}
       <div
         style={{ width: chatWidth }}
-        className={cn("h-full min-h-0 shrink-0", isDragging && "pointer-events-none")}
+        className={cn("h-full min-h-0 shrink-0", isDragging && "pointer-events-none", focusMode && "hidden")}
       >
         {chatPanel}
       </div>
       {/* Drag/keyboard-resizable divider between chat and curriculum columns;
-          also serves as the visual border previously on the chat column. */}
+          also serves as the visual border previously on the chat column.
+          Hidden alongside the chat column in focus mode. */}
       <div
-        role="separator"
-        aria-orientation="vertical"
+        {...chatSeparatorProps}
         aria-label="Resize chat panel"
-        tabIndex={0}
-        onPointerDown={handleDividerPointerDown}
-        onPointerMove={handleDividerPointerMove}
-        onPointerUp={endDrag}
-        onPointerCancel={endDrag}
-        onKeyDown={handleDividerKeyDown}
         className={cn(
           "h-full w-1.5 shrink-0 cursor-col-resize touch-none bg-border transition-colors",
           "hover:bg-primary/50 focus-visible:bg-primary/50 focus-visible:outline-none",
-          isDragging && "bg-primary/50"
+          isDragging && "bg-primary/50",
+          focusMode && "hidden"
         )}
       />
       {/* min-w-0 overrides flex default to prevent long-nowrap text from causing
