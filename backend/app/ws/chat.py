@@ -15,6 +15,7 @@ from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from app.agent.memory.manager import COMPACTION_TRIGGER_FRACTION
 from app.agent.orchestrator import Orchestrator, PlanDecision, get_conversation_lock, request_stop
 from app.agent.tools.control import PHASE_LABELS
 from app.core.config import get_settings
@@ -83,11 +84,12 @@ async def ws_chat(ws: WebSocket, conversation_id: str) -> None:
 
     Implements the full event protocol from docs/specs/01-architecture-and-contracts.md
     §7: after a successful handshake it emits `session_ready`, then loops reading client
-    frames (`ping`, `stop`, `user_message`, `plan_decision`) until the socket disconnects.
-    Each `user_message`/`plan_decision` frame spawns the orchestrator's `run_turn` as a
-    background asyncio task (rather than awaiting it inline) so the receive loop stays
-    free to immediately accept a subsequent `stop` frame or `ping` while a long-running
-    agent turn is in flight.
+    frames (`ping`, `stop`, `user_message`, `plan_decision`, `compact`) until the socket
+    disconnects. Each `user_message`/`plan_decision` frame spawns the orchestrator's
+    `run_turn` as a background asyncio task (rather than awaiting it inline) so the
+    receive loop stays free to immediately accept a subsequent `stop` frame or `ping`
+    while a long-running agent turn is in flight; `compact` similarly spawns
+    `orchestrator.compact_now` as a background task for the same reason.
 
     Args:
         ws (WebSocket): The WebSocket connection, not yet accepted at entry.
@@ -174,6 +176,32 @@ async def ws_chat(ws: WebSocket, conversation_id: str) -> None:
             "agent_running": get_conversation_lock(conversation_id).locked(),
         }
     )
+
+    # Compaction/context-usage snapshot: replay the conversation doc's persisted
+    # checkpoint so a (re)connected client can restore the resolved compaction chip and
+    # the context-usage warning card without waiting for the next agent turn.
+    if conversation.get("summary"):
+        last_compaction = conversation.get("last_compaction") or {}
+        await emit(
+            {
+                "type": "compaction",
+                # Full rolling summary, matching the live on_compaction payload — the
+                # client's chip dropdown scroll-caps it, so no truncation needed here.
+                "summary": conversation.get("summary") or "",
+                "tokens_before": last_compaction.get("tokens_before", 0),
+                "tokens_after": last_compaction.get("tokens_after", 0),
+                "compacted_through": conversation.get("compacted_through"),
+            }
+        )
+    if conversation.get("token_estimate"):
+        await emit(
+            {
+                "type": "context_usage",
+                "tokens": conversation["token_estimate"],
+                "limit": settings.context_token_limit,
+                "threshold": COMPACTION_TRIGGER_FRACTION,
+            }
+        )
 
     # Resume snapshot: replay persisted state right after session_ready so a
     # (re)connected client can rebuild UI without waiting for new agent activity.
@@ -287,6 +315,24 @@ async def ws_chat(ws: WebSocket, conversation_id: str) -> None:
                 )
                 continue
 
+            if frame_type == "compact":
+                if not curriculum_id:
+                    await emit({"type": "error", "message": "no curriculum for this conversation", "recoverable": True})
+                    continue
+                # Manual "Compact now" request from the composer's context-usage warning
+                # card; fire-and-forget like the frames above so the receive loop stays
+                # responsive to stop/ping while compaction runs.
+                asyncio.create_task(
+                    _compact_safely(
+                        orchestrator,
+                        conversation_id=conversation_id,
+                        curriculum_id=curriculum_id,
+                        owner_uid=uid,
+                        emit=emit,
+                    )
+                )
+                continue
+
             await emit({"type": "error", "message": f"unknown frame type: {frame_type}", "recoverable": True})
 
     except WebSocketDisconnect:
@@ -320,5 +366,30 @@ async def _run_turn_safely(orchestrator: Orchestrator, **kwargs: Any) -> None:
     except Exception:
         logger.exception(
             "background agent turn failed",
+            extra={"extra_fields": {"conversation_id": kwargs.get("conversation_id")}},
+        )
+
+
+async def _compact_safely(orchestrator: Orchestrator, **kwargs: Any) -> None:
+    """Wrap orchestrator.compact_now so a failure in the background task doesn't go silent.
+
+    Mirrors `_run_turn_safely`'s rationale: `compact_now` is launched via
+    `asyncio.create_task` rather than awaited directly, so an unhandled exception would
+    otherwise only surface as an "exception never retrieved" warning at garbage-collection
+    time. This wrapper logs such failures immediately with the conversation id.
+
+    Args:
+        orchestrator (Orchestrator): The orchestrator instance to run compaction on.
+        **kwargs (Any): Forwarded directly to `orchestrator.compact_now` (conversation_id,
+            curriculum_id, owner_uid, emit).
+
+    Returns:
+        None:
+    """
+    try:
+        await orchestrator.compact_now(**kwargs)
+    except Exception:
+        logger.exception(
+            "background manual compaction failed",
             extra={"extra_fields": {"conversation_id": kwargs.get("conversation_id")}},
         )

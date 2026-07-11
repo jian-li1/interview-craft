@@ -1,16 +1,17 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence } from "framer-motion";
 import { Loader2, MessageCircle, WifiOff } from "lucide-react";
 import { MessageBubble } from "@/components/studio/chat/MessageBubble";
+import { CompactionChip } from "@/components/studio/chat/CompactionChip";
 import { PhaseBanner } from "@/components/studio/chat/PhaseBanner";
 import { PlanApprovalCard } from "@/components/studio/chat/PlanApprovalCard";
 import { QuestionCard } from "@/components/studio/chat/QuestionCard";
 import { Composer } from "@/components/studio/chat/Composer";
 import { ScrollToBottomPill } from "@/components/studio/chat/ScrollToBottomPill";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { useChatStore } from "@/stores/useChatStore";
+import { useChatStore, type CompactionItem } from "@/stores/useChatStore";
 import type { ChatSocket } from "@/lib/ws";
 
 interface ChatPanelProps {
@@ -65,6 +66,11 @@ export function ChatPanel({
   const resolvePlan = useChatStore((s) => s.resolvePlan);
   const resolveQuestion = useChatStore((s) => s.resolveQuestion);
   const setAgentRunning = useChatStore((s) => s.setAgentRunning);
+  const compactions = useChatStore((s) => s.compactions);
+  const contextUsage = useChatStore((s) => s.contextUsage);
+  // Derived: true whenever any compaction chip is still in the "running" state — drives
+  // the composer's "Compacting…" button label.
+  const compacting = compactions.some((c) => c.status === "running");
 
   const [draft, setDraft] = useState("");
   const [showScrollPill, setShowScrollPill] = useState(false);
@@ -136,6 +142,11 @@ export function ChatPanel({
     socketRef.current?.sendStop();
   }
 
+  // Manual "Compact now" request from the composer's context-usage warning card.
+  function handleCompact() {
+    socketRef.current?.sendCompact();
+  }
+
   // Forwards the user's approve/modify decision on the WS socket (see
   // ChatSocket.sendPlanDecision) and immediately clears the awaiting-decision
   // flag locally so the PlanApprovalCard disappears without waiting on a
@@ -157,18 +168,38 @@ export function ChatPanel({
     resolveQuestion();
   }
 
-  // The composer is disabled while a plan decision or a clarifying question is
-  // pending (the user must resolve the inline card first) or while the socket
+  // The composer is disabled while a compaction is in flight (sending mid-fold would
+  // race the summary checkpoint), while a plan decision or a clarifying question is
+  // pending (the user must resolve the inline card first), or while the socket
   // isn't open (nothing to send to).
-  const composerDisabled = planAwaitingDecision || pendingQuestion !== null || connectionState !== "open";
+  const composerDisabled =
+    compacting || planAwaitingDecision || pendingQuestion !== null || connectionState !== "open";
 
   // Name the actual blocker in the disabled composer's placeholder — checked in the
   // same precedence order as composerDisabled's clauses above.
-  const composerDisabledPlaceholder = planAwaitingDecision
-    ? "Waiting on plan approval…"
-    : pendingQuestion !== null
-      ? "Answer the question above…"
-      : "Connecting…";
+  const composerDisabledPlaceholder = compacting
+    ? "Auto-compacting conversation…"
+    : planAwaitingDecision
+      ? "Waiting on plan approval…"
+      : pendingQuestion !== null
+        ? "Answer the question above…"
+        : "Connecting…";
+
+  // Groups compaction chips by which message they render after, so they can be
+  // interleaved into the transcript below. A chip's afterMessageId anchors it to a
+  // specific message id UNLESS that id isn't (or isn't yet) present in `messages` —
+  // e.g. a reconnect-replayed chip anchored to a message from before hydrateHistory
+  // loaded — in which case it falls back to the "before the first message" bucket
+  // (keyed by null) rather than silently disappearing.
+  const messageIds = useMemo(() => new Set(messages.map((m) => m.id)), [messages]);
+  const chipsByAnchor = useMemo(() => {
+    const map = new Map<string | null, CompactionItem[]>();
+    for (const c of compactions) {
+      const key = c.afterMessageId !== null && messageIds.has(c.afterMessageId) ? c.afterMessageId : null;
+      map.set(key, [...(map.get(key) ?? []), c]);
+    }
+    return map;
+  }, [compactions, messageIds]);
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -201,8 +232,18 @@ export function ChatPanel({
             />
           ) : (
             <AnimatePresence initial={false}>
+              {/* Chips anchored before the first message (null anchor, or a stale/
+                  not-yet-hydrated anchor id) render first. */}
+              {(chipsByAnchor.get(null) ?? []).map((c) => (
+                <CompactionChip key={c.id} item={c} />
+              ))}
               {messages.map((m) => (
-                <MessageBubble key={m.id} message={m} />
+                <Fragment key={m.id}>
+                  <MessageBubble message={m} />
+                  {(chipsByAnchor.get(m.id) ?? []).map((c) => (
+                    <CompactionChip key={c.id} item={c} />
+                  ))}
+                </Fragment>
               ))}
             </AnimatePresence>
           )}
@@ -236,7 +277,13 @@ export function ChatPanel({
         onSend={handleSend}
         onStop={handleStop}
         disabled={composerDisabled}
+        // Cause-specific placeholder (compacting/plan/question/connecting) — without
+        // this prop Composer silently falls back to a generic "Waiting…".
+        disabledPlaceholder={composerDisabledPlaceholder}
         running={agentRunning}
+        contextUsage={contextUsage}
+        onCompact={handleCompact}
+        compacting={compacting}
       />
     </div>
   );

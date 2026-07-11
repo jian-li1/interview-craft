@@ -178,6 +178,11 @@ export class ChatSocket {
     this.send({ type: "stop" });
   }
 
+  /** Requests a manual compaction pass now (the composer's "Compact now" button). */
+  sendCompact(): void {
+    this.send({ type: "compact" });
+  }
+
   /**
    * Closes the socket intentionally. Sets `manuallyClosed` first so the
    * `onclose` handler above knows not to schedule a reconnect, then tears

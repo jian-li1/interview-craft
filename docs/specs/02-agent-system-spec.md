@@ -239,6 +239,29 @@ during writing-only refinements, etc. — keep filtering simple: a phase→allow
 - The model is replayed each tool call's full `output_full`; only outputs older than the
   last 20 exchanges (`RECENT_TOOL_EXCHANGES_KEPT_FULL`) are truncated to short previews in
   the rebuilt context (full data also lives in Firestore saved sources / sections).
+- `build_context` also accepts `on_compaction_start(tokens_before)` — fired right before
+  the small-model summarization call, so the client can render an in-progress chip ahead
+  of the (potentially slow) LLM round-trip — and `on_context_usage(tokens)` — fired at
+  the end of every call, in both the compaction and no-compaction branches, with the
+  final token estimate of the returned context, driving the composer's context-usage
+  warning card. `token_estimate` on the conversation doc always reflects this same
+  CURRENT (post-compaction, if any ran this call) estimate, and a compaction pass also
+  persists `last_compaction: {tokens_before, tokens_after}` as a checkpoint for the WS
+  reconnect snapshot to replay a resolved chip.
+
+**Manual compaction** (`Orchestrator.compact_now`): the client's "Compact now" button
+(context-usage warning card, shown at >=70% of `CONTEXT_TOKEN_LIMIT`) sends a `compact`
+WS frame, handled by `app/ws/chat.py` spawning `compact_now` as a background task —
+mirroring `run_turn`'s one-run-per-conversation lock (a `compact` frame while a turn is
+active gets a recoverable busy error, not queued). `compact_now` loads the user's LLM
+provider (no search provider — compaction never calls tools) and calls
+`build_context(..., force_compact=True)`, which runs compaction even below the 0.8x
+token threshold as long as there are enough candidate messages (`len(candidate_messages)
+> 2`) to fold meaningfully; the assembled message list is discarded since the point of
+this call is purely the persisted-summary side effect. It streams the same
+`compaction_start` → `compaction` → `context_usage` WS events as auto-compaction; if
+`build_context` skipped compaction anyway (too few messages), `compact_now` emits a
+recoverable "not enough conversation history" error instead of silently no-op'ing.
 
 ## 6. Prompt files (`agent/prompts/*.md`) — write these THOROUGHLY
 

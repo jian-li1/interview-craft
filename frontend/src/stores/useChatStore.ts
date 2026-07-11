@@ -45,6 +45,25 @@ export interface PendingQuestion {
 }
 
 /**
+ * One inline compaction chip rendered in the transcript — either "running" (spinner,
+ * shown as soon as `compaction_start` arrives) or "done" (resolved with token counts
+ * and an expandable full-summary dropdown, from `compaction`). Survives reconnect/reload
+ * via the WS snapshot replay (see `finishCompaction`'s dedupe branch below).
+ */
+export interface CompactionItem {
+  id: string;
+  status: "running" | "done";
+  /** Full rolling summary text (untruncated), shown in the chip's scrollable dropdown. */
+  summary: string | null;
+  tokensBefore: number | null;
+  tokensAfter: number | null;
+  /** Id of the message this chip renders after; null renders it before the first message. */
+  afterMessageId: string | null;
+  /** Id of the last message folded into the summary (from the `compaction` event) — the dedupe key against reconnect-snapshot replays, since a live chip's `afterMessageId` anchor differs from it. */
+  compactedThrough: string | null;
+}
+
+/**
  * One entry in the live "what is the agent doing" activity feed, derived
  * from tool-call start/result WS events. Distinct from `ToolCallRecord`
  * (which lives per-message) — this is a flattened, most-recent-first stream
@@ -85,6 +104,10 @@ interface ChatState {
   /** Most-recent-first feed of tool-call activity, capped at 30 entries — see `startToolCall`/`pushActivity` for why. */
   activity: ActivityItem[];
   connectionState: "idle" | "connecting" | "open" | "reconnecting" | "closed";
+  /** Inline compaction chips interleaved into the transcript (see `CompactionItem`). */
+  compactions: CompactionItem[];
+  /** Latest context-token usage estimate, or null before the first `context_usage` event. */
+  contextUsage: { tokens: number; limit: number; threshold: number } | null;
 
   setConversationId: (id: string | null) => void;
   setCurriculumId: (id: string | null) => void;
@@ -135,6 +158,24 @@ interface ChatState {
   setConnectionState: (state: ChatState["connectionState"]) => void;
   /** Directly pushes an activity entry (prepended, capped at 30) without touching any message's tool_calls — used for activity not tied to a specific message. */
   pushActivity: (item: ActivityItem) => void;
+
+  /** Appends a new "running" compaction chip anchored after the latest message. No-op if one is already running (guards duplicate `compaction_start` events). */
+  startCompaction: () => void;
+  /**
+   * Resolves the in-flight "running" chip in place (if any) with the final full
+   * summary/token counts, keeping its live anchor but recording `compactedThrough` as
+   * the dedupe key. If no running chip exists — this is a WS reconnect snapshot replay —
+   * dedupes against any existing "done" chip with the same `compactedThrough` before
+   * appending a new resolved chip anchored at that fold point.
+   */
+  finishCompaction: (
+    summary: string,
+    tokensBefore: number,
+    tokensAfter: number,
+    compactedThrough: string | null
+  ) => void;
+  /** Records the latest context-token usage estimate for the composer's warning card. */
+  setContextUsage: (tokens: number, limit: number, threshold: number) => void;
 }
 
 /** Converts a persisted `MessageOut` (non-system role) into the UI-side `ChatMessage` shape, with both streaming flags initialized to false since history is never "in flight". */
@@ -188,6 +229,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   agentRunning: false,
   activity: [],
   connectionState: "idle",
+  compactions: [],
+  contextUsage: null,
 
   setConversationId: (id) => set({ conversationId: id }),
   setCurriculumId: (id) => set({ curriculumId: id }),
@@ -238,6 +281,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
       pendingQuestion: null,
       agentRunning: false,
       activity: [],
+      compactions: [],
+      contextUsage: null,
     }),
 
   addUserMessage: (content) =>
@@ -371,6 +416,77 @@ export const useChatStore = create<ChatState>((set, get) => ({
   pushActivity: (item) =>
     // Same cap/ordering rationale as in `startToolCall` above.
     set((s) => ({ activity: [item, ...s.activity].slice(0, 30) })),
+
+  // No-op if a running chip already exists — guards a duplicate compaction_start
+  // (shouldn't happen, but keeps the transcript from ever showing two spinners).
+  startCompaction: () =>
+    set((s) => {
+      if (s.compactions.some((c) => c.status === "running")) return s;
+      const lastMessage = s.messages[s.messages.length - 1];
+      return {
+        compactions: [
+          ...s.compactions,
+          {
+            id: `compaction-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+            status: "running",
+            summary: null,
+            tokensBefore: null,
+            tokensAfter: null,
+            afterMessageId: lastMessage?.id ?? null,
+            // Unknown until the `compaction` event resolves this chip (see finishCompaction).
+            compactedThrough: null,
+          },
+        ],
+      };
+    }),
+
+  finishCompaction: (summary, tokensBefore, tokensAfter, compactedThrough) =>
+    set((s) => {
+      const runningIdx = s.compactions.findIndex((c) => c.status === "running");
+      if (runningIdx !== -1) {
+        // Resolve the in-flight chip in place, keeping its LIVE anchor (the message it
+        // was rendered after when compaction started) rather than snapping to
+        // compactedThrough — the live anchor is what the user was actually looking at.
+        const updated = [...s.compactions];
+        updated[runningIdx] = {
+          ...updated[runningIdx],
+          status: "done",
+          summary,
+          tokensBefore,
+          tokensAfter,
+          // Record the fold point so a later reconnect-snapshot replay of this same
+          // compaction dedupes against this chip (its render anchor stays the live one).
+          compactedThrough,
+        };
+        return { compactions: updated };
+      }
+      // No running chip: this is a WS reconnect snapshot replay. Dedupe on the fold
+      // point (compactedThrough), NOT the render anchor — a chip resolved live keeps
+      // its live anchor, which differs from compactedThrough, so an anchor comparison
+      // would duplicate it on every reconnect.
+      const alreadyReplayed = s.compactions.some(
+        (c) => c.status === "done" && c.compactedThrough === compactedThrough
+      );
+      if (alreadyReplayed) return s;
+      return {
+        compactions: [
+          ...s.compactions,
+          {
+            id: `compaction-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+            status: "done",
+            summary,
+            tokensBefore,
+            tokensAfter,
+            // Replayed chips anchor at the fold point itself — the most meaningful
+            // position when the live anchor is unknown (this socket never saw the run).
+            afterMessageId: compactedThrough,
+            compactedThrough,
+          },
+        ],
+      };
+    }),
+
+  setContextUsage: (tokens, limit, threshold) => set({ contextUsage: { tokens, limit, threshold } }),
 }));
 
 /**

@@ -228,7 +228,9 @@ on change or unmount) and contains the **entire WS-event-to-store dispatch table
 | `plan_proposed` | `proposePlan(plan)` | sets `plan`, `planAwaitingDecision: true` |
 | `user_input_requested` | `askQuestion(question, options)` | sets `pendingQuestion: { question, options }` |
 | `curriculum_updated` | `useCurriculumStore.refetch({scope, moduleId, sectionId})` | a *different* store — refetches the full curriculum from REST |
-| `compaction` | none (chat store untouched) | `toast.info(...)` only |
+| `compaction_start` | `startCompaction()` | appends a "running" `CompactionItem` chip (no-op if one is already running) |
+| `compaction` | `finishCompaction(summary, tokensBefore, tokensAfter, compactedThrough)` | resolves the running chip in place with the full rolling summary, or (reconnect replay) appends an already-done chip, deduped by `compactedThrough` |
+| `context_usage` | `setContextUsage(tokens, limit, threshold)` | drives the composer's context-usage warning card |
 | `agent_done` | `setAgentRunning(false)` | |
 | `error` | none directly | `toast.error(message)`; if `!recoverable`, also `setAgentRunning(false)` |
 | `pong` | none | no-op |
@@ -253,6 +255,10 @@ pendingQuestion: PendingQuestion | null  // { question, options } — request_us
 agentRunning: boolean
 activity: ActivityItem[]             // capped at 30, most-recent-first
 connectionState: "idle" | "connecting" | "open" | "reconnecting" | "closed"
+compactions: CompactionItem[]        // { id, status: "running"|"done", summary (full text),
+                                      //   tokensBefore, tokensAfter, afterMessageId,
+                                      //   compactedThrough (dedupe key) }
+contextUsage: { tokens, limit, threshold } | null
 ```
 
 Additional actions beyond the event table above: `addUserMessage(content)` (optimistic
@@ -264,7 +270,7 @@ repopulates the chat on page load/refresh), `resolvePlan()` (clears
 triggered by any WS event, since the actual pause-lift only happens once the backend
 starts a new turn), `resolveQuestion()` (same pattern as `resolvePlan()`, clears
 `pendingQuestion` once the user answers the question card), `reset()` (clears everything
-except the ids), `setConnectionState`.
+except the ids — including `compactions`/`contextUsage`), `setConnectionState`.
 
 **`stores/useCurriculumStore.ts`** shape: `{ curriculum: CurriculumFull | null, currentId:
 string | null, loading, error, lastUpdatedScope: {scope, moduleId?, sectionId?} | null }`.
@@ -287,14 +293,32 @@ can arrive during the initial fetch. `CurriculumPanel` resets its local `view`/
   historyError, prefillText?, onPrefillConsumed? }`. Manages the composer draft and
   auto-scroll (tracks whether the user scrolled up more than 80px from the bottom to
   decide whether to show `ScrollToBottomPill` instead of auto-scrolling).
-  `composerDisabled = planAwaitingDecision || pendingQuestion !== null ||
-  connectionState !== "open"`. Render order: `PhaseBanner` → a reconnecting banner (if
-  `connectionState === "reconnecting"`) → message list (empty/loading/error states, else
-  an `AnimatePresence` list of `MessageBubble`s) → `PlanApprovalCard` (when a plan awaits
-  a decision) → `QuestionCard` (when a `request_user_input` gate awaits an answer and no
-  plan card is showing) → `ScrollToBottomPill` → `Composer`.
+  `composerDisabled = compacting || planAwaitingDecision || pendingQuestion !== null ||
+  connectionState !== "open"`, with a cause-specific `disabledPlaceholder` in the same
+  precedence order ("Auto-compacting conversation…" first). Render order: `PhaseBanner` →
+  a reconnecting banner (if `connectionState === "reconnecting"`) → message list
+  (empty/loading/error states, else an `AnimatePresence` list interleaving
+  `MessageBubble`s with `CompactionChip`s — grouped by `afterMessageId` via a `useMemo`'d
+  `Map`, chips whose anchor id is null or not (yet) present in `messages` render before
+  the first message) → `PlanApprovalCard` (when a plan awaits a decision) → `QuestionCard`
+  (when a `request_user_input` gate awaits an answer and no plan card is showing) →
+  `ScrollToBottomPill` → `Composer` (passed `contextUsage`, `onCompact`, and
+  `compacting = compactions.some(c => c.status === "running")`).
 - **`Composer.tsx`** — auto-growing textarea (height capped at 200px), Enter sends
-  (Shift+Enter inserts a newline), swaps to a stop button while `running`.
+  (Shift+Enter inserts a newline), swaps to a stop button while `running`. Optional
+  `contextUsage`/`onCompact`/`compacting` props render a warning card attached to the top
+  of the input box (shares its rounding, swapping `rounded-xl`→`rounded-b-xl`) once
+  `tokens/limit >= 0.7` (`CONTEXT_WARN_FRACTION`): "Context X% full", an explanation that
+  auto-compaction fires at `threshold` (80%), and a "Compact now" button (disabled while
+  `running || compacting`, sending `compact` via `onCompact`).
+- **`CompactionChip.tsx`** — full-width divider chip (`hairline — pill — hairline`)
+  rendered by `ChatPanel`'s interleaving logic; `"running"` shows a spinner + "Auto-
+  compacting conversation…", `"done"` shows a fold icon + "Auto-compacted" + a
+  `formatTokens` before/after detail (omitted when `tokensBefore` is 0/null — legacy
+  reconnect replays), and — only when `summary` is non-empty — is itself a button that
+  expands an `AnimatePresence` panel showing the FULL rolling summary in a scroll-capped
+  (`max-h-60 overflow-y-auto`) pane styled like `ReasoningBlock`'s, with the "Summary of
+  compacted history" caption pinned above the scrolling region.
 - **`MessageBubble.tsx`** (`memo`-wrapped) — renders an avatar, `ReasoningBlock` (if
   `reasoning` present, assistant only), a `ToolCallGroup` (if any tool calls, assistant
   only), then the content: plain `whitespace-pre-wrap` text for user messages,

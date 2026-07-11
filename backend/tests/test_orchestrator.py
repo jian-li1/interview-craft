@@ -827,3 +827,99 @@ async def test_successful_fetch_url_strips_stale_prior_fetch_of_same_url(monkeyp
     latest_tc = next(tc for tc in latest_msg["tool_calls"] if tc["id"] == "call_fetch")
     kept = json.loads(latest_tc["output_full"])
     assert kept["content_markdown"] == "# New guide content"
+
+
+@pytest.mark.asyncio
+async def test_compact_now_rejects_when_lock_held(monkeypatch, fake_fs, orchestrator):
+    """Verify `compact_now` mirrors `run_turn`'s concurrency guard: if the per-
+    conversation lock is already held (an agent turn in progress), it emits a
+    recoverable busy error and does not touch the conversation doc at all.
+    """
+    conv, curriculum = _setup_conversation(fake_fs, phase="refinement")
+
+    from app.agent.orchestrator import get_conversation_lock
+
+    lock = get_conversation_lock(conv["id"])
+    await lock.acquire()
+    try:
+        events = []
+
+        async def emit(event):
+            events.append(event)
+
+        await orchestrator.compact_now(
+            conversation_id=conv["id"], curriculum_id=curriculum["id"], owner_uid="uid1", emit=emit
+        )
+
+        assert len(events) == 1
+        assert events[0]["type"] == "error"
+        assert events[0]["recoverable"] is True
+        assert "busy" in events[0]["message"].lower()
+        # No compaction side effects — summary/token_estimate untouched.
+        updated_conv = fake_fs.fs.get_conversation(conv["id"])
+        assert updated_conv["summary"] is None
+    finally:
+        lock.release()
+
+
+@pytest.mark.asyncio
+async def test_compact_now_happy_path_emits_events_and_persists_summary(monkeypatch, fake_fs, orchestrator):
+    """Verify a successful manual compaction over a long fake conversation emits
+    `compaction_start` -> `compaction` -> `context_usage` (in that order) and persists
+    the new summary/compacted_through/last_compaction checkpoint on the conversation doc.
+    """
+    conv, curriculum = _setup_conversation(fake_fs, phase="refinement")
+    for i in range(10):
+        fake_fs.fs.append_message(conv["id"], {"role": "user", "content": f"message number {i} with padding text"})
+
+    monkeypatch.setattr("app.agent.orchestrator.get_llm_provider", lambda *a, **k: ScriptedLLM([]))
+
+    events = []
+
+    async def emit(event):
+        events.append(event)
+
+    await orchestrator.compact_now(
+        conversation_id=conv["id"], curriculum_id=curriculum["id"], owner_uid="uid1", emit=emit
+    )
+
+    event_types = [e["type"] for e in events]
+    assert event_types == ["compaction_start", "compaction", "context_usage"]
+    assert events[1]["compacted_through"] is not None
+    # The compaction event carries the FULL rolling summary under "summary" (no preview field).
+    assert events[1]["summary"] == "stub completion"
+
+    updated_conv = fake_fs.fs.get_conversation(conv["id"])
+    assert updated_conv["summary"] == "stub completion"  # ScriptedLLM.complete()'s fixed return value
+    assert updated_conv["compacted_through"] is not None
+    assert updated_conv["last_compaction"] is not None
+
+
+@pytest.mark.asyncio
+async def test_compact_now_too_few_messages_emits_recoverable_error(monkeypatch, fake_fs, orchestrator):
+    """Verify `compact_now` against a conversation with <=2 messages (too few for
+    compaction to be meaningful, per build_context's own guard) emits the
+    "Not enough conversation history" recoverable error rather than a silent no-op.
+    """
+    conv, curriculum = _setup_conversation(fake_fs, phase="refinement")
+    fake_fs.fs.append_message(conv["id"], {"role": "user", "content": "only one message"})
+
+    monkeypatch.setattr("app.agent.orchestrator.get_llm_provider", lambda *a, **k: ScriptedLLM([]))
+
+    events = []
+
+    async def emit(event):
+        events.append(event)
+
+    await orchestrator.compact_now(
+        conversation_id=conv["id"], curriculum_id=curriculum["id"], owner_uid="uid1", emit=emit
+    )
+
+    # build_context still fires on_context_usage in its no-compaction fallback branch
+    # (per its "both branches" contract), so the error is the LAST event, not the only one.
+    error_events = [e for e in events if e["type"] == "error"]
+    assert len(error_events) == 1
+    assert error_events[0]["recoverable"] is True
+    assert "not enough" in error_events[0]["message"].lower()
+    # No compaction/compaction_start events since build_context's own guard skipped it.
+    assert not any(e["type"] in ("compaction", "compaction_start") for e in events)

@@ -223,7 +223,12 @@ conversations/{convId}
   owner_uid, curriculum_id: str|null, title
   summary: str|null             # rolling compaction summary
   compacted_through: str|null   # last message id folded into summary
-  token_estimate: int
+  token_estimate: int           # CURRENT (post-compaction, if any has run) context
+                                 # token estimate — drives both the compaction trigger
+                                 # and the frontend's context-usage warning card
+  last_compaction: {tokens_before: int, tokens_after: int}|null
+                                 # checkpoint of the most recent compaction pass, used to
+                                 # replay a resolved "Auto-compacted" chip on WS reconnect
   created_at, updated_at
 
 conversations/{convId}/messages/{msgId}
@@ -283,6 +288,9 @@ All frames are JSON: `{ "type": string, ...payload }`.
 {type:"plan_decision", decision:"approve"|"modify", feedback: str|null}
 {type:"stop"}                      # cancel of current agent run — see below, takes effect promptly
 {type:"ping"}
+{type:"compact"}                   # manual compaction request (the composer's "Compact
+                                    # now" button); rejected with a recoverable error while
+                                    # an agent run is active for this conversation
 ```
 
 `stop` aborts promptly rather than only at the next iteration boundary: it interrupts
@@ -312,7 +320,16 @@ immediately after reconnecting to a still-running turn.
       module_id?: str, section_id?: str}                 # frontend refetches affected part
       # scope:"curriculum" — emitted by set_curriculum_title (title/emoji rename); refetch
       # the curriculum summary (dashboard/sidebar title) rather than a specific sub-part.
-{type:"compaction", summary_preview: str, tokens_before: int, tokens_after: int}
+{type:"compaction", summary: str, tokens_before: int, tokens_after: int,
+      compacted_through: str|null}       # summary is the FULL rolling summary text
+      # (untruncated — the client scroll-caps its dropdown); compacted_through is the id
+      # of the last message folded into it
+{type:"compaction_start", tokens_before: int}   # fires right before the (potentially
+      # slow) small-model summarization call, so the client can show an in-progress chip
+{type:"context_usage", tokens: int, limit: int, threshold: float}   # emitted at the end
+      # of every build_context call (compacted or not); drives the composer's
+      # context-usage warning card, shown at >=70% (COMPACTION_TRIGGER_FRACTION=0.8 is
+      # `threshold`, where auto-compaction actually fires)
 {type:"agent_done", status}
 {type:"error", message: str, recoverable: bool}
 {type:"pong"}
@@ -333,6 +350,16 @@ recently connected socket per conversation ("live-socket registry") receives str
 events; if a client reconnects while a turn is still running (e.g. the user navigated
 away and back), the in-flight run keeps streaming to the new connection rather than the
 old, now-dead one.
+
+Two more replayed events, sourced from the conversation doc (not the agent state doc)
+and emitted right after `session_ready`, before the curriculum-scoped snapshot above: if
+`conversation.summary` is set, a `compaction` event replaying the last checkpoint
+(`summary` = the full persisted rolling summary, `tokens_before`/`tokens_after` from
+`last_compaction` — defaulting to 0/0 for legacy conversations predating that field, and
+`compacted_through` from the conversation doc) so a reloaded page restores the resolved
+"Auto-compacted" chip instead of losing it; and, if `conversation.token_estimate` is
+truthy, a `context_usage` event carrying that estimate so the composer's context-usage
+warning card is correct immediately on reconnect rather than waiting for the next turn.
 
 Frontend behavior: on `plan_proposed`, render an interactive approval card in the chat and
 the plan in the right panel; agent run pauses until `plan_decision` arrives (HITL). On

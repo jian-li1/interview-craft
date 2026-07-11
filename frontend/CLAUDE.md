@@ -59,9 +59,11 @@ add a second WS listener elsewhere): `session_ready`→`setCurriculumId`,
 `tool_call_result`→`resolveToolCall`, `message_end`→`endMessage`,
 `phase_change`→`setPhase`, `progress`→`setProgress`, `plan_proposed`→`proposePlan` (all
 on `useChatStore`); `curriculum_updated`→`useCurriculumStore.refetch` (a **different**
-store — REST refetch, not a chat-store field); `compaction`/`error` → toast only (error
-also calls `setAgentRunning(false)` if not recoverable); `agent_done`→
-`setAgentRunning(false)`; `pong` → no-op.
+store — REST refetch, not a chat-store field); `compaction_start`→`startCompaction`,
+`compaction`→`finishCompaction` (renders/resolves the inline transcript chip — no longer
+toast-only), `context_usage`→`setContextUsage` (drives the composer's warning card);
+`error` → toast only (also calls `setAgentRunning(false)` if not recoverable);
+`agent_done`→`setAgentRunning(false)`; `pong` → no-op.
 
 When adding a new server event type: add it to `ServerEvent` in `lib/types.ts`, add a
 case in `useChatSocket.ts`'s dispatch, then add/extend the store action — in that

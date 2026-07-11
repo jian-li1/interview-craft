@@ -83,8 +83,14 @@ class Conversation(ApiModel):
             once the conversation exceeds the compaction token threshold.
         compacted_through (str | None): Id/marker of the last message folded into
             `summary`, so compaction can resume incrementally.
-        token_estimate (int): Running estimate of the conversation's token usage, used
-            to decide when to trigger compaction.
+        token_estimate (int): Running estimate of the conversation's CURRENT (i.e.
+            post-compaction, if any has run) context token usage, used both to decide
+            when to trigger compaction and to drive the frontend's context-usage warning.
+        last_compaction (dict | None): Checkpoint of the most recent compaction pass —
+            `{"tokens_before": int, "tokens_after": int}` — mirrors what
+            `MemoryManager.build_context` persisted; used by the WS reconnect snapshot to
+            replay a resolved "Auto-compacted" chip after a page reload. None if
+            compaction has never run for this conversation.
         created_at (dt.datetime): Timestamp the conversation was created.
         updated_at (dt.datetime): Timestamp of the most recent update.
     """
@@ -96,6 +102,7 @@ class Conversation(ApiModel):
     summary: str | None = None
     compacted_through: str | None = None
     token_estimate: int = 0
+    last_compaction: dict[str, int] | None = None
     created_at: dt.datetime
     updated_at: dt.datetime
 

@@ -113,8 +113,12 @@ tool allowlist (§3) restricting what the LLM can even attempt to call.
    - Re-reads the agent state fresh from Firestore every iteration (`phase` may have
      changed due to a `transition_phase` call in the previous iteration).
    - Calls `MemoryManager.build_context(...)` (§5) to assemble the full message list,
-     passing an `on_compaction` closure that emits the WS `compaction` event if
-     compaction fires this iteration.
+     passing three closures: `on_compaction` (emits the WS `compaction` event, now
+     including `compacted_through`, if compaction fires this iteration),
+     `on_compaction_start` (emits `compaction_start` right before the summarization call
+     so the client can show an in-progress chip), and `on_context_usage` (emits
+     `context_usage` at the end of every call, compacted or not, feeding the composer's
+     warning card).
    - Builds an `AgentContext` (`app/agent/tools/base.py`) bundling everything a tool
      needs: ids, settings, both LLM providers, search provider, current phase, and the
      `emit` callable.
@@ -465,32 +469,49 @@ After assembling the full message list once, `build_context` estimates its token
 `function.name`/`function.arguments` (a separate dataclass field from `content`, easy to
 undercount if you only join `.content`).
 If `tokens_before > COMPACTION_TRIGGER_FRACTION (0.8) * settings.context_token_limit`
+(or the caller passed `force_compact=True` — the manual "Compact now" path, see below)
 **and** a `small_llm` was passed **and** there are more than 2 candidate messages:
 
 1. `select_messages_to_compact(candidate_messages)` splits at
    `cutoff = max(1, int(len(messages) * 0.6))` (or `0` if there's only one message,
    meaning nothing gets compacted) into `(older, remaining)`.
-2. If `older` is non-empty: `run_compaction(small_llm, existing_summary, older)` calls
-   the small model (`llm.complete(..., small=True)`) with `compaction.md` as the system
-   prompt and a user message containing the existing rolling summary (if any) plus every
-   older message rendered via `_render_message_for_summary` (role, seq, a 200-char
-   reasoning preview, content, and one line per tool call with a 200-char output
-   preview).
-3. The new summary **replaces** `conversations/{id}.summary`,
-   `compacted_through` is set to the id of the last compacted message
-   (`older[-1]["id"]`), and `token_estimate` is updated — all via one
+2. If `older` is non-empty: `on_compaction_start(tokens_before)` fires first if provided
+   (so the client can show an in-progress chip before the potentially slow call below),
+   then `run_compaction(small_llm, existing_summary, older)` calls the small model
+   (`llm.complete(..., small=True)`) with `compaction.md` as the system prompt and a user
+   message containing the existing rolling summary (if any) plus every older message
+   rendered via `_render_message_for_summary` (role, seq, a 200-char reasoning preview,
+   content, and one line per tool call with a 200-char output preview).
+3. The new summary **replaces** `conversations/{id}.summary`, `compacted_through` is set
+   to the id of the last compacted message (`older[-1]["id"]`), `token_estimate` is set
+   to `tokens_after` (the POST-compaction estimate — computed before this write, not the
+   `tokens_before` figure that triggered the pass), and `last_compaction:
+   {tokens_before, tokens_after}` is persisted as a checkpoint — all via one
    `fs.update_conversation(...)` call.
 4. The system blocks list is rebuilt with the new summary swapped in for the old one
    (or appended fresh if there wasn't one), and the message list is **reassembled from
    only `remaining`** (the newer ~40%) — this smaller `assembled` list, not the original
    over-budget one, is what actually gets returned and sent to the LLM this iteration.
-5. `on_compaction(preview, tokens_before, tokens_after)` fires if provided — the
-   orchestrator's callback turns this straight into a WS `compaction` event
-   (`summary_preview` = first 300 chars of the new summary).
+5. `on_compaction(summary, tokens_before, tokens_after, compacted_through)` fires if
+   provided — the orchestrator's callback turns this straight into a WS `compaction`
+   event (`summary` = the FULL new rolling summary, untruncated; the client scroll-caps
+   its dropdown). `on_context_usage(tokens_after)` fires last if provided.
 
-If compaction does **not** fire (below threshold, or no `small_llm`, or trivially few
-messages), `build_context` still updates `conversations/{id}.token_estimate` before
-returning, so the running estimate stays visible even between compactions.
+If compaction does **not** fire (below threshold and not forced, or no `small_llm`, or
+trivially few messages), `build_context` still updates `conversations/{id}.token_estimate`
+(as `tokens_before`) before returning, and fires `on_context_usage(tokens_before)` if
+provided, so the running estimate stays visible even between compactions.
+
+**Manual compaction** (`Orchestrator.compact_now`, `app/ws/chat.py`'s `compact` frame
+handler): the composer's context-usage warning card (shown once `context_usage`'s
+`tokens/limit` crosses 70%) sends a `compact` WS frame; the handler spawns
+`compact_now` as a background task, mirroring `run_turn`'s one-run-per-conversation lock
+(busy → recoverable error, not queued). It loads the user's LLM provider (no search
+provider needed) and calls `build_context(..., force_compact=True, ...)` with the same
+three callbacks, discarding the returned message list (the point of the call is purely
+the persisted side effect). If `build_context` still skipped compaction anyway (too few
+candidate messages even with `force_compact`), `compact_now` emits a recoverable "not
+enough conversation history" error instead of silently no-op'ing.
 
 **Token estimation** (`memory/tokens.py`): `estimate_tokens(text)` uses a
 `@lru_cache`d `tiktoken.get_encoding("cl100k_base")` encoder when available, falling

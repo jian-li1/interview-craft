@@ -181,6 +181,8 @@ export interface ConversationSummary {
   summary: string | null;
   compacted_through: string | null;
   token_estimate: number;
+  /** Most recent compaction checkpoint (before/after token counts), or null if never compacted. */
+  last_compaction: { tokens_before: number; tokens_after: number } | null;
   created_at: string;
   updated_at: string;
 }
@@ -238,7 +240,9 @@ export type ClientEvent =
   | { type: "user_message"; content: string }
   | { type: "plan_decision"; decision: "approve" | "modify"; feedback: string | null }
   | { type: "stop" }
-  | { type: "ping" };
+  | { type: "ping" }
+  // Manual "Compact now" request from the composer's context-usage warning card.
+  | { type: "compact" };
 
 // ---------------------------------------------------------------------------
 // WebSocket protocol — Server -> Client
@@ -351,9 +355,27 @@ export interface UserInputRequestedEvent {
 
 export interface CompactionEvent {
   type: "compaction";
-  summary_preview: string;
+  /** Full rolling summary text (untruncated) — rendered in the chip's scrollable dropdown. */
+  summary: string;
   tokens_before: number;
   tokens_after: number;
+  /** Id of the last message folded into the summary — anchors the chip in the transcript. */
+  compacted_through: string | null;
+}
+
+/** Emitted right before the (potentially slow) small-model summarization call starts. */
+export interface CompactionStartEvent {
+  type: "compaction_start";
+  tokens_before: number;
+}
+
+/** Current context-token usage estimate, emitted at the end of every build_context call. */
+export interface ContextUsageEvent {
+  type: "context_usage";
+  tokens: number;
+  limit: number;
+  /** Fraction of `limit` at which auto-compaction fires (COMPACTION_TRIGGER_FRACTION, 0.8). */
+  threshold: number;
 }
 
 export interface AgentDoneEvent {
@@ -390,6 +412,8 @@ export type ServerEvent =
   | UserInputRequestedEvent
   | CurriculumUpdatedEvent
   | CompactionEvent
+  | CompactionStartEvent
+  | ContextUsageEvent
   | AgentDoneEvent
   | ErrorEvent
   | PongEvent;

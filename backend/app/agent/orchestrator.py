@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
-from app.agent.memory.manager import MemoryManager
+from app.agent.memory.manager import COMPACTION_TRIGGER_FRACTION, MemoryManager
 from app.agent.tools.base import AgentContext
 from app.agent.tools.control import PHASE_LABELS
 from app.agent.tools.curriculum import strip_stale_section_content
@@ -293,6 +293,130 @@ class Orchestrator:
                 await emit({"type": "error", "message": f"internal error: {exc}", "recoverable": True})
                 return RunResult(TurnOutcome.ERROR, str(exc))
 
+    async def compact_now(
+        self,
+        *,
+        conversation_id: str,
+        curriculum_id: str,
+        owner_uid: str,
+        emit: Emitter,
+    ) -> None:
+        """Manually trigger compaction for this conversation, bypassing the token threshold.
+
+        Backs the client's "Compact now" button (the `compact` WS frame — see
+        `app/ws/chat.py`). Mirrors `run_turn`'s concurrency guard: since compaction reads
+        the conversation/state doc and mutates the conversation doc, it must not run
+        concurrently with an active agent turn on the same conversation, so it acquires
+        the same per-conversation lock via `get_conversation_lock` and, if already held,
+        emits a recoverable error instead of blocking or queuing. On success it streams
+        the same `compaction_start`/`compaction`/`context_usage` WS events as auto-
+        compaction (via `MemoryManager.build_context(..., force_compact=True)`); the
+        assembled message list itself is discarded since this call's only purpose is the
+        side effect (persisting the new summary checkpoint).
+
+        Args:
+            conversation_id (str): The conversation to compact.
+            curriculum_id (str): The curriculum whose saved sources feed the context
+                assembly (unused for compaction itself, but required by
+                `MemoryManager.build_context`'s signature).
+            owner_uid (str): The authenticated user's uid, used to look up their LLM
+                provider/settings.
+            emit (Emitter): Async callable used to stream WS events to the client.
+
+        Returns:
+            None: Streams events and mutates Firestore as side effects; no return value.
+        """
+        lock = get_conversation_lock(conversation_id)
+        if lock.locked():
+            # Same non-blocking guard as run_turn: a concurrent agent turn already holds
+            # the lock, so compacting now would race its own build_context call.
+            await emit(
+                {
+                    "type": "error",
+                    "message": "Agent is busy — wait for the current run to finish before compacting.",
+                    "recoverable": True,
+                }
+            )
+            return
+
+        async with lock:
+            # Load the LLM provider exactly like _run_turn_inner does — only the LLM is
+            # needed here (no search provider; compaction never calls tools).
+            user = fs.get_user(owner_uid) or {}
+            user_settings = user.get("settings", {}) if isinstance(user, dict) else {}
+            llm = get_llm_provider(user_settings.get("llm_provider"), self._settings)
+            small_llm = llm  # same provider instance routes `small=True` internally
+
+            profile = fs.get_profile(owner_uid)
+            synthesized_profile = profile.get("synthesized_profile") if profile else None
+            state = fs.get_agent_state(curriculum_id) or {
+                "phase": "intake",
+                "task_queue": [],
+                "scratchpad": "",
+                "iteration_count": 0,
+            }
+            phase = state.get("phase", "intake")
+
+            # Tracks whether on_compaction actually fired this call — build_context skips
+            # compaction entirely (even with force_compact=True) if there aren't enough
+            # candidate messages to make folding meaningful (see its >2 guard).
+            compaction_fired = False
+
+            async def on_compaction(summary: str, before: int, after: int, compacted_through: str) -> None:
+                """Forward the compaction result (full rolling summary) and flag that it ran."""
+                nonlocal compaction_fired
+                compaction_fired = True
+                await emit(
+                    {
+                        "type": "compaction",
+                        # Full summary text — the client's chip dropdown scrolls it.
+                        "summary": summary,
+                        "tokens_before": before,
+                        "tokens_after": after,
+                        "compacted_through": compacted_through,
+                    }
+                )
+
+            async def on_compaction_start(before: int) -> None:
+                """Forward the compaction-starting event so the client can show a spinner chip."""
+                await emit({"type": "compaction_start", "tokens_before": before})
+
+            async def on_context_usage(tokens: int) -> None:
+                """Forward the resulting context-token estimate for the composer's usage warning."""
+                await emit(
+                    {
+                        "type": "context_usage",
+                        "tokens": tokens,
+                        "limit": self._settings.context_token_limit,
+                        "threshold": COMPACTION_TRIGGER_FRACTION,
+                    }
+                )
+
+            # Discard the returned message list — this call's only purpose is the
+            # persisted-summary side effect, not to actually send anything to an LLM.
+            await self._memory.build_context(
+                conversation_id=conversation_id,
+                curriculum_id=curriculum_id,
+                phase=phase,
+                synthesized_profile=synthesized_profile,
+                profile=profile,
+                agent_state=state,
+                small_llm=small_llm,
+                force_compact=True,
+                on_compaction=on_compaction,
+                on_compaction_start=on_compaction_start,
+                on_context_usage=on_context_usage,
+            )
+
+            if not compaction_fired:
+                await emit(
+                    {
+                        "type": "error",
+                        "message": "Not enough conversation history to compact yet.",
+                        "recoverable": True,
+                    }
+                )
+
     async def _run_turn_inner(
         self,
         *,
@@ -375,20 +499,56 @@ class Orchestrator:
             state = fs.get_agent_state(curriculum_id) or state
             phase = state.get("phase", phase)
 
-            async def on_compaction(preview: str, before: int, after: int) -> None:
+            async def on_compaction(summary: str, before: int, after: int, compacted_through: str) -> None:
                 """Forward a compaction event to the client via the outer `emit`.
 
                 Args:
-                    preview (str): A short preview of the new rolling summary.
+                    summary (str): The FULL new rolling summary text (untruncated — the
+                        client renders it in a scroll-capped expandable panel).
                     before (int): Estimated token count before compaction.
                     after (int): Estimated token count after compaction.
+                    compacted_through (str): Id of the last message folded into the
+                        summary — lets the client anchor the resolved chip in the
+                        transcript at the right position.
                 """
                 await emit(
                     {
                         "type": "compaction",
-                        "summary_preview": preview,
+                        "summary": summary,
                         "tokens_before": before,
                         "tokens_after": after,
+                        "compacted_through": compacted_through,
+                    }
+                )
+
+            async def on_compaction_start(before: int) -> None:
+                """Forward the compaction-starting event so the client can show a spinner chip.
+
+                Fired right before the (potentially slow) small-model summarization call,
+                so the in-progress state is visible immediately rather than only once
+                compaction finishes.
+
+                Args:
+                    before (int): Estimated token count of the context about to be compacted.
+                """
+                await emit({"type": "compaction_start", "tokens_before": before})
+
+            async def on_context_usage(tokens: int) -> None:
+                """Forward the current context-token estimate for the composer's usage warning.
+
+                Fired at the end of every `build_context` call (compacted or not) so the
+                client can render the "Context X% full" card once usage crosses the warn
+                threshold, ahead of auto-compaction actually triggering.
+
+                Args:
+                    tokens (int): The final token estimate of the context this iteration.
+                """
+                await emit(
+                    {
+                        "type": "context_usage",
+                        "tokens": tokens,
+                        "limit": self._settings.context_token_limit,
+                        "threshold": COMPACTION_TRIGGER_FRACTION,
                     }
                 )
 
@@ -401,6 +561,8 @@ class Orchestrator:
                 agent_state=state,
                 small_llm=small_llm,
                 on_compaction=on_compaction,
+                on_compaction_start=on_compaction_start,
+                on_context_usage=on_context_usage,
             )
 
             ctx = AgentContext(

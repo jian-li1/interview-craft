@@ -228,6 +228,9 @@ class MemoryManager:
         agent_state: dict[str, Any],
         small_llm: LLMProvider | None = None,
         on_compaction=None,
+        force_compact: bool = False,
+        on_compaction_start=None,
+        on_context_usage=None,
     ) -> list[ChatMessage]:
         """Assemble the full message list to send to the LLM this iteration.
 
@@ -236,15 +239,26 @@ class MemoryManager:
         memory, optional saved-sources block, optional rolling summary, then recent
         conversation messages (with old tool outputs truncated via
         `truncate_old_tool_outputs`). If the assembled context exceeds
-        `COMPACTION_TRIGGER_FRACTION` (0.8) of `context_token_limit`, the older ~60% of
-        candidate messages (`select_messages_to_compact`) are summarized via the small
-        model and folded into a new rolling summary, replacing the raw messages in the
-        returned list; the conversation doc's `summary`/`compacted_through`/
-        `token_estimate` fields are updated to persist the new checkpoint. If compaction
-        does not trigger, only `token_estimate` is updated.
+        `COMPACTION_TRIGGER_FRACTION` (0.8) of `context_token_limit` (or `force_compact`
+        is True — used by the manual "Compact now" path), the older ~60% of candidate
+        messages (`select_messages_to_compact`) are summarized via the small model and
+        folded into a new rolling summary, replacing the raw messages in the returned
+        list; the conversation doc's `summary`/`compacted_through`/`token_estimate`/
+        `last_compaction` fields are updated to persist the new checkpoint —
+        `token_estimate` always reflects the CURRENT (post-compaction) context, i.e. it
+        is written as `tokens_after` in the compaction branch, not `tokens_before`. If
+        compaction does not trigger, only `token_estimate` (as `tokens_before`) is
+        updated.
 
-        `on_compaction` is an optional async callback `(summary_preview, tokens_before,
-        tokens_after) -> None` used to emit the WS `compaction` event.
+        `on_compaction` is an optional async callback `(summary, tokens_before,
+        tokens_after, compacted_through) -> None` used to emit the WS `compaction`
+        event — `summary` is the FULL new rolling summary, untruncated.
+        `on_compaction_start` is an optional async callback `(tokens_before) ->
+        None` fired immediately before the (potentially slow) summarization LLM call, so
+        a client can render an in-progress "compacting" chip without waiting for the
+        result. `on_context_usage` is an optional async callback `(tokens) -> None` fired
+        at the end of `build_context` in BOTH branches with the final token estimate of
+        the returned context — used to drive the composer's context-usage warning card.
 
         Args:
             conversation_id (str): The conversation whose messages/summary to load.
@@ -260,8 +274,19 @@ class MemoryManager:
             small_llm (LLMProvider | None): The provider to use for compaction
                 summarization (routed via `small=True`); if None, compaction is skipped
                 even if the token threshold is exceeded.
-            on_compaction: Optional async callback invoked with `(summary_preview,
-                tokens_before, tokens_after)` when compaction actually runs this call.
+            on_compaction: Optional async callback invoked with `(summary,
+                tokens_before, tokens_after, compacted_through)` when compaction
+                actually runs this call — `summary` is the full new rolling summary
+                text, not a truncated preview.
+            force_compact (bool): When True, compaction runs even if `tokens_before` is
+                below the trigger threshold (still requires `small_llm` and more than 2
+                candidate messages) — used by the manual "Compact now" WS frame.
+            on_compaction_start: Optional async callback invoked with `(tokens_before,)`
+                right before `run_compaction` is awaited, so the client can render the
+                in-progress compaction chip ahead of the (potentially slow) LLM call.
+            on_context_usage: Optional async callback invoked with `(tokens,)` — the
+                final token estimate of the context this call returns — at the end of
+                `build_context`, in both the compaction and no-compaction branches.
 
         Returns:
             list[ChatMessage]: The full ordered message list to send to the LLM this
@@ -322,30 +347,28 @@ class MemoryManager:
         tokens_before = estimate_tokens(total_text)
         limit = self._settings.context_token_limit
 
-        # Compaction trigger: only fires when (a) we're over 0.8x the context limit,
-        # (b) a small model is available to do the summarization, and (c) there are
-        # enough candidate messages that compacting is meaningful (>2, so we never try
-        # to compact e.g. a single lingering message down to nothing).
-        if tokens_before > COMPACTION_TRIGGER_FRACTION * limit and small_llm is not None and len(candidate_messages) > 2:
+        # Compaction trigger: fires when (a) we're over 0.8x the context limit OR the
+        # caller forced it (manual "Compact now"), (b) a small model is available to do
+        # the summarization, and (c) there are enough candidate messages that compacting
+        # is meaningful (>2, so we never try to compact e.g. a single lingering message
+        # down to nothing).
+        if (
+            (tokens_before > COMPACTION_TRIGGER_FRACTION * limit or force_compact)
+            and small_llm is not None
+            and len(candidate_messages) > 2
+        ):
             older, remaining = select_messages_to_compact(candidate_messages)
             if older:
                 logger.info(
                     "triggering context compaction",
                     extra={"extra_fields": {"conversation_id": conversation_id, "tokens_before": tokens_before}},
                 )
+                if on_compaction_start:
+                    # Fire BEFORE the (potentially slow) small-model summarization call
+                    # so the client can render the in-progress "compacting" chip right away.
+                    await on_compaction_start(tokens_before)
                 new_summary = await run_compaction(small_llm, existing_summary, older)
                 last_compacted_msg = older[-1]
-                # Persist the new checkpoint: future build_context calls will only load
-                # messages after `last_compacted_msg["id"]` (see `compacted_through` read
-                # above) and will use the merged `new_summary` in place of the old one.
-                fs.update_conversation(
-                    conversation_id,
-                    {
-                        "summary": new_summary,
-                        "compacted_through": last_compacted_msg["id"],
-                        "token_estimate": tokens_before,
-                    },
-                )
                 # Swap the summary block in system_blocks for the freshly merged one,
                 # then rebuild the message list using only the still-recent `remaining`
                 # messages (the `older` ones are now represented solely by the summary).
@@ -355,12 +378,30 @@ class MemoryManager:
                 tokens_after = estimate_tokens(
                     "\n".join(t for m in assembled if (t := _chat_message_text(m)))
                 )
+                # Persist AFTER tokens_after is computed: token_estimate must reflect the
+                # CURRENT (post-compaction) context, not the pre-compaction figure that
+                # triggered this pass. `last_compaction` is a new checkpoint map the WS
+                # reconnect snapshot uses to replay the resolved compaction chip.
+                fs.update_conversation(
+                    conversation_id,
+                    {
+                        "summary": new_summary,
+                        "compacted_through": last_compacted_msg["id"],
+                        "token_estimate": tokens_after,
+                        "last_compaction": {"tokens_before": tokens_before, "tokens_after": tokens_after},
+                    },
+                )
                 if on_compaction:
-                    preview = new_summary[:300]
-                    await on_compaction(preview, tokens_before, tokens_after)
+                    # Full rolling summary, untruncated — the client renders it in a
+                    # scroll-capped expandable panel, so no preview slicing here.
+                    await on_compaction(new_summary, tokens_before, tokens_after, last_compacted_msg["id"])
+                if on_context_usage:
+                    await on_context_usage(tokens_after)
                 return assembled
 
         fs.update_conversation(conversation_id, {"token_estimate": tokens_before})
+        if on_context_usage:
+            await on_context_usage(tokens_before)
         return assembled
 
 

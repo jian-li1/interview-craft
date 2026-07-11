@@ -100,6 +100,24 @@ switcher (unaffected by the divider).
   (including persisted tool calls + reasoning as collapsed blocks). Messages with
   `role: "system"` (internal bookkeeping — auto-continue nudges, plan-approval records) are
   filtered out at the history-load boundary and never rendered in the chat UI.
+- **Compaction chip**: a full-width divider-style chip (`hairline — pill — hairline`)
+  interleaved into the transcript, anchored to the message it ran after. `compaction_start`
+  renders it in a "running" state (spinner + "Auto-compacting conversation…"); while a
+  compaction is running the composer is disabled with an "Auto-compacting conversation…"
+  placeholder. `compaction` resolves the chip in place to "done" (icon + "Auto-compacted"
+  + a `48.2k → 12.1k tokens` detail, omitted when the before-count is 0/legacy) — clicking
+  a done chip expands an AnimatePresence panel showing the FULL rolling `summary` text in
+  a scroll-capped (max-h-60) pane styled like the reasoning block's dropdown, with the
+  "Summary of compacted history" caption pinned outside the scrolling region. Survives
+  page reloads: the WS reconnect snapshot (spec 01 §7) replays a `compaction` event from
+  the conversation doc's persisted checkpoint, which the store appends directly in the
+  "done" state (deduped on the `compacted_through` fold-point id).
+- **Context-usage warning card**: visually attached to the top of the composer's input box
+  (shares its rounded corners so the two read as one unit) once `context_usage`'s
+  `tokens/limit` crosses 70% — warns "Context X% full" and that auto-compaction fires at
+  `threshold` (80%), with a "Compact now" button that sends the `compact` WS frame;
+  disabled while the agent is running or a compaction is already in flight (swaps its
+  label to "Compacting…").
 
 ### Curriculum panel
 Two views, toggle: **Workflow** and **Reader**.

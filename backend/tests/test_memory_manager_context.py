@@ -116,7 +116,10 @@ async def test_build_context_does_not_compact_below_threshold(manager, fake_fs):
 @pytest.mark.asyncio
 async def test_build_context_triggers_compaction_above_threshold(manager, fake_fs, monkeypatch):
     """Force a tiny context_token_limit so a handful of messages exceeds the 0.8x trigger,
-    then verify compaction runs, persists a summary, and fires the on_compaction callback.
+    then verify compaction runs, persists a summary + last_compaction checkpoint (with
+    token_estimate reflecting the POST-compaction figure), fires on_compaction_start
+    before on_compaction, and passes the 4-arg on_compaction form (the FULL untruncated
+    summary plus the compacted-through message id).
 
     Fixtures:
         monkeypatch: Used to shrink `manager._settings.context_token_limit` to 50 so
@@ -131,10 +134,15 @@ async def test_build_context_triggers_compaction_above_threshold(manager, fake_f
         )
 
     small_llm = FakeSmallLLM(summary="## Summary\n\nCondensed everything.")
-    compaction_calls = []
+    # Records (event_name, payload) in the order each callback fires, so ordering
+    # between on_compaction_start and on_compaction can be asserted below.
+    call_order = []
 
-    async def on_compaction(preview, before, after):
-        compaction_calls.append((preview, before, after))
+    async def on_compaction_start(before):
+        call_order.append(("start", before))
+
+    async def on_compaction(summary, before, after, compacted_through):
+        call_order.append(("compaction", summary, before, after, compacted_through))
 
     await manager.build_context(
         conversation_id=conv["id"],
@@ -145,17 +153,139 @@ async def test_build_context_triggers_compaction_above_threshold(manager, fake_f
         agent_state={"phase": "refinement"},
         small_llm=small_llm,
         on_compaction=on_compaction,
+        on_compaction_start=on_compaction_start,
     )
 
     assert len(small_llm.complete_calls) == 1
-    assert len(compaction_calls) == 1
-    preview, before, after = compaction_calls[0]
-    assert preview.startswith("## Summary")
+    # on_compaction_start must fire before on_compaction, both exactly once.
+    assert [c[0] for c in call_order] == ["start", "compaction"]
+    _, start_before = call_order[0]
+    _, summary, before, after, compacted_through = call_order[1]
+    assert start_before == before  # same tokens_before figure in both callbacks
+    # Callback receives the FULL rolling summary, not a truncated preview.
+    assert summary == "## Summary\n\nCondensed everything."
     assert before > after or before >= 0  # after should shrink relative to full context
+    assert compacted_through is not None
 
     updated_conv = fake_fs.fs.get_conversation(conv["id"])
     assert updated_conv["summary"] == "## Summary\n\nCondensed everything."
     assert updated_conv["compacted_through"] is not None
+    # token_estimate must reflect the POST-compaction context (tokens_after), not the
+    # pre-compaction figure that triggered this pass.
+    assert updated_conv["token_estimate"] == after
+    # New checkpoint map persisted for the WS reconnect snapshot to replay the chip.
+    assert updated_conv["last_compaction"] == {"tokens_before": before, "tokens_after": after}
+
+
+@pytest.mark.asyncio
+async def test_build_context_force_compact_below_threshold(manager, fake_fs):
+    """Verify `force_compact=True` triggers compaction even though the default
+    context_token_limit is nowhere near exceeded by a handful of short messages —
+    the manual "Compact now" path — and persists the summary/compacted_through checkpoint.
+    """
+    conv = fake_fs.fs.create_conversation("uid1", "New chat", curriculum_id="cur1")
+    for i in range(5):
+        fake_fs.fs.append_message(conv["id"], {"role": "user", "content": f"short message {i}"})
+
+    small_llm = FakeSmallLLM(summary="## Summary\n\nForced compaction.")
+
+    await manager.build_context(
+        conversation_id=conv["id"],
+        curriculum_id="cur1",
+        phase="refinement",
+        synthesized_profile=None,
+        profile=None,
+        agent_state={"phase": "refinement"},
+        small_llm=small_llm,
+        force_compact=True,
+    )
+
+    assert len(small_llm.complete_calls) == 1
+    updated_conv = fake_fs.fs.get_conversation(conv["id"])
+    assert updated_conv["summary"] == "## Summary\n\nForced compaction."
+    assert updated_conv["compacted_through"] is not None
+
+
+@pytest.mark.asyncio
+async def test_build_context_force_compact_too_few_messages_skips(manager, fake_fs):
+    """Verify `force_compact=True` with only 2 candidate messages does NOT compact —
+    the `len(candidate_messages) > 2` guard applies regardless of `force_compact`, so
+    a lingering couple of messages is never folded down to nothing.
+    """
+    conv = fake_fs.fs.create_conversation("uid1", "New chat", curriculum_id="cur1")
+    fake_fs.fs.append_message(conv["id"], {"role": "user", "content": "first"})
+    fake_fs.fs.append_message(conv["id"], {"role": "assistant", "content": "second"})
+
+    small_llm = FakeSmallLLM()
+    compaction_calls = []
+
+    async def on_compaction(summary, before, after, compacted_through):
+        compaction_calls.append((summary, before, after, compacted_through))
+
+    await manager.build_context(
+        conversation_id=conv["id"],
+        curriculum_id="cur1",
+        phase="refinement",
+        synthesized_profile=None,
+        profile=None,
+        agent_state={"phase": "refinement"},
+        small_llm=small_llm,
+        force_compact=True,
+        on_compaction=on_compaction,
+    )
+
+    assert small_llm.complete_calls == []
+    assert compaction_calls == []
+    updated_conv = fake_fs.fs.get_conversation(conv["id"])
+    assert updated_conv["summary"] is None
+
+
+@pytest.mark.asyncio
+async def test_build_context_on_context_usage_fires_both_branches(manager, fake_fs, monkeypatch):
+    """Verify `on_context_usage` fires exactly once with the final token estimate in
+    both the no-compaction branch (tokens_before) and the compaction branch (tokens_after).
+    """
+    conv = fake_fs.fs.create_conversation("uid1", "New chat", curriculum_id="cur1")
+    fake_fs.fs.append_message(conv["id"], {"role": "user", "content": "short message"})
+
+    usage_calls = []
+
+    async def on_context_usage(tokens):
+        usage_calls.append(tokens)
+
+    # Branch 1: no small_llm at all, well under any threshold — no compaction.
+    await manager.build_context(
+        conversation_id=conv["id"],
+        curriculum_id="cur1",
+        phase="refinement",
+        synthesized_profile=None,
+        profile=None,
+        agent_state={"phase": "refinement"},
+        small_llm=None,
+        on_context_usage=on_context_usage,
+    )
+    assert len(usage_calls) == 1
+    updated_conv = fake_fs.fs.get_conversation(conv["id"])
+    assert usage_calls[0] == updated_conv["token_estimate"]
+
+    # Branch 2: force compaction to run, so on_context_usage should report tokens_after.
+    for i in range(5):
+        fake_fs.fs.append_message(conv["id"], {"role": "user", "content": f"padding message {i}"})
+    small_llm = FakeSmallLLM(summary="## Summary\n\nForced.")
+    await manager.build_context(
+        conversation_id=conv["id"],
+        curriculum_id="cur1",
+        phase="refinement",
+        synthesized_profile=None,
+        profile=None,
+        agent_state={"phase": "refinement"},
+        small_llm=small_llm,
+        force_compact=True,
+        on_context_usage=on_context_usage,
+    )
+    assert len(usage_calls) == 2
+    updated_conv = fake_fs.fs.get_conversation(conv["id"])
+    assert usage_calls[1] == updated_conv["token_estimate"] == updated_conv["last_compaction"]["tokens_after"]
 
 
 @pytest.mark.asyncio

@@ -30,6 +30,9 @@ export function useChatSocket(conversationId: string | null) {
   const proposePlan = useChatStore((s) => s.proposePlan);
   const askQuestion = useChatStore((s) => s.askQuestion);
   const setAgentRunning = useChatStore((s) => s.setAgentRunning);
+  const startCompaction = useChatStore((s) => s.startCompaction);
+  const finishCompaction = useChatStore((s) => s.finishCompaction);
+  const setContextUsage = useChatStore((s) => s.setContextUsage);
   const refetchCurriculum = useCurriculumStore((s) => s.refetch);
 
   useEffect(() => {
@@ -126,8 +129,23 @@ export function useChatSocket(conversationId: string | null) {
             sectionId: event.section_id,
           });
           break;
+        case "compaction_start":
+          // Renders the "Auto-compacting…" spinner chip immediately, ahead of the
+          // (potentially slow) small-model summarization call finishing.
+          startCompaction();
+          break;
         case "compaction":
-          toast.info("Conversation history compacted to save context.");
+          // Resolves the running chip in place (or, on reconnect replay, appends an
+          // already-done chip) — no more toast, the transcript chip is the UI now.
+          finishCompaction(
+            event.summary,
+            event.tokens_before,
+            event.tokens_after,
+            event.compacted_through
+          );
+          break;
+        case "context_usage":
+          setContextUsage(event.tokens, event.limit, event.threshold);
           break;
         case "agent_done":
           setAgentRunning(false);
