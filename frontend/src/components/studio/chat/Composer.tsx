@@ -174,65 +174,78 @@ export function Composer({
               ? (disabledPlaceholder ?? "Waiting…")
               : "Ask anything, or describe what to change…"
           }
-          className="max-h-[200px] w-full resize-none bg-transparent px-2 py-1.5 text-sm outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed"
+          // placeholder:truncate forces the placeholder pseudo-element to a single line with
+          // an ellipsis (independent of the textarea's own multi-line wrap behavior) — at
+          // narrow widths the un-truncated placeholder used to wrap to a 2nd line and get
+          // clipped by the fixed single-row height, rendering as hidden/cut-off text.
+          className="max-h-[200px] w-full resize-none bg-transparent px-2 py-1.5 text-sm outline-none placeholder:truncate placeholder:text-muted-foreground disabled:cursor-not-allowed"
         />
 
-        {/* Chip row: model + search-provider selectors on the left, action button on the
-            right — flex-wrap lets the chips drop to a second line on very narrow widths
-            rather than overflowing the outline. */}
-        <div className="flex flex-wrap items-center gap-1.5 px-1 pb-0.5">
-          <ChipSelect
-            icon={Bot}
-            ariaLabel="Select model"
-            value={selectedModel}
-            onChange={onModelChange}
-            disabled={disabled}
-            options={availableModels.map((m) => ({ id: m.id, label: m.id, badge: m.provider }))}
-          />
-          <ChipSelect
-            icon={Globe}
-            ariaLabel="Select search provider"
-            value={selectedSearchProvider}
-            onChange={onSearchProviderChange}
-            disabled={disabled}
-            options={searchProviders.map((p) => ({ id: p, label: SEARCH_PROVIDER_LABELS[p] ?? p }))}
-          />
-          {/* "Current section as context" toggle — VS Code's "current file as context" chip,
-              adapted for the curriculum Reader. Only rendered when ChatPanel resolves a
-              written, in-context-window section (see its sectionContext memo); a plain toggle
-              button (not a ChipSelect popover), styled to match ChipSelect's chip exactly so
-              it reads as a sibling of the model/search chips. */}
-          {sectionContext !== null && (
-            <button
-              type="button"
-              onClick={onToggleSectionContext}
+        {/* Thin divider between the textarea and the chip row below it. */}
+        <div className="mt-1 border-t border-border" />
+
+        {/* Chip row: model + search-provider selectors on the left, action button pinned to
+            the right. Chips live in their own no-wrap, shrinkable container so on narrow
+            widths they scale down (and truncate their labels) instead of wrapping to a new
+            line or pushing the send/stop button out of place — that button sits outside
+            this wrapper (shrink-0) so it always stays fixed at the row's end. */}
+        <div className="flex items-center gap-1.5 px-1 pt-1.5 pb-0.5">
+          <div className="flex min-w-0 flex-1 items-center gap-1.5">
+            <ChipSelect
+              icon={Bot}
+              ariaLabel="Select model"
+              value={selectedModel}
+              onChange={onModelChange}
               disabled={disabled}
-              aria-pressed={sectionContextOn}
-              aria-label={
-                sectionContextOn ? "Exclude current section as context" : "Include current section as context"
-              }
-              title={
-                sectionContextOn
-                  ? `Sending "${sectionContext.label}" as context — click to exclude`
-                  : `Not sending "${sectionContext.label}" as context — click to include`
-              }
-              className={cn(
-                "flex h-7 max-w-[160px] items-center gap-1.5 rounded-lg border border-border px-2 text-xs text-muted-foreground transition-colors",
-                "hover:bg-accent-soft hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                // Excluded state reads as "off" (dimmed) while staying clickable to re-include.
-                !sectionContextOn && "opacity-50",
-                disabled && "pointer-events-none opacity-50"
-              )}
-            >
-              {sectionContextOn ? (
-                <FileText className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-              ) : (
-                <EyeOff className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-              )}
-              <span className="min-w-0 flex-1 truncate text-left">{sectionContext.label}</span>
-            </button>
-          )}
-          <div className="flex-1" />
+              options={availableModels.map((m) => ({ id: m.id, label: m.id, badge: m.provider }))}
+            />
+            <ChipSelect
+              icon={Globe}
+              ariaLabel="Select search provider"
+              value={selectedSearchProvider}
+              onChange={onSearchProviderChange}
+              disabled={disabled}
+              options={searchProviders.map((p) => ({ id: p, label: SEARCH_PROVIDER_LABELS[p] ?? p }))}
+            />
+            {/* "Current section as context" toggle — VS Code's "current file as context" chip,
+                adapted for the curriculum Reader. Only rendered when ChatPanel resolves a
+                written, in-context-window section (see its sectionContext memo); a plain toggle
+                button (not a ChipSelect popover), styled to match ChipSelect's chip exactly so
+                it reads as a sibling of the model/search chips. */}
+            {sectionContext !== null && (
+              <button
+                type="button"
+                onClick={onToggleSectionContext}
+                disabled={disabled}
+                aria-pressed={sectionContextOn}
+                aria-label={
+                  sectionContextOn ? "Exclude current section as context" : "Include current section as context"
+                }
+                title={
+                  sectionContextOn
+                    ? `Sending "${sectionContext.label}" as context — click to exclude`
+                    : `Not sending "${sectionContext.label}" as context — click to include`
+                }
+                className={cn(
+                  // min-w-0 lets this chip shrink below its label's natural width (it's a
+                  // direct flex item here, unlike ChipSelect's button) so it scales down
+                  // alongside its siblings instead of wrapping to a new line.
+                  "flex h-7 min-w-0 max-w-[160px] items-center gap-1.5 rounded-lg border border-border px-2 text-xs text-muted-foreground transition-colors",
+                  "hover:bg-accent-soft hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                  // Excluded state reads as "off" (dimmed) while staying clickable to re-include.
+                  !sectionContextOn && "opacity-50",
+                  disabled && "pointer-events-none opacity-50"
+                )}
+              >
+                {sectionContextOn ? (
+                  <FileText className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                ) : (
+                  <EyeOff className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                )}
+                <span className="min-w-0 flex-1 truncate text-left">{sectionContext.label}</span>
+              </button>
+            )}
+          </div>
           {running ? (
             <button
               type="button"

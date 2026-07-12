@@ -60,7 +60,10 @@ export function ChipSelect({ icon: Icon, options, value, onChange, disabled, ari
   const label = selected?.label ?? "Select…";
 
   return (
-    <div className="relative" ref={ref}>
+    // min-w-0 overrides the flex default `min-width: auto`, which otherwise pins this
+    // item's minimum size to its unwrapped text width — letting the chip shrink (instead
+    // of wrapping to a new line) when the composer row runs out of horizontal space.
+    <div className="relative min-w-0" ref={ref}>
       <button
         type="button"
         onClick={() => !disabled && setOpen((o) => !o)}
@@ -69,7 +72,9 @@ export function ChipSelect({ icon: Icon, options, value, onChange, disabled, ari
         aria-expanded={open}
         aria-label={ariaLabel}
         className={cn(
-          "flex h-7 max-w-[160px] items-center gap-1.5 rounded-lg border border-border bg-transparent px-2 text-xs text-muted-foreground transition-colors",
+          // w-full tracks this button's width to the parent's (now shrinkable) box so the
+          // chip visually narrows and its label truncates, rather than overflowing.
+          "flex h-7 w-full max-w-[160px] items-center gap-1.5 rounded-lg border border-border bg-transparent px-2 text-xs text-muted-foreground transition-colors",
           // accent-soft (not the vivid --accent fill) keeps hover text readable in both themes.
           "hover:bg-accent-soft hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
           disabled && "pointer-events-none opacity-50"
