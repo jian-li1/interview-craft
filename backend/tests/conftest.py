@@ -15,9 +15,10 @@ os.environ.setdefault("APP_ENV", "development")
 os.environ.setdefault("SESSION_JWT_SECRET", "test-secret-not-for-production-0123456789abcdef")
 os.environ.setdefault("GOOGLE_OAUTH_CLIENT_ID", "test-client-id.apps.googleusercontent.com")
 os.environ.setdefault("FIREBASE_PROJECT_ID", "interview-blueprint-test")
-os.environ.setdefault("LLM_PROVIDER", "openai")
 os.environ.setdefault("OPENAI_API_KEY", "sk-test-not-real")
-os.environ.setdefault("SEARCH_PROVIDER", "duckduckgo")
+# Two-entry list so config list-parsing (Settings.openai_models) is exercised by every
+# test that reads settings, not just the dedicated config tests.
+os.environ.setdefault("OPENAI_MODEL", "gpt-4o,gpt-4o-mini")
 
 import datetime as dt
 from typing import Any
@@ -135,7 +136,7 @@ def fake_fs(monkeypatch) -> FakeFirestore:
             "google_sub": google_sub,
             "created_at": now,
             "last_login_at": now,
-            "settings": {"theme": "system", "llm_provider": None, "search_provider": None},
+            "settings": {"theme": "system"},
             "onboarding_completed": False,
         }
         store.users[uid] = data
@@ -296,7 +297,7 @@ def fake_fs(monkeypatch) -> FakeFirestore:
         current.update(fields)
         current["updated_at"] = store.utcnow()
 
-    def create_conversation(owner_uid, title, curriculum_id):
+    def create_conversation(owner_uid, title, curriculum_id, selected_model=None, search_provider=None):
         """Fake for `firestore.create_conversation` — create a new conversation record."""
         conv_id = store.new_id()
         now = store.utcnow()
@@ -307,6 +308,10 @@ def fake_fs(monkeypatch) -> FakeFirestore:
             "summary": None,
             "compacted_through": None,
             "token_estimate": 0,
+            # Composer chip selections — unset until persisted by a run/reconnect, or
+            # seeded here from the dashboard prompt box's chips.
+            "selected_model": selected_model,
+            "search_provider": search_provider,
             "created_at": now,
             "updated_at": now,
         }

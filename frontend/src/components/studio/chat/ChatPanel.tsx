@@ -69,6 +69,12 @@ export function ChatPanel({
   const setAgentRunning = useChatStore((s) => s.setAgentRunning);
   const compactions = useChatStore((s) => s.compactions);
   const contextUsage = useChatStore((s) => s.contextUsage);
+  const availableModels = useChatStore((s) => s.availableModels);
+  const selectedModel = useChatStore((s) => s.selectedModel);
+  const setSelectedModel = useChatStore((s) => s.setSelectedModel);
+  const searchProviders = useChatStore((s) => s.searchProviders);
+  const selectedSearchProvider = useChatStore((s) => s.selectedSearchProvider);
+  const setSelectedSearchProvider = useChatStore((s) => s.setSelectedSearchProvider);
   // Derived: true whenever any compaction chip is still in the "running" state — drives
   // the composer's "Compacting…" button label.
   const compacting = compactions.some((c) => c.status === "running");
@@ -135,7 +141,9 @@ export function ChatPanel({
     if (!content) return;
     addUserMessage(content);
     setAgentRunning(true);
-    socketRef.current?.sendUserMessage(content);
+    // Forward the composer chips' current selections (omitted when null so the
+    // backend falls through to the conversation's persisted selection / default).
+    socketRef.current?.sendUserMessage(content, selectedModel ?? undefined, selectedSearchProvider ?? undefined);
     setDraft("");
   }
 
@@ -145,7 +153,7 @@ export function ChatPanel({
 
   // Manual "Compact now" request from the composer's context-usage warning card.
   function handleCompact() {
-    socketRef.current?.sendCompact();
+    socketRef.current?.sendCompact(selectedModel ?? undefined, selectedSearchProvider ?? undefined);
   }
 
   // Forwards the user's approve/modify decision on the WS socket (see
@@ -153,7 +161,7 @@ export function ChatPanel({
   // flag locally so the PlanApprovalCard disappears without waiting on a
   // round-trip from the server.
   function handlePlanDecision(decision: "approve" | "modify", feedback: string | null) {
-    socketRef.current?.sendPlanDecision(decision, feedback);
+    socketRef.current?.sendPlanDecision(decision, feedback, selectedModel ?? undefined, selectedSearchProvider ?? undefined);
     resolvePlan();
     // A plan decision starts a new run but adds no local user message, so
     // addUserMessage's timestamping never fires here — mark run start explicitly.
@@ -168,7 +176,7 @@ export function ChatPanel({
   function handleQuestionAnswer(text: string) {
     addUserMessage(text);
     setAgentRunning(true);
-    socketRef.current?.sendUserMessage(text);
+    socketRef.current?.sendUserMessage(text, selectedModel ?? undefined, selectedSearchProvider ?? undefined);
     resolveQuestion();
   }
 
@@ -297,6 +305,12 @@ export function ChatPanel({
         contextUsage={contextUsage}
         onCompact={handleCompact}
         compacting={compacting}
+        availableModels={availableModels}
+        selectedModel={selectedModel}
+        onModelChange={setSelectedModel}
+        searchProviders={searchProviders}
+        selectedSearchProvider={selectedSearchProvider}
+        onSearchProviderChange={setSelectedSearchProvider}
       />
     </div>
   );

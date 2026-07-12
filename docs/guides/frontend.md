@@ -174,8 +174,11 @@ light mode.
 - **Login (`app/login/page.tsx`)** — see §2.
 - **Onboarding (`app/onboarding/page.tsx`)** — see §1.
 - **Dashboard (`app/(app)/dashboard/page.tsx`)** — a time-of-day `greeting()` helper,
-  `PromptBox` (textarea + example-prompt chips; submitting calls
-  `conversationsApi.create({ curriculum_prompt })` then routes to `/studio/{id}`), and
+  `PromptBox` (textarea, a bottom chip row with model/search-provider `ChipSelect`s —
+  options fetched once on mount via `modelsApi.get()` since there's no WS connection yet,
+  rendered only when non-empty — plus example-prompt chips below the box; submitting
+  calls `conversationsApi.create({ curriculum_prompt, selected_model?, search_provider? })`
+  then routes to `/studio/{id}`), and
   `CurriculumGrid` (fetches `curriculaApi.list()` on mount **and polls every 8000ms** via
   `setInterval` for live status/progress updates — a second, independent update
   mechanism from the WS-driven live updates used inside Studio, since the dashboard has
@@ -183,10 +186,10 @@ light mode.
   label/Badge-variant via a `STATUS_META` dict, shows a progress bar for
   `researching|planning|writing|reviewing`, and wraps delete in a `ConfirmDialog`.
 - **Settings (`app/(app)/settings/page.tsx`)** — a custom (non-Radix) `Tabs` component
-  with four tabs: `ProfileTab` (read-only profile display, "Edit background" links to
-  `/onboarding`), `PreferencesTab` (LLM provider select and search provider select —
-  see the discrepancy note below), `AppearanceTab` (light/dark/system), `AccountTab`
-  (email + logout).
+  with three tabs: `ProfileTab` (read-only profile display, "Edit background" links to
+  `/onboarding`), `AppearanceTab` (light/dark/system), `AccountTab` (email + logout). No
+  more `PreferencesTab` — LLM model / search provider selection moved to the chat
+  composer's chips (per-conversation, see §5.4 below), not a settings page.
 
 ## 5. The Studio (`app/(app)/studio/[conversationId]/page.tsx`)
 
@@ -211,8 +214,11 @@ typed send/receive helpers. Connection states: `"idle" | "connecting" | "open" |
   whether to reconnect, avoiding duplicate reconnect scheduling from both handlers
   firing.
 - Public surface: `connect()`, `close()`, `onEvent(handler)`, `onStateChange(handler)`,
-  `getState()`, `send(event)`, plus typed helpers `sendUserMessage(content)`,
-  `sendPlanDecision(decision, feedback)`, `sendStop()`.
+  `getState()`, `send(event)`, plus typed helpers `sendUserMessage(content, model?,
+  searchProvider?)`, `sendPlanDecision(decision, feedback, model?, searchProvider?)`,
+  `sendStop()`, `sendCompact(model?, searchProvider?)`. The optional `model`/
+  `searchProvider` args are the composer's chip selections (§5.4) — included on the
+  frame only when set, so the backend falls through to its own resolution when omitted.
 
 ### 5.2 `useChatSocket` — `hooks/useChatSocket.ts`
 
@@ -221,7 +227,7 @@ on change or unmount) and contains the **entire WS-event-to-store dispatch table
 
 | WS event | Store action invoked | Effect |
 |---|---|---|
-| `session_ready` | `useChatStore.setCurriculumId(curriculum_id)` | |
+| `session_ready` | `setCurriculumId(curriculum_id)`; `setAgentRunning(agent_running)`; `setModelOptions(available_models, selected_model, search_providers, search_provider)` | the third action hydrates the composer's model/search chip option lists + current selection (§5.4) |
 | `message_start` | `startMessage(message_id)` | appends a new assistant message (idempotent on repeat id), sets `agentRunning: true` |
 | `reasoning_delta` | `appendReasoningDelta(id, delta)` | appends to `reasoning`, `reasoningStreaming: true` |
 | `text_delta` | `appendTextDelta(id, delta)` | appends to `content`, `contentStreaming: true` |
@@ -264,6 +270,10 @@ compactions: CompactionItem[]        // { id, status: "running"|"done", summary 
                                       //   tokensBefore, tokensAfter, afterMessageId,
                                       //   compactedThrough (dedupe key) }
 contextUsage: { tokens, limit, threshold } | null
+availableModels: ModelOption[]       // { id, provider: "openai"|"gemini" }[] — composer's model-chip options
+selectedModel: string | null         // composer's current model-chip selection
+searchProviders: string[]            // composer's search-chip options
+selectedSearchProvider: string | null  // composer's current search-chip selection
 ```
 
 Additional actions beyond the event table above: `addUserMessage(content)` (optimistic
@@ -275,7 +285,12 @@ repopulates the chat on page load/refresh), `resolvePlan()` (clears
 triggered by any WS event, since the actual pause-lift only happens once the backend
 starts a new turn), `resolveQuestion()` (same pattern as `resolvePlan()`, clears
 `pendingQuestion` once the user answers the question card), `reset()` (clears everything
-except the ids — including `compactions`/`contextUsage`), `setConnectionState`.
+except the ids — including `compactions`/`contextUsage`/`availableModels`/
+`selectedModel`/`searchProviders`/`selectedSearchProvider`), `setConnectionState`,
+`setModelOptions(models, selectedModel, searchProviders, searchProvider)` (called from
+`session_ready`), `setSelectedModel(id)`/`setSelectedSearchProvider(name)` (local-only —
+called from the composer chips' `onChange`; no WS frame is sent on selection, the value
+is just attached to the next `user_message`/`plan_decision`/`compact` frame).
 
 **`stores/useCurriculumStore.ts`** shape: `{ curriculum: CurriculumFull | null, currentId:
 string | null, loading, error, lastUpdatedScope: {scope, moduleId?, sectionId?} | null }`.
@@ -307,15 +322,36 @@ can arrive during the initial fetch. `CurriculumPanel` resets its local `view`/
   `Map`, chips whose anchor id is null or not (yet) present in `messages` render before
   the first message) → `PlanApprovalCard` (when a plan awaits a decision) → `QuestionCard`
   (when a `request_user_input` gate awaits an answer and no plan card is showing) →
-  `ScrollToBottomPill` → `Composer` (passed `contextUsage`, `onCompact`, and
-  `compacting = compactions.some(c => c.status === "running")`).
-- **`Composer.tsx`** — auto-growing textarea (height capped at 200px), Enter sends
-  (Shift+Enter inserts a newline), swaps to a stop button while `running`. Optional
+  `ScrollToBottomPill` → `Composer` (passed `contextUsage`, `onCompact`,
+  `compacting = compactions.some(c => c.status === "running")`, and the
+  `availableModels`/`selectedModel`/`onModelChange`/`searchProviders`/
+  `selectedSearchProvider`/`onSearchProviderChange` chip props read straight off
+  `useChatStore`). `handleSend`/`handlePlanDecision`/`handleQuestionAnswer`/
+  `handleCompact` all forward `selectedModel ?? undefined`/`selectedSearchProvider ??
+  undefined` into the corresponding `ChatSocket` send method.
+- **`Composer.tsx`** — a single outlined box, column layout: an auto-growing textarea on
+  top (height capped at 200px), Enter sends (Shift+Enter inserts a newline), then a
+  bottom row with the model/search-provider chips on the left, a flexible spacer, and the
+  send/stop button (swaps to stop while `running`) on the right. Optional
   `contextUsage`/`onCompact`/`compacting` props render a warning card attached to the top
   of the input box (shares its rounding, swapping `rounded-xl`→`rounded-b-xl`) once
   `tokens/limit >= 0.7` (`CONTEXT_WARN_FRACTION`): "Context X% full", an explanation that
   auto-compaction fires at `threshold` (80%), and a "Compact now" button (disabled while
   `running || compacting`, sending `compact` via `onCompact`).
+- **`components/ui/ChipSelect.tsx`** — the hand-rolled chip-select primitive backing the
+  model and search-provider chips in both the studio composer and the dashboard
+  `PromptBox` (moved here from `studio/chat/ComposerSelect.tsx` once the dashboard grew
+  its own chips, so it lives with the other `components/ui/` primitives): a compact pill
+  button (icon + current label + chevron) that opens an UPWARD-anchored popover
+  (`absolute bottom-full`, since both host surfaces sit at the bottom of their column and
+  a downward popover would be clipped) listing options with a check mark on the
+  selection and an optional right-aligned muted badge (used for the model chip's
+  `openai`/`gemini` provider tag); closes on outside click, Escape, or picking an option;
+  disabled (non-interactive, reduced opacity) whenever the host composer/box is disabled.
+  Both the trigger and popover option rows hover to `accent-soft` (not a raw `bg-accent`
+  fill, which is unreadable against the chip's muted text in both themes). The module
+  also exports `SEARCH_PROVIDER_LABELS` (duckduckgo → "DuckDuckGo", google → "Google",
+  tavily → "Tavily", falling back to the raw id) so both call sites share one mapping.
 - **`CompactionChip.tsx`** — full-width divider chip (`hairline — pill — hairline`)
   rendered by `ChatPanel`'s interleaving logic; `"running"` shows a spinner + "Auto-
   compacting conversation…", `"done"` shows a fold icon + "Auto-compacted" + a

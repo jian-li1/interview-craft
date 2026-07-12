@@ -56,7 +56,8 @@ iteration — a `transition_phase` call takes effect next iteration, not next tu
 - Working memory is always rebuilt fresh from the state doc — never cache it.
 - Compaction triggers at `tokens_before > 0.8 * CONTEXT_TOKEN_LIMIT`
   (`COMPACTION_TRIGGER_FRACTION`), summarizing the older ~60%
-  (`OLDER_FRACTION_TO_COMPACT`) via the small model. Changing these fractions requires
+  (`OLDER_FRACTION_TO_COMPACT`) via `compaction_llm` — the conversation's currently
+  selected model; there is no separate "small model". Changing these fractions requires
   updating `tests/test_memory.py`/`test_memory_manager_context.py`.
 - Tool-output truncation (`RECENT_TOOL_EXCHANGES_KEPT_FULL = 20`) runs on every
   `build_context` call independent of compaction — full data still lives in Firestore.

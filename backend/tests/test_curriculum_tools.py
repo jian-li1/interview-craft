@@ -59,7 +59,6 @@ def _make_ctx(curriculum_id: str, conversation_id: str) -> AgentContext:
         owner_uid="uid1",
         settings=get_settings(),
         llm=object(),
-        small_llm=object(),
         search=object(),
         phase="intake",
     )

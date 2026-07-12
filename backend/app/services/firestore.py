@@ -147,7 +147,9 @@ def upsert_user_login(
         "google_sub": google_sub,
         "created_at": now,
         "last_login_at": now,
-        "settings": {"theme": "system", "llm_provider": None, "search_provider": None},
+        # Model/search provider selection moved to per-conversation composer chips (see
+        # conversations/{convId}.selected_model/search_provider) — no longer here.
+        "settings": {"theme": "system"},
         "onboarding_completed": False,
     }
     ref.set(data)
@@ -691,7 +693,13 @@ def set_agent_state(curriculum_id: str, fields: dict[str, Any]) -> None:
 # --------------------------------------------------------------------------------------
 
 
-def create_conversation(owner_uid: str, title: str, curriculum_id: str | None) -> dict[str, Any]:
+def create_conversation(
+    owner_uid: str,
+    title: str,
+    curriculum_id: str | None,
+    selected_model: str | None = None,
+    search_provider: str | None = None,
+) -> dict[str, Any]:
     """Create a new `conversations/{id}` document.
 
     Args:
@@ -699,6 +707,13 @@ def create_conversation(owner_uid: str, title: str, curriculum_id: str | None) -
         title (str): Initial title for the conversation.
         curriculum_id (str | None): The curriculum this conversation drives, if any (a
             conversation can exist briefly before a curriculum is created).
+        selected_model (str | None): Already-RESOLVED model id to seed the conversation
+            with (e.g. from the dashboard prompt box's chip); the route layer resolves
+            against `resolve_model` before calling this, so this is stored verbatim.
+            None leaves the field unset, falling back to `Settings.default_model`.
+        search_provider (str | None): Already-RESOLVED search provider name to seed the
+            conversation with, analogous to `selected_model`. None leaves the field
+            unset, falling back to `DEFAULT_SEARCH_PROVIDER`.
 
     Returns:
         dict[str, Any]: The newly created conversation document, including its `id`.
@@ -713,6 +728,11 @@ def create_conversation(owner_uid: str, title: str, curriculum_id: str | None) -
         "summary": None,
         "compacted_through": None,
         "token_estimate": 0,
+        # Composer chip selections — unset until the user picks (or a WS frame
+        # persists) a value; see Conversation model docstring. May also be seeded here
+        # at creation time from the dashboard prompt box's chips.
+        "selected_model": selected_model,
+        "search_provider": search_provider,
         "created_at": now,
         "updated_at": now,
     }

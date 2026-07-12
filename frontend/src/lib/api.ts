@@ -7,6 +7,7 @@ import type {
   CurriculumFull,
   CurriculumSummary,
   MessageOut,
+  ModelOptionsResponse,
   OkResponse,
   PlanOut,
   ProfileIn,
@@ -237,4 +238,17 @@ export const settingsApi = {
  */
 export const healthApi = {
   check: () => apiFetch<{ status: string }>("/api/healthz", { skipAuthRedirect: true }),
+};
+
+// ---------------------------------------------------------------------------
+// Model / search-provider options
+// ---------------------------------------------------------------------------
+
+/**
+ * Wraps `/api/models` — the REST source of model/search-provider chip options for
+ * the dashboard prompt box, which has no WS connection yet (the studio composer
+ * instead hydrates from `session_ready`).
+ */
+export const modelsApi = {
+  get: () => apiFetch<ModelOptionsResponse>("/api/models"),
 };

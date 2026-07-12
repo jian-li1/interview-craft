@@ -133,12 +133,13 @@ async def upload_resume(
 async def synthesize_profile(
     user: CurrentUser = Depends(get_current_user),
 ) -> SynthesizeProfileOut:
-    """Run small-model profile synthesis over the user's onboarding inputs and save it.
+    """Run profile synthesis over the user's onboarding inputs and save it.
 
     Requires the `X-Requested-With` CSRF header (enforced by the router-level
     dependency) and is subject to the shared agent rate limit since it triggers an LLM
-    call. Uses the user's configured LLM provider override if set, otherwise the env
-    default (see `get_llm_provider`).
+    call. Always uses the server default model (first `OPENAI_MODEL` entry — see
+    `get_llm_provider()`/`Settings.default_model`); there is no per-user provider
+    override anymore, since model selection moved to per-conversation composer chips.
 
     Args:
         user (CurrentUser): The authenticated caller, resolved via
@@ -169,14 +170,14 @@ async def synthesize_profile(
         "resume_text": profile.get("resume_text") or "",
     }
 
-    user_settings = fs.get_user(user.uid) or {}
-    llm = get_llm_provider((user_settings.get("settings") or {}).get("llm_provider"))
+    # Server default model — no per-user override anymore (see docstring above).
+    llm = get_llm_provider()
 
     messages = [
         ChatMessage(role="system", content=system_prompt),
         ChatMessage(role="user", content=_render_input_block(input_block)),
     ]
-    synthesized = await llm.complete(messages, small=True)
+    synthesized = await llm.complete(messages)
     synthesized = synthesized.strip()
 
     fs.upsert_profile(user.uid, {"synthesized_profile": synthesized})

@@ -25,8 +25,8 @@ from app.core.config import Settings
 from app.core.logging import get_logger
 from app.services import firestore as fs
 from app.services.llm.base import ChatMessage, Done, ReasoningDelta, TextDelta, ToolCallDelta
-from app.services.llm.factory import get_llm_provider
-from app.services.search.factory import get_search_provider
+from app.services.llm.factory import get_llm_provider, resolve_model
+from app.services.search.factory import get_search_provider, resolve_search_provider
 
 logger = get_logger(__name__)
 
@@ -224,8 +224,8 @@ class Orchestrator:
         owner_uid: str,
         user_input: str | PlanDecision | None,
         emit: Emitter,
-        llm_provider_override: str | None = None,
-        search_provider_override: str | None = None,
+        model: str | None = None,
+        search_provider: str | None = None,
     ) -> RunResult:
         """Run a bounded ReAct loop for one user turn, streaming events via `emit`.
 
@@ -243,8 +243,7 @@ class Orchestrator:
             conversation_id (str): The conversation this turn belongs to; also the key
                 for the per-conversation lock/cancel event.
             curriculum_id (str): The curriculum this conversation is building/refining.
-            owner_uid (str): The authenticated user's uid, used for profile/settings
-                lookups and passed into `AgentContext`.
+            owner_uid (str): The authenticated user's uid, passed into `AgentContext`.
             user_input (str | PlanDecision | None): A plain user chat message, a
                 `PlanDecision` (resuming a `propose_task_plan` HITL gate), or None (e.g.
                 resuming after a `request_user_input` gate via an ordinary message is
@@ -253,10 +252,13 @@ class Orchestrator:
                 the agent state doc, since it answers/dismisses that gate if one was open.
             emit (Emitter): Async callable used to stream WS events to the client for
                 this turn.
-            llm_provider_override (str | None): Optional per-call override of the LLM
-                provider, beating both env default and the user's saved setting.
-            search_provider_override (str | None): Optional per-call override of the
-                search provider, beating both env default and the user's saved setting.
+            model (str | None): Optional per-call model selection (from the composer's
+                model chip, sent on the WS frame); beats the conversation doc's
+                persisted `selected_model`, which beats `Settings.default_model`. See
+                `_run_turn_inner` for the full resolution/persistence logic.
+            search_provider (str | None): Optional per-call search provider selection
+                (from the composer's search chip); beats the conversation doc's
+                persisted `search_provider`, which beats `DEFAULT_SEARCH_PROVIDER`.
 
         Returns:
             RunResult: The terminal outcome and optional detail message for this turn.
@@ -293,8 +295,8 @@ class Orchestrator:
                     user_input=user_input,
                     emit=emit,
                     cancel_event=cancel_event,
-                    llm_provider_override=llm_provider_override,
-                    search_provider_override=search_provider_override,
+                    model=model,
+                    search_provider=search_provider,
                     run_started=run_started,
                 )
             except Exception as exc:  # last-resort guard: the loop itself must not crash the WS
@@ -321,6 +323,7 @@ class Orchestrator:
         curriculum_id: str,
         owner_uid: str,
         emit: Emitter,
+        model: str | None = None,
     ) -> None:
         """Manually trigger compaction for this conversation, bypassing the token threshold.
 
@@ -340,9 +343,13 @@ class Orchestrator:
             curriculum_id (str): The curriculum whose saved sources feed the context
                 assembly (unused for compaction itself, but required by
                 `MemoryManager.build_context`'s signature).
-            owner_uid (str): The authenticated user's uid, used to look up their LLM
-                provider/settings.
+            owner_uid (str): The authenticated user's uid (kept for signature symmetry
+                with `run_turn`; no longer used to look up per-user provider settings).
             emit (Emitter): Async callable used to stream WS events to the client.
+            model (str | None): Optional per-call model selection (from the composer's
+                model chip); beats the conversation doc's persisted `selected_model`,
+                which beats `Settings.default_model` — same resolution as `run_turn`, so
+                compaction always runs on the model the user actually has selected.
 
         Returns:
             None: Streams events and mutates Firestore as side effects; no return value.
@@ -361,12 +368,16 @@ class Orchestrator:
             return
 
         async with lock:
-            # Load the LLM provider exactly like _run_turn_inner does — only the LLM is
-            # needed here (no search provider; compaction never calls tools).
-            user = fs.get_user(owner_uid) or {}
-            user_settings = user.get("settings", {}) if isinstance(user, dict) else {}
-            llm = get_llm_provider(user_settings.get("llm_provider"), self._settings)
-            small_llm = llm  # same provider instance routes `small=True` internally
+            # Resolve the effective model: frame value -> conversation doc's persisted
+            # selection -> server default. No more per-user settings lookup.
+            conversation = fs.get_conversation(conversation_id) or {}
+            effective_model = model or conversation.get("selected_model")
+            _provider_name, model_id = resolve_model(effective_model, self._settings)
+            if model_id != conversation.get("selected_model"):
+                # Persist the resolved selection so it's restored on reconnect, mirroring
+                # _run_turn_inner's persistence.
+                fs.update_conversation(conversation_id, {"selected_model": model_id})
+            llm = get_llm_provider(model_id, self._settings)
 
             profile = fs.get_profile(owner_uid)
             synthesized_profile = profile.get("synthesized_profile") if profile else None
@@ -422,7 +433,7 @@ class Orchestrator:
                 synthesized_profile=synthesized_profile,
                 profile=profile,
                 agent_state=state,
-                small_llm=small_llm,
+                compaction_llm=llm,
                 force_compact=True,
                 on_compaction=on_compaction,
                 on_compaction_start=on_compaction_start,
@@ -447,8 +458,8 @@ class Orchestrator:
         user_input: str | PlanDecision | None,
         emit: Emitter,
         cancel_event: asyncio.Event,
-        llm_provider_override: str | None,
-        search_provider_override: str | None,
+        model: str | None,
+        search_provider: str | None,
         run_started: float,
     ) -> RunResult:
         """Run the actual ReAct loop body, already holding the per-conversation lock.
@@ -469,9 +480,12 @@ class Orchestrator:
             cancel_event (asyncio.Event): Cleared at the start of this turn; checked at
                 each iteration boundary and mid-stream to support cooperative
                 cancellation from a `stop` WS frame.
-            llm_provider_override (str | None): Optional per-call LLM provider override.
-            search_provider_override (str | None): Optional per-call search provider
-                override.
+            model (str | None): Optional per-call model selection (composer chip);
+                resolved against the conversation doc's persisted `selected_model` and
+                `Settings.default_model` — see the resolution block below.
+            search_provider (str | None): Optional per-call search provider selection
+                (composer chip); resolved against the conversation doc's persisted
+                `search_provider` and `DEFAULT_SEARCH_PROVIDER`.
             run_started (float): `time.monotonic()` timestamp captured by `run_turn`
                 right before this call, used to compute the server-measured
                 `elapsed_ms` stamped on `agent_done` and on the run's tail message.
@@ -509,11 +523,27 @@ class Orchestrator:
             await emit({"type": "agent_done", "status": status, "elapsed_ms": elapsed})
             return elapsed
 
-        user = fs.get_user(owner_uid) or {}
-        user_settings = user.get("settings", {}) if isinstance(user, dict) else {}
-        llm = get_llm_provider(llm_provider_override or user_settings.get("llm_provider"), self._settings)
-        small_llm = llm  # same provider instance handles `small=True` model routing internally
-        search = get_search_provider(search_provider_override or user_settings.get("search_provider"), self._settings)
+        # Resolve model/search provider: frame value (this call's `model`/
+        # `search_provider` args) wins, else the conversation doc's persisted
+        # selection, else the server default — no more per-user settings lookup.
+        conversation_doc = fs.get_conversation(conversation_id) or {}
+        effective_model = model or conversation_doc.get("selected_model")
+        _provider_name, resolved_model = resolve_model(effective_model, self._settings)
+        resolved_search = resolve_search_provider(
+            search_provider or conversation_doc.get("search_provider"), self._settings
+        )
+        # Persist the resolved values when they differ from what's stored, so the next
+        # reconnect/run picks up the same selection without the client resending it.
+        persist_fields: dict[str, Any] = {}
+        if resolved_model != conversation_doc.get("selected_model"):
+            persist_fields["selected_model"] = resolved_model
+        if resolved_search != conversation_doc.get("search_provider"):
+            persist_fields["search_provider"] = resolved_search
+        if persist_fields:
+            fs.update_conversation(conversation_id, persist_fields)
+
+        llm = get_llm_provider(resolved_model, self._settings)
+        search = get_search_provider(resolved_search, self._settings)
 
         # Record the incoming user turn (unless this is a plan_decision resume, which has
         # no new chat message of its own — it's handled as a synthetic tool observation).
@@ -614,7 +644,7 @@ class Orchestrator:
                 synthesized_profile=synthesized_profile,
                 profile=profile,
                 agent_state=state,
-                small_llm=small_llm,
+                compaction_llm=llm,
                 on_compaction=on_compaction,
                 on_compaction_start=on_compaction_start,
                 on_context_usage=on_context_usage,
@@ -626,7 +656,6 @@ class Orchestrator:
                 owner_uid=owner_uid,
                 settings=self._settings,
                 llm=llm,
-                small_llm=small_llm,
                 search=search,
                 phase=phase,
                 emit=emit,

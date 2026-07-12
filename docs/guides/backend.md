@@ -22,7 +22,9 @@ Entry point: `backend/app/main.py`, function `create_app()`. It:
    :8000 are different origins).
 4. Includes routers in this order: `health`, `auth`, `onboarding`, `curricula`,
    `conversations`, `settings`, and the WS router (`app/ws/chat.py`).
-5. Registers a startup event that logs `app_env` and `llm_provider`.
+5. Registers a startup event that logs `app_env` and `default_model` (the first
+   `OPENAI_MODEL` entry — there's no single fixed provider to log anymore since model
+   selection is per-conversation).
 6. Module-level `app = create_app()` — this is what `uvicorn app.main:app` serves.
 
 Run it locally with `uvicorn app.main:app --reload --port 8000` (from `backend/`, inside
@@ -44,13 +46,21 @@ troubleshooting section of [setup-local.md](setup-local.md)).
 Every other field has a sane default matching `docs/specs/01-architecture-and-contracts.md
 §4` exactly: `app_env`, `port`, `frontend_origin`, `session_jwt_expires_min`,
 `firebase_project_id`, `google_application_credentials`, `firestore_emulator_host`,
-`llm_provider` (`openai|gemini`), `openai_api_key`/`openai_model`/
-`openai_small_model`/`openai_base_url`, `gemini_api_key`/`gemini_model`/
-`gemini_small_model`, `search_provider` (`duckduckgo|google|tavily`),
+`openai_api_key`/`openai_model`/`openai_base_url`, `gemini_api_key`/`gemini_model`,
 `google_cse_api_key`/`google_cse_engine_id`/`tavily_api_key`, `agent_max_iterations`
 (60), `context_token_limit` (100,000). `Settings.is_production` is a convenience
 property (`app_env == "production"`) used to decide whether the session cookie gets
 `Secure`.
+
+`openai_model`/`gemini_model` are RAW comma-separated strings (env var names unchanged)
+— three derived properties do the real work: `openai_models`/`gemini_models` (`list[str]`,
+split on `,`, stripped, empties dropped) and `default_model` (the first entry of
+`openai_models`, falling back to the first of `gemini_models` if that's somehow empty).
+There is no more `llm_provider`/`search_provider` field, and no separate
+`openai_small_model`/`gemini_small_model` — model selection is per-conversation now (see
+§5) rather than a single server-wide default, and there's no "small model" concept
+(compaction/profile synthesis just use a normal provider instance for whichever model
+applies).
 
 ## 3. Auth flow end to end
 
@@ -102,9 +112,9 @@ Implementation:
   - `GET /api/auth/me` — depends on `get_current_user`, returns `UserOut` (404→401 if the
     user doc has vanished, which shouldn't normally happen).
 - On first login, `fs.upsert_user_login` (in `app/services/firestore.py`) creates
-  `users/{uid}` with `settings: {theme: "system", llm_provider: null, search_provider:
-  null}` and `onboarding_completed: false`. Subsequent logins just refresh
-  `last_login_at`, `name`, `picture`.
+  `users/{uid}` with `settings: {theme: "system"}` and `onboarding_completed: false`
+  (no `llm_provider`/`search_provider` anymore — those moved to per-conversation
+  composer chips). Subsequent logins just refresh `last_login_at`, `name`, `picture`.
 
 ### 3.2 Request-scoped auth dependencies — `app/core/deps.py`
 
@@ -159,6 +169,7 @@ All routers live in `backend/app/api/` and are mounted with their own `prefix` i
 | `onboarding.py` | `/api/onboarding` | `GET ""`, `PUT ""`, `POST /resume`, `POST /synthesize` |
 | `curricula.py` | `/api/curricula` | `GET ""`, `GET /{id}`, `DELETE /{id}`, `GET /{id}/plan` |
 | `conversations.py` | `/api/conversations` | `GET ""`, `POST ""`, `GET /{id}/messages` |
+| `models.py` | `/api/models` | `GET ""` — read-only, no CSRF dependency |
 | `settings.py` | `/api/settings` | `GET ""`, `PUT ""` |
 
 Notable implementation details per router:
@@ -172,9 +183,9 @@ Notable implementation details per router:
     (via a local `_load_profile_synthesis_prompt()` helper — note this duplicates the
     "read a prompt file" pattern rather than reusing `MemoryManager`'s `PromptLibrary`;
     see the accuracy notes at the end of this doc), renders the profile's raw fields into
-    a flat `key: value` block (`_render_input_block`), and calls
-    `llm.complete(messages, small=True)` — i.e. the profile-synthesis LLM call always
-    uses the **small** model regardless of provider.
+    a flat `key: value` block (`_render_input_block`), and calls `get_llm_provider()`
+    (no args — always the server default, first `OPENAI_MODEL` entry, since there's no
+    conversation here to inherit a selection from) then `llm.complete(messages)`.
 - **`curricula.py`**: `get_curriculum_full` nests modules and their sections into one
   `CurriculumFull` response — this is a full N+1 read pattern (`list_modules` then
   `list_sections` per module) but is the only way the current Firestore repo layer
@@ -184,10 +195,25 @@ Notable implementation details per router:
   If `curriculum_prompt` is provided, it creates both a `conversations/{id}` doc and a
   linked `curricula/{id}` doc (`status="researching"`), and seeds
   `curricula/{id}/state/main` with `phase="intake"` and an empty task queue — this is the
-  state the orchestrator will read on the very first WS `user_message` frame.
-- **`settings.py`**: `PUT` uses `body.model_dump(exclude_unset=True)` so a client can send
-  a partial update (e.g. just `{"theme": "dark"}`) without clobbering `llm_provider`/
-  `search_provider`; `fs.update_user_settings` merges rather than replaces.
+  state the orchestrator will read on the very first WS `user_message` frame. The request
+  body also accepts optional `selected_model`/`search_provider` (the dashboard prompt
+  box's chip selections); when present they're resolved via `resolve_model`/
+  `resolve_search_provider` and the RESOLVED values are persisted on the new conversation
+  doc — a null/omitted value is left null rather than resolved to the default, so the doc
+  can still distinguish "never chosen" from "chose the default".
+- **`models.py`**: `GET /api/models` is a pure computed response over
+  `available_models(settings)` / `available_search_providers(settings)` plus
+  `settings.default_model` / `DEFAULT_SEARCH_PROVIDER` — backs the dashboard prompt box's
+  chips, which have no WS connection yet to hydrate from (unlike the studio composer's
+  `session_ready`-driven chips).
+- **`settings.py`**: `UserSettings`/`UserSettingsUpdate` now only carry `theme` (LLM
+  model / search provider are per-conversation composer chips, not user settings
+  anymore). `PUT` uses `body.model_dump(exclude_unset=True)` so a client can send a
+  partial update without clobbering other fields; `fs.update_user_settings` merges
+  rather than replaces (still generic — an explicit `null` clears a key back to
+  default). `ApiModel`'s `extra="ignore"` config means a stored `users/{uid}.settings`
+  doc still carrying the old `llm_provider`/`search_provider` keys from before this
+  change deserializes fine — those keys are just dropped on parse.
 
 ## 5. WebSocket endpoint lifecycle
 
@@ -252,6 +278,16 @@ Key mechanics:
   cleanup of the conversation lock/cancel-event dicts (they're keyed by conversation id
   and just persist for the process lifetime; harmless memory growth, not addressed by
   any TTL/cleanup).
+- **Model/search-provider selection**: `session_ready` carries `available_models`
+  (`available_models(settings)`), `selected_model` (the conversation's persisted
+  selection, resolved/validated via `resolve_model`), `search_providers`
+  (`available_search_providers(settings)`), and `search_provider` (resolved via
+  `resolve_search_provider`) — this is what hydrates the composer's model/search chips
+  on connect. `user_message`/`plan_decision`/`compact` frames may carry optional
+  `model`/`search_provider` fields (the chips' current selections); these are forwarded
+  straight to `Orchestrator.run_turn`/`compact_now`, which resolve them (frame value →
+  the conversation doc's persisted selection → server default) and persist the resolved
+  value back onto the conversation doc when it changes.
 
 ## 6. Firestore service & schema — `app/services/firestore.py`
 
@@ -297,9 +333,15 @@ Noteworthy repository behaviors:
 
 ```python
 class LLMProvider(Protocol):
-    async def chat_stream(self, messages: list[ChatMessage], tools: list[ToolSpec] | None = None, small: bool = False) -> AsyncIterator[LLMEvent]: ...
-    async def complete(self, messages: list[ChatMessage], small: bool = False) -> str: ...
+    async def chat_stream(self, messages: list[ChatMessage], tools: list[ToolSpec] | None = None) -> AsyncIterator[LLMEvent]: ...
+    async def complete(self, messages: list[ChatMessage]) -> str: ...
 ```
+
+There is no `small` parameter and no "small model" concept — each provider INSTANCE is
+bound to exactly one model at construction, so compaction and profile synthesis just use
+a normal provider instance for whichever model applies (the conversation's selected
+model for compaction; the server default for profile synthesis, which has no
+conversation to inherit from).
 
 `LLMEvent = TextDelta | ReasoningDelta | ToolCallDelta | Done`. Providers themselves split
 reasoning (`ReasoningDelta`) from answer text (`TextDelta`) using each API's native
@@ -317,7 +359,7 @@ JSON fragments, regardless of provider.
   concatenating `arguments` JSON string fragments until the stream ends, then
   `json.loads`-parses each (falling back to `{}` on parse failure, logged as a warning)
   and yields one `ToolCallDelta` per assembled call, followed by a final `Done
-  (finish_reason=...)`. `small=True` swaps in `OPENAI_SMALL_MODEL`.
+  (finish_reason=...)`.
 - **`gemini_provider.py` (`GeminiProvider`)** — wraps `google.genai.Client`. Requires
   `GEMINI_API_KEY`. `_translate_schema` recursively converts our JSON-schema `ToolSpec`
   parameters into Gemini's `Schema` dict shape (`STRING`/`NUMBER`/`INTEGER`/`BOOLEAN`/
@@ -327,12 +369,21 @@ JSON fragments, regardless of provider.
   role `Part.from_function_response`, and `assistant`→`model` / everything else→`user`.
   Tool calls from Gemini are synthesized IDs (`f"gemini-call-{call_counter}"`) since
   Gemini's function-calling protocol doesn't hand back a call id the way OpenAI's does.
-- **`factory.py`**: `get_llm_provider(user_override, settings)` resolves the provider
-  name as `user_override or settings.llm_provider`, then calls an `@lru_cache`d
-  `_build_provider(name)`. Providers are effectively singletons per name — cheap since
-  they're stateless aside from their configured HTTP client.
+- **`factory.py`**: model-based resolution, not a fixed provider name.
+  `resolve_model(model, settings) -> (provider_name, model_id)` searches
+  `settings.openai_models` first, then `settings.gemini_models` (only if
+  `gemini_api_key` is set — no working client otherwise); a `None`/unknown/unavailable
+  request falls back to `(provider-of-default, settings.default_model)` (logging a
+  warning for unknown non-`None` values). `available_models(settings)` lists the
+  composer's model-chip options (all OpenAI models, then Gemini models when the key is
+  set, deduped by id). `get_llm_provider(model, settings)` resolves via `resolve_model`
+  then calls an `@lru_cache`d `_build_provider(provider_name, model_id)` — the cache key
+  now includes the model id, since each distinct model gets its own provider instance
+  (no more single-instance-with-small-model-routing). Providers are effectively
+  singletons per `(provider, model)` pair — cheap since they're stateless aside from
+  their configured HTTP client.
 - **Self-hosted / OpenAI-compatible endpoints**: there is no separate provider value for
-  this. Point `LLM_PROVIDER=openai` at any OpenAI-compatible server (vLLM, Ollama,
+  this. Point an `OPENAI_MODEL` entry at any OpenAI-compatible server (vLLM, Ollama,
   LM Studio, etc.) by setting `OPENAI_BASE_URL` to that server's URL — the same
   `OpenAIProvider` client is reused, exactly as the root `CLAUDE.md` describes.
 
@@ -368,9 +419,14 @@ snippet}]`.
   regardless of the requested `max_results`.
 - **`tavily.py` (`TavilySearchProvider`)** — POSTs to `https://api.tavily.com/search`
   with `include_raw_content: False`; maps Tavily's `content` field to our `snippet`.
-- **`factory.py`**: same override pattern as the LLM factory —
-  `get_search_provider(user_override, settings)` → `user_override or
-  settings.search_provider` → `@lru_cache`d `_build_provider(name)`.
+- **`factory.py`**: `DEFAULT_SEARCH_PROVIDER = "duckduckgo"` (always available, keyless).
+  `available_search_providers(settings)` lists the composer's search-chip options:
+  duckduckgo always, plus google when BOTH `google_cse_api_key`/`google_cse_engine_id`
+  are set, plus tavily when `tavily_api_key` is set. `resolve_search_provider(name,
+  settings)` validates a requested name against that list, falling back to the default
+  for `None`/unknown/unavailable requests. `get_search_provider(name, settings)`
+  resolves via `resolve_search_provider` then calls an `@lru_cache`d
+  `_build_provider(name)`.
 
 ## 9. Resume parsing — `app/services/resume_parser.py`
 
@@ -448,22 +504,23 @@ Two central fixtures:
   test modules define minimal stand-ins inline: `test_orchestrator.py`'s `ScriptedLLM`
   yields a pre-programmed list of `LLMEvent`s from `chat_stream` (so a test can script
   "the model calls `propose_task_plan`" deterministically) and `StubSearch` always
-  returns `[]`; `test_memory_manager_context.py`'s `FakeSmallLLM` records every
+  returns `[]`; `test_memory_manager_context.py`'s `FakeCompactionLLM` records every
   `complete()` call and returns a canned compaction summary so compaction tests can
-  assert exactly when/how often the small model was invoked. These get injected either
-  by monkeypatching `app.agent.orchestrator.get_llm_provider` /
+  assert exactly when/how often the compaction LLM was invoked (there's no separate
+  "small model" anymore — compaction runs on the conversation's selected model). These
+  get injected either by monkeypatching `app.agent.orchestrator.get_llm_provider` /
   `get_search_provider`, or by direct constructor injection where the class under test
   takes a provider as an argument.
 
-92 tests currently pass (`python -m pytest -q` → `92 passed`), covering: app boot/smoke
+217+ tests currently pass (`python -m pytest -q`), covering: app boot/smoke
 (`test_app_smoke.py`), auth+CSRF (`test_auth_and_csrf.py`), the SSRF guard
-(`test_ssrf_guard.py`),
-memory assembly + compaction thresholds (`test_memory.py`,
+(`test_ssrf_guard.py`), memory assembly + compaction thresholds (`test_memory.py`,
 `test_memory_manager_context.py`), the tool registry's phase filtering and
 error-safety (`test_tool_registry.py`), the orchestrator's HITL pause/resume/cancel/
-plan-approval behavior (`test_orchestrator.py`), and resume parsing
-(`test_resume_parser.py`). None of these tests require Firestore, OpenAI/Gemini
-credentials, or network access — they run identically in CI or offline.
+plan-approval behavior (`test_orchestrator.py`), model/search-provider resolution
+(`test_llm_search_factories.py`), the WS `session_ready` payload (`test_ws_chat.py`),
+and resume parsing (`test_resume_parser.py`). None of these tests require Firestore,
+OpenAI/Gemini credentials, or network access — they run identically in CI or offline.
 
 ## Related documents
 

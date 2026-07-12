@@ -13,7 +13,9 @@ See root `/CLAUDE.md` first. Scoped conventions for `backend/` only. Agent core:
   (ownership checks), in-memory rate limiter.
 - `app/core/logging.py` — structured JSON logging; never log secrets.
 - `app/api/*.py` — REST routers: `auth`, `onboarding`, `curricula`, `conversations`,
-  `settings`, `health`, each mounted with its own `prefix` in `main.py`.
+  `models` (read-only `GET /api/models` — model/search-provider chip options for the
+  dashboard prompt box), `settings`, `health`, each mounted with its own `prefix` in
+  `main.py`.
 - `app/ws/chat.py` — `/ws/chat/{conversation_id}`; spawns `orchestrator.run_turn` as a
   background task per frame.
 - `app/agent/` — THE CORE. See `app/agent/CLAUDE.md`.
@@ -38,9 +40,11 @@ See root `/CLAUDE.md` first. Scoped conventions for `backend/` only. Agent core:
   §5 first, then `app/services/firestore.py` + the matching model.
 - **Tool errors never raise** — `ToolRegistry.execute` converts everything to
   `{"error": ...}`; see `app/agent/CLAUDE.md`.
-- **Provider swapping**: `LLM_PROVIDER`/`SEARCH_PROVIDER` resolve via each package's
-  `factory.py`, with a per-user override (`users/{uid}.settings.*`) beating the env
-  default.
+- **Provider swapping**: model/search-provider selection is per-conversation (composer
+  chips, not a user setting) — `app/services/llm/factory.py`'s `resolve_model`/
+  `get_llm_provider` and `app/services/search/factory.py`'s `resolve_search_provider`/
+  `get_search_provider` resolve a requested value with fallback (frame → conversation
+  doc's persisted selection → server default) and cache provider instances.
 
 ## Documentation & comments
 

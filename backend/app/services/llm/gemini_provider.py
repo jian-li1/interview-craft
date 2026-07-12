@@ -149,18 +149,19 @@ class GeminiProvider:
         self,
         api_key: str,
         model: str,
-        small_model: str,
         max_output_tokens: int = 8192,
         request_timeout_seconds: float = 120.0,
     ) -> None:
         """Initialize the provider's async google-genai SDK client.
 
+        Each instance serves exactly one model (chosen by the factory's model
+        resolution) — there is no "small model" concept; construct a second instance
+        for a different model.
+
         Args:
             api_key (str): The Gemini API key; required (empty string is treated as
                 "missing" and raises).
-            model (str): The main model name/id to use for regular completions.
-            small_model (str): The cheaper/faster model name/id to use when `small=True`
-                (e.g. for summarization).
+            model (str): The model name/id this instance uses for every generation.
             max_output_tokens (int): The `max_output_tokens` cap applied to every
                 generation request, to bound cost/latency.
             request_timeout_seconds (float): Request timeout in seconds, converted to
@@ -174,32 +175,18 @@ class GeminiProvider:
         http_options = genai_types.HttpOptions(timeout=int(request_timeout_seconds * 1000))
         self._client = genai.Client(api_key=api_key, http_options=http_options)
         self._model = model
-        self._small_model = small_model
         self._max_output_tokens = max_output_tokens
-
-    def _model_for(self, small: bool) -> str:
-        """Select the main or small model name based on the `small` flag.
-
-        Args:
-            small (bool): Whether to use the small/cheap model instead of the main one.
-
-        Returns:
-            str: The resolved model name/id to pass to the google-genai SDK.
-        """
-        return self._small_model if small else self._model
 
     async def chat_stream(
         self,
         messages: list[ChatMessage],
         tools: list[ToolSpec] | None = None,
-        small: bool = False,
     ) -> AsyncIterator[LLMEvent]:
         """Stream a chat completion from the Gemini API.
 
         Args:
             messages (list[ChatMessage]): The conversation history to send.
             tools (list[ToolSpec] | None): Tool definitions the model may call, or None.
-            small (bool): If True, use the small/cheap model instead of the main one.
 
         Yields:
             LLMEvent: `ReasoningDelta` for each streamed thought-summary part (`part.thought
@@ -211,7 +198,7 @@ class GeminiProvider:
                 Gemini doesn't provide one), and finally one `Done` carrying the stream's
                 finish reason.
         """
-        model = self._model_for(small)
+        model = self._model
         system_instruction, contents = _split_system_and_contents(messages)
         gemini_tools = _to_gemini_tools(tools)
 
@@ -271,24 +258,22 @@ class GeminiProvider:
 
         yield Done(finish_reason=finish_reason)
 
-    async def complete(self, messages: list[ChatMessage], small: bool = False) -> str:
+    async def complete(self, messages: list[ChatMessage]) -> str:
         """Perform a non-streaming chat completion.
 
         Args:
             messages (list[ChatMessage]): The conversation history to send.
-            small (bool): If True, use the small/cheap model instead of the main one.
 
         Returns:
             str: The complete text of the model's response (empty string if the model
                 returned no text).
         """
-        model = self._model_for(small)
         system_instruction, contents = _split_system_and_contents(messages)
         config = genai_types.GenerateContentConfig(
             system_instruction=system_instruction,
             max_output_tokens=self._max_output_tokens,
         )
         response = await self._client.aio.models.generate_content(
-            model=model, contents=contents, config=config
+            model=self._model, contents=contents, config=config
         )
         return response.text or ""

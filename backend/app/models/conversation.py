@@ -95,6 +95,12 @@ class Conversation(ApiModel):
             `MemoryManager.build_context` persisted; used by the WS reconnect snapshot to
             replay a resolved "Auto-compacted" chip after a page reload. None if
             compaction has never run for this conversation.
+        selected_model (str | None): The model id the user picked via the composer's
+            model chip for this conversation, persisted so it survives reconnects; None
+            means no selection has been made yet (falls back to `Settings.default_model`).
+        search_provider (str | None): The search provider name the user picked via the
+            composer's search chip for this conversation; None falls back to
+            `DEFAULT_SEARCH_PROVIDER` ("duckduckgo").
         created_at (dt.datetime): Timestamp the conversation was created.
         updated_at (dt.datetime): Timestamp of the most recent update.
     """
@@ -107,6 +113,8 @@ class Conversation(ApiModel):
     compacted_through: str | None = None
     token_estimate: int = 0
     last_compaction: dict[str, int] | None = None
+    selected_model: str | None = None
+    search_provider: str | None = None
     created_at: dt.datetime
     updated_at: dt.datetime
 
@@ -135,9 +143,17 @@ class NewConversationRequest(ApiModel):
     Attributes:
         curriculum_prompt (str | None): Optional initial user prompt describing the
             curriculum to generate; if omitted the conversation starts empty.
+        selected_model (str | None): Optional model id chosen via the dashboard prompt
+            box's model chip, resolved (via `resolve_model`) and persisted on the new
+            conversation doc. None (the default, unset) leaves the doc field null.
+        search_provider (str | None): Optional search provider name chosen via the
+            dashboard prompt box's search chip, resolved (via `resolve_search_provider`)
+            and persisted on the new conversation doc. None leaves the doc field null.
     """
 
     curriculum_prompt: str | None = None
+    selected_model: str | None = None
+    search_provider: str | None = None
 
 
 class NewConversationResponse(ApiModel):

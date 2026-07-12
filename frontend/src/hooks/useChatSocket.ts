@@ -34,6 +34,7 @@ export function useChatSocket(conversationId: string | null) {
   const startCompaction = useChatStore((s) => s.startCompaction);
   const finishCompaction = useChatStore((s) => s.finishCompaction);
   const setContextUsage = useChatStore((s) => s.setContextUsage);
+  const setModelOptions = useChatStore((s) => s.setModelOptions);
   const refetchCurriculum = useCurriculumStore((s) => s.refetch);
 
   useEffect(() => {
@@ -80,6 +81,13 @@ export function useChatSocket(conversationId: string | null) {
           setCurriculumId(event.curriculum_id);
           // Show Stop button immediately on reconnect if a turn is still in flight.
           setAgentRunning(event.agent_running);
+          // Hydrate the composer's model/search chip options + current selection.
+          setModelOptions(
+            event.available_models,
+            event.selected_model,
+            event.search_providers,
+            event.search_provider
+          );
           break;
         case "message_start":
           startMessage(event.message_id);

@@ -38,7 +38,7 @@ interview-blueprint/
 │   ├── app/
 │   │   ├── main.py               # FastAPI app factory, CORS, routers, WS
 │   │   ├── core/                 # config.py (pydantic-settings), security.py (JWT), deps.py
-│   │   ├── api/                  # REST routers: auth, onboarding, curricula, conversations, settings
+│   │   ├── api/                  # REST routers: auth, onboarding, curricula, conversations, models, settings
 │   │   ├── ws/                   # WebSocket chat endpoint + event serialization
 │   │   ├── agent/                # THE AGENTIC CORE (see spec 02)
 │   │   │   ├── orchestrator.py   # ReAct loop
@@ -76,18 +76,22 @@ FIREBASE_PROJECT_ID=interview-blueprint-dev
 GOOGLE_APPLICATION_CREDENTIALS=./serviceAccountKey.json   # omit when using emulator
 FIRESTORE_EMULATOR_HOST=                                   # e.g. localhost:8686 for emulator
 
-# LLM
-LLM_PROVIDER=openai                  # openai | gemini
+# LLM — OPENAI_MODEL/GEMINI_MODEL are comma-separated lists; the composer's model chip
+# (per-conversation — see §7) offers the union of both. FIRST entry of OPENAI_MODEL is
+# the server default — also used for one-shot server-side generations with no
+# conversation (onboarding profile synthesis). There is no more server-wide default
+# provider or separate "small model": auto-compaction runs on whichever model the user
+# has selected for that conversation.
 OPENAI_API_KEY=sk-...
-OPENAI_MODEL=gpt-4o
-OPENAI_SMALL_MODEL=gpt-4o-mini       # used for compaction/summarization/profile synthesis
+OPENAI_MODEL=gpt-4o,gpt-4o-mini
 OPENAI_BASE_URL=                     # set to any OpenAI-compatible endpoint, e.g. http://localhost:8080/v1
 GEMINI_API_KEY=
-GEMINI_MODEL=gemini-2.5-pro
-GEMINI_SMALL_MODEL=gemini-2.5-flash
+GEMINI_MODEL=gemini-2.5-pro,gemini-2.5-flash
+                                      # Gemini models are only offered by the composer's
+                                      # model chip when GEMINI_API_KEY is set above.
 
-# Search
-SEARCH_PROVIDER=duckduckgo           # duckduckgo | google | tavily
+# Search — the composer's search chip (per-conversation) offers duckduckgo (always,
+# keyless) plus google/tavily only when their keys below are set.
 GOOGLE_CSE_API_KEY=
 GOOGLE_CSE_ENGINE_ID=
 TAVILY_API_KEY=
@@ -116,8 +120,10 @@ All access is server-side via firebase-admin. Every route MUST verify
 ```
 users/{uid}
   email, name, picture, google_sub, created_at, last_login_at
-  settings: { theme: "system"|"light"|"dark", llm_provider: str|null,
-              search_provider: str|null }        # null = use server default
+  settings: { theme: "system"|"light"|"dark" }
+              # llm_provider/search_provider removed — model/search-provider selection
+              # is per-conversation now (see conversations/{convId} below), picked via
+              # the chat composer's chips, not a per-user setting
 
 users/{uid}/profile/main
   bio: str                      # user-written bio
@@ -229,6 +235,13 @@ conversations/{convId}
   last_compaction: {tokens_before: int, tokens_after: int}|null
                                  # checkpoint of the most recent compaction pass, used to
                                  # replay a resolved "Auto-compacted" chip on WS reconnect
+  selected_model: str|null      # composer model-chip selection for this conversation;
+                                 # null = not yet chosen, falls back to the server default.
+                                 # May also be seeded at creation time (POST
+                                 # /api/conversations) from the dashboard prompt box's chips.
+  search_provider: str|null     # composer search-chip selection; null falls back to
+                                 # duckduckgo (DEFAULT_SEARCH_PROVIDER); same creation-time
+                                 # seeding as selected_model applies
   created_at, updated_at
 
 conversations/{convId}/messages/{msgId}
@@ -269,8 +282,9 @@ FRONTEND_ORIGIN with credentials. All mutating routes require header
 | DELETE | /api/curricula/{id} | → `{ok: true}` — cascades: also deletes the curriculum's linked conversation doc and its `messages` subcollection (a curriculum:conversation is 1:1, so no orphaned conversation is left behind) |
 | GET  | /api/curricula/{id}/plan | → plan doc |
 | GET  | /api/conversations | → `[ConversationSummary]` |
-| POST | /api/conversations | `{curriculum_prompt: str|null}` → `{conversation_id}` (new chat) |
+| POST | /api/conversations | `{curriculum_prompt: str\|null, selected_model?: str\|null, search_provider?: str\|null}` → `{conversation_id}` (new chat; `selected_model`/`search_provider` are resolved via `resolve_model`/`resolve_search_provider` and persisted on the new conversation doc — the dashboard prompt box's chip selections, since it has no WS connection yet; omitted/null leaves the doc fields null) |
 | GET  | /api/conversations/{id}/messages | → `[MessageOut]` (full history for rendering) |
+| GET  | /api/models | → `{models: [{id, provider}], default_model, search_providers: [str], default_search_provider}` — read-only options list backing the dashboard prompt box's chips (the studio composer instead hydrates from the WS `session_ready` event) |
 | GET  | /api/settings | → settings obj |
 | PUT  | /api/settings | partial settings → settings obj (explicit null clears an override back to server default) |
 | GET  | /api/healthz | → `{status: "ok"}` (no auth) |
@@ -287,14 +301,25 @@ All frames are JSON: `{ "type": string, ...payload }`.
 
 ### Client → Server
 ```
-{type:"user_message", content: str}
-{type:"plan_decision", decision:"approve"|"modify", feedback: str|null}
+{type:"user_message", content: str, model?: str, search_provider?: str}
+{type:"plan_decision", decision:"approve"|"modify", feedback: str|null, model?: str, search_provider?: str}
 {type:"stop"}                      # cancel of current agent run — see below, takes effect promptly
 {type:"ping"}
-{type:"compact"}                   # manual compaction request (the composer's "Compact
-                                    # now" button); rejected with a recoverable error while
-                                    # an agent run is active for this conversation
+{type:"compact", model?: str, search_provider?: str}   # manual compaction request (the
+                                    # composer's "Compact now" button); rejected with a
+                                    # recoverable error while an agent run is active for
+                                    # this conversation
 ```
+
+`model`/`search_provider` are the composer's chip selections (optional on every frame
+above). Selection is per-conversation, resolved on the backend with fallback (frame
+value → the conversation doc's persisted `selected_model`/`search_provider` →
+`Settings.default_model`/`duckduckgo`) and re-persisted onto the conversation doc when
+it changes, so it survives reconnects without the client resending it every frame. An
+unrecognized/unavailable value (e.g. a model removed from `OPENAI_MODEL` since it was
+picked) silently falls back rather than erroring. Auto-compaction (and a manual
+`compact` frame) always runs on whichever model is currently selected for that
+conversation — there is no separate "small model".
 
 `stop` aborts promptly rather than only at the next iteration boundary: it interrupts
 both a pending LLM stream read (the wait on the next streamed chunk, including a long
@@ -304,7 +329,12 @@ immediately after reconnecting to a still-running turn.
 
 ### Server → Client (streaming event stream)
 ```
-{type:"session_ready", conversation_id, curriculum_id, agent_running: bool}
+{type:"session_ready", conversation_id, curriculum_id, agent_running: bool,
+      available_models: [{id: str, provider: "openai"|"gemini"}], selected_model: str,
+      search_providers: [str], search_provider: str}
+      # available_models/search_providers hydrate the composer chips' option lists;
+      # selected_model/search_provider are the conversation's persisted selection,
+      # already resolved/validated server-side (never a stale/unavailable value)
 {type:"message_start", message_id, role:"assistant"}
 {type:"reasoning_delta", message_id, delta: str}         # thinking-chain text
 {type:"text_delta", message_id, delta: str}              # user-facing answer text

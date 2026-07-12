@@ -23,13 +23,12 @@ class ScriptedLLM:
         """
         self._events = events
 
-    async def chat_stream(self, messages, tools=None, small: bool = False):
+    async def chat_stream(self, messages, tools=None):
         """Yield the pre-scripted events in order, ignoring the actual arguments.
 
         Args:
             messages: Chat messages that would have been sent to a real provider.
             tools: Tool specs that would have been sent to a real provider.
-            small (bool): Unused; present to match the `LLMProvider` protocol signature.
 
         Yields:
             The scripted event objects, in the order supplied at construction time.
@@ -37,12 +36,11 @@ class ScriptedLLM:
         for event in self._events:
             yield event
 
-    async def complete(self, messages, small: bool = False) -> str:
+    async def complete(self, messages) -> str:
         """Return a fixed stub string instead of calling a real completion endpoint.
 
         Args:
             messages: Chat messages that would have been sent to a real provider.
-            small (bool): Unused; present to match the `LLMProvider` protocol signature.
 
         Returns:
             str: The literal string "stub completion".
@@ -329,6 +327,67 @@ async def test_run_turn_plain_text_answer_completes_done(monkeypatch, fake_fs, o
 
 
 @pytest.mark.asyncio
+async def test_run_turn_persists_frame_provided_model_and_search_provider(monkeypatch, fake_fs, orchestrator):
+    """Verify a run_turn call's `model`/`search_provider` args (the composer chip
+    selections forwarded from the WS frame) are resolved and persisted onto the
+    conversation doc when they differ from what's currently stored there.
+    """
+    conv, curriculum = _setup_conversation(fake_fs, phase="refinement")
+    assert fake_fs.fs.get_conversation(conv["id"])["selected_model"] is None
+
+    scripted = ScriptedLLM([TextDelta(text="ok"), Done()])
+    monkeypatch.setattr("app.agent.orchestrator.get_llm_provider", lambda *a, **k: scripted)
+    monkeypatch.setattr("app.agent.orchestrator.get_search_provider", lambda *a, **k: StubSearch())
+
+    async def emit(event):
+        pass
+
+    # "gpt-4o-mini" is the second entry of conftest's OPENAI_MODEL list, so it resolves
+    # to itself (not the default) — a real change from the unset persisted value.
+    result = await orchestrator.run_turn(
+        conversation_id=conv["id"],
+        curriculum_id=curriculum["id"],
+        owner_uid="uid1",
+        user_input="hello",
+        emit=emit,
+        model="gpt-4o-mini",
+        search_provider="duckduckgo",
+    )
+
+    assert result.outcome == TurnOutcome.DONE
+    updated_conv = fake_fs.fs.get_conversation(conv["id"])
+    assert updated_conv["selected_model"] == "gpt-4o-mini"
+    assert updated_conv["search_provider"] == "duckduckgo"
+
+
+@pytest.mark.asyncio
+async def test_run_turn_unknown_model_falls_back_and_persists_default(monkeypatch, fake_fs, orchestrator):
+    """An unresolvable requested model (not in OPENAI_MODEL/GEMINI_MODEL) must fall back
+    to the server default and persist THAT resolved value, not the bogus request.
+    """
+    conv, curriculum = _setup_conversation(fake_fs, phase="refinement")
+
+    scripted = ScriptedLLM([TextDelta(text="ok"), Done()])
+    monkeypatch.setattr("app.agent.orchestrator.get_llm_provider", lambda *a, **k: scripted)
+    monkeypatch.setattr("app.agent.orchestrator.get_search_provider", lambda *a, **k: StubSearch())
+
+    async def emit(event):
+        pass
+
+    await orchestrator.run_turn(
+        conversation_id=conv["id"],
+        curriculum_id=curriculum["id"],
+        owner_uid="uid1",
+        user_input="hello",
+        emit=emit,
+        model="not-a-configured-model",
+    )
+
+    updated_conv = fake_fs.fs.get_conversation(conv["id"])
+    assert updated_conv["selected_model"] == "gpt-4o"  # settings.default_model
+
+
+@pytest.mark.asyncio
 async def test_run_turn_stamps_run_elapsed_ms_on_last_message_of_multi_iteration_run(
     monkeypatch, fake_fs, orchestrator
 ):
@@ -345,7 +404,7 @@ async def test_run_turn_stamps_run_elapsed_ms_on_last_message_of_multi_iteration
             """Track how many times chat_stream has been invoked."""
             self._calls = 0
 
-        async def chat_stream(self, messages, tools=None, small: bool = False):
+        async def chat_stream(self, messages, tools=None):
             """Yield a tool-call script on call 1, a plain-text script on call 2+."""
             self._calls += 1
             if self._calls == 1:
@@ -359,7 +418,7 @@ async def test_run_turn_stamps_run_elapsed_ms_on_last_message_of_multi_iteration
             for event in events:
                 yield event
 
-        async def complete(self, messages, small: bool = False) -> str:
+        async def complete(self, messages) -> str:
             """Unused by this test; present to satisfy the LLMProvider protocol."""
             return "stub completion"
 
@@ -418,12 +477,12 @@ async def test_run_turn_llm_stream_failure_still_emits_agent_done_error(monkeypa
         genuine provider/network failure mid-stream.
         """
 
-        async def chat_stream(self, messages, tools=None, small: bool = False):
+        async def chat_stream(self, messages, tools=None):
             """Yield one delta, then raise instead of completing the stream."""
             yield TextDelta(text="Starting to answer...")
             raise RuntimeError("simulated provider failure")
 
-        async def complete(self, messages, small: bool = False) -> str:
+        async def complete(self, messages) -> str:
             """Unused by this test; present to satisfy the LLMProvider protocol."""
             return "stub completion"
 
@@ -909,7 +968,7 @@ async def test_successful_fetch_url_strips_stale_prior_fetch_of_same_url(monkeyp
             """Track how many times chat_stream has been invoked."""
             self._calls = 0
 
-        async def chat_stream(self, messages, tools=None, small: bool = False):
+        async def chat_stream(self, messages, tools=None):
             """Yield the tool-call script on call 1, a plain-text script on call 2+."""
             self._calls += 1
             if self._calls == 1:
@@ -927,7 +986,7 @@ async def test_successful_fetch_url_strips_stale_prior_fetch_of_same_url(monkeyp
             for event in events:
                 yield event
 
-        async def complete(self, messages, small: bool = False) -> str:
+        async def complete(self, messages) -> str:
             """Unused by this test; present to satisfy the LLMProvider protocol."""
             return "stub completion"
 
@@ -1074,3 +1133,34 @@ async def test_compact_now_too_few_messages_emits_recoverable_error(monkeypatch,
     assert "not enough" in error_events[0]["message"].lower()
     # No compaction/compaction_start events since build_context's own guard skipped it.
     assert not any(e["type"] in ("compaction", "compaction_start") for e in events)
+
+
+@pytest.mark.asyncio
+async def test_compact_now_forwards_model_and_persists_it(monkeypatch, fake_fs, orchestrator):
+    """Verify `compact_now`'s `model` arg (the composer chip selection from a `compact`
+    WS frame) is resolved and persisted onto the conversation doc's `selected_model`,
+    so compaction runs on — and subsequent runs inherit — the model the user picked.
+    """
+    conv, curriculum = _setup_conversation(fake_fs, phase="refinement")
+    for i in range(10):
+        fake_fs.fs.append_message(conv["id"], {"role": "user", "content": f"message number {i} with padding text"})
+
+    monkeypatch.setattr("app.agent.orchestrator.get_llm_provider", lambda *a, **k: ScriptedLLM([]))
+
+    events = []
+
+    async def emit(event):
+        events.append(event)
+
+    await orchestrator.compact_now(
+        conversation_id=conv["id"],
+        curriculum_id=curriculum["id"],
+        owner_uid="uid1",
+        emit=emit,
+        model="gpt-4o-mini",
+    )
+
+    event_types = [e["type"] for e in events]
+    assert event_types == ["compaction_start", "compaction", "context_usage"]
+    updated_conv = fake_fs.fs.get_conversation(conv["id"])
+    assert updated_conv["selected_model"] == "gpt-4o-mini"

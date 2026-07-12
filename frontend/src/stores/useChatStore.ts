@@ -2,6 +2,7 @@ import { create } from "zustand";
 import type {
   MessageOut,
   MessageRole,
+  ModelOption,
   PlanTask,
   ToolCallRecord,
   ToolCallStatus,
@@ -112,6 +113,14 @@ interface ChatState {
   compactions: CompactionItem[];
   /** Latest context-token usage estimate, or null before the first `context_usage` event. */
   contextUsage: { tokens: number; limit: number; threshold: number } | null;
+  /** Every model the composer's model chip may offer (from `session_ready`). */
+  availableModels: ModelOption[];
+  /** The composer's current model chip selection; null before `session_ready` arrives. */
+  selectedModel: string | null;
+  /** Every search provider name the composer's search chip may offer (from `session_ready`). */
+  searchProviders: string[];
+  /** The composer's current search chip selection; null before `session_ready` arrives. */
+  selectedSearchProvider: string | null;
 
   setConversationId: (id: string | null) => void;
   setCurriculumId: (id: string | null) => void;
@@ -184,6 +193,18 @@ interface ChatState {
   ) => void;
   /** Records the latest context-token usage estimate for the composer's warning card. */
   setContextUsage: (tokens: number, limit: number, threshold: number) => void;
+
+  /** Hydrates the composer's chip options + current selection from `session_ready`. */
+  setModelOptions: (
+    models: ModelOption[],
+    selectedModel: string,
+    searchProviders: string[],
+    searchProvider: string
+  ) => void;
+  /** Updates the model chip's selection (local-only — sent on the next WS frame). */
+  setSelectedModel: (id: string) => void;
+  /** Updates the search chip's selection (local-only — sent on the next WS frame). */
+  setSelectedSearchProvider: (name: string) => void;
 }
 
 /** Converts a persisted `MessageOut` (non-system role) into the UI-side `ChatMessage` shape, with both streaming flags initialized to false since history is never "in flight". */
@@ -243,6 +264,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
   connectionState: "idle",
   compactions: [],
   contextUsage: null,
+  availableModels: [],
+  selectedModel: null,
+  searchProviders: [],
+  selectedSearchProvider: null,
 
   setConversationId: (id) => set({ conversationId: id }),
   setCurriculumId: (id) => set({ curriculumId: id }),
@@ -329,6 +354,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
       activity: [],
       compactions: [],
       contextUsage: null,
+      // Cleared too — the new conversation's own session_ready re-hydrates these.
+      availableModels: [],
+      selectedModel: null,
+      searchProviders: [],
+      selectedSearchProvider: null,
     }),
 
   addUserMessage: (content) =>
@@ -594,6 +624,23 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }),
 
   setContextUsage: (tokens, limit, threshold) => set({ contextUsage: { tokens, limit, threshold } }),
+
+  setModelOptions: (models, selectedModel, searchProviders, searchProvider) =>
+    set((s) => ({
+      availableModels: models,
+      searchProviders,
+      // session_ready re-fires on every reconnect; a still-valid LOCAL selection wins
+      // over the server's replayed value so a network blip doesn't silently revert a
+      // chip the user changed but hasn't sent on a frame yet.
+      selectedModel:
+        s.selectedModel && models.some((m) => m.id === s.selectedModel) ? s.selectedModel : selectedModel,
+      selectedSearchProvider:
+        s.selectedSearchProvider && searchProviders.includes(s.selectedSearchProvider)
+          ? s.selectedSearchProvider
+          : searchProvider,
+    })),
+  setSelectedModel: (id) => set({ selectedModel: id }),
+  setSelectedSearchProvider: (name) => set({ selectedSearchProvider: name }),
 }));
 
 /**

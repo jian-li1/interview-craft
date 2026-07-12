@@ -10,8 +10,9 @@ Layers (see docs/specs/02-agent-system-spec.md §5):
    `save_sources`); full content is persisted separately and retrievable via `fetch_url`.
 
 Also owns auto-compaction: when the assembled context exceeds 0.8 * CONTEXT_TOKEN_LIMIT,
-older messages are summarized via the small model and folded into a rolling summary
-persisted on the conversation document.
+older messages are summarized via the conversation's selected model (there is no
+separate "small model" anymore) and folded into a rolling summary persisted on the
+conversation document.
 """
 
 from __future__ import annotations
@@ -226,7 +227,7 @@ class MemoryManager:
         synthesized_profile: str | None,
         profile: dict[str, Any] | None,
         agent_state: dict[str, Any],
-        small_llm: LLMProvider | None = None,
+        compaction_llm: LLMProvider | None = None,
         on_compaction=None,
         force_compact: bool = False,
         on_compaction_start=None,
@@ -241,7 +242,8 @@ class MemoryManager:
         `truncate_old_tool_outputs`). If the assembled context exceeds
         `COMPACTION_TRIGGER_FRACTION` (0.8) of `context_token_limit` (or `force_compact`
         is True — used by the manual "Compact now" path), the older ~60% of candidate
-        messages (`select_messages_to_compact`) are summarized via the small model and
+        messages (`select_messages_to_compact`) are summarized via `compaction_llm` (the
+        conversation's selected model — there is no separate "small model" anymore) and
         folded into a new rolling summary, replacing the raw messages in the returned
         list; the conversation doc's `summary`/`compacted_through`/`token_estimate`/
         `last_compaction` fields are updated to persist the new checkpoint —
@@ -271,16 +273,17 @@ class MemoryManager:
                 None.
             agent_state (dict[str, Any]): The current agent state doc (phase, task
                 queue, scratchpad, etc.) used to render the working-memory block.
-            small_llm (LLMProvider | None): The provider to use for compaction
-                summarization (routed via `small=True`); if None, compaction is skipped
-                even if the token threshold is exceeded.
+            compaction_llm (LLMProvider | None): The provider to use for compaction
+                summarization — the conversation's selected model, passed down from the
+                orchestrator; if None, compaction is skipped even if the token threshold
+                is exceeded.
             on_compaction: Optional async callback invoked with `(summary,
                 tokens_before, tokens_after, compacted_through)` when compaction
                 actually runs this call — `summary` is the full new rolling summary
                 text, not a truncated preview.
             force_compact (bool): When True, compaction runs even if `tokens_before` is
-                below the trigger threshold (still requires `small_llm` and more than 2
-                candidate messages) — used by the manual "Compact now" WS frame.
+                below the trigger threshold (still requires `compaction_llm` and more
+                than 2 candidate messages) — used by the manual "Compact now" WS frame.
             on_compaction_start: Optional async callback invoked with `(tokens_before,)`
                 right before `run_compaction` is awaited, so the client can render the
                 in-progress compaction chip ahead of the (potentially slow) LLM call.
@@ -348,13 +351,13 @@ class MemoryManager:
         limit = self._settings.context_token_limit
 
         # Compaction trigger: fires when (a) we're over 0.8x the context limit OR the
-        # caller forced it (manual "Compact now"), (b) a small model is available to do
-        # the summarization, and (c) there are enough candidate messages that compacting
-        # is meaningful (>2, so we never try to compact e.g. a single lingering message
-        # down to nothing).
+        # caller forced it (manual "Compact now"), (b) a compaction LLM (the
+        # conversation's selected model) is available to do the summarization, and (c)
+        # there are enough candidate messages that compacting is meaningful (>2, so we
+        # never try to compact e.g. a single lingering message down to nothing).
         if (
             (tokens_before > COMPACTION_TRIGGER_FRACTION * limit or force_compact)
-            and small_llm is not None
+            and compaction_llm is not None
             and len(candidate_messages) > 2
         ):
             older, remaining = select_messages_to_compact(candidate_messages)
@@ -364,10 +367,10 @@ class MemoryManager:
                     extra={"extra_fields": {"conversation_id": conversation_id, "tokens_before": tokens_before}},
                 )
                 if on_compaction_start:
-                    # Fire BEFORE the (potentially slow) small-model summarization call
-                    # so the client can render the in-progress "compacting" chip right away.
+                    # Fire BEFORE the (potentially slow) summarization call so the client
+                    # can render the in-progress "compacting" chip right away.
                     await on_compaction_start(tokens_before)
-                new_summary = await run_compaction(small_llm, existing_summary, older)
+                new_summary = await run_compaction(compaction_llm, existing_summary, older)
                 last_compacted_msg = older[-1]
                 # Swap the summary block in system_blocks for the freshly merged one,
                 # then rebuild the message list using only the still-recent `remaining`

@@ -22,6 +22,8 @@ from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.core.security import SESSION_COOKIE_NAME, InvalidSessionTokenError, decode_session_jwt
 from app.services import firestore as fs
+from app.services.llm.factory import available_models, resolve_model
+from app.services.search.factory import available_search_providers, resolve_search_provider
 
 logger = get_logger(__name__)
 router = APIRouter()
@@ -90,6 +92,9 @@ async def ws_chat(ws: WebSocket, conversation_id: str) -> None:
     receive loop stays free to immediately accept a subsequent `stop` frame or `ping`
     while a long-running agent turn is in flight; `compact` similarly spawns
     `orchestrator.compact_now` as a background task for the same reason.
+    `user_message`/`plan_decision`/`compact` frames may carry optional `model`/
+    `search_provider` fields (the composer's chip selections) — forwarded straight to
+    `run_turn`/`compact_now`, which resolve/persist them (see `Orchestrator`).
 
     Args:
         ws (WebSocket): The WebSocket connection, not yet accepted at entry.
@@ -167,13 +172,23 @@ async def ws_chat(ws: WebSocket, conversation_id: str) -> None:
                 logger.warning("failed to send WS event; connection likely closed")
 
     # agent_running flag lets client show Stop button immediately on reconnect if a turn
-    # is still in flight.
+    # is still in flight. The model/search fields let the composer's chips hydrate their
+    # option lists and current selection without a separate REST round-trip — selection
+    # is resolved (validated + fallback-applied) here so the client always renders a
+    # value that's actually usable, even if the conversation doc's persisted selection
+    # has since become stale (e.g. a model removed from OPENAI_MODEL).
+    _provider_name, resolved_model = resolve_model(conversation.get("selected_model"), settings)
+    resolved_search = resolve_search_provider(conversation.get("search_provider"), settings)
     await emit(
         {
             "type": "session_ready",
             "conversation_id": conversation_id,
             "curriculum_id": curriculum_id,
             "agent_running": get_conversation_lock(conversation_id).locked(),
+            "available_models": available_models(settings),
+            "selected_model": resolved_model,
+            "search_providers": available_search_providers(settings),
+            "search_provider": resolved_search,
         }
     )
 
@@ -291,6 +306,9 @@ async def ws_chat(ws: WebSocket, conversation_id: str) -> None:
                         owner_uid=uid,
                         user_input=content,
                         emit=emit,
+                        # Composer chip selections, forwarded for resolution/persistence.
+                        model=frame.get("model"),
+                        search_provider=frame.get("search_provider"),
                     )
                 )
                 continue
@@ -311,6 +329,8 @@ async def ws_chat(ws: WebSocket, conversation_id: str) -> None:
                         owner_uid=uid,
                         user_input=decision,
                         emit=emit,
+                        model=frame.get("model"),
+                        search_provider=frame.get("search_provider"),
                     )
                 )
                 continue
@@ -329,6 +349,7 @@ async def ws_chat(ws: WebSocket, conversation_id: str) -> None:
                         curriculum_id=curriculum_id,
                         owner_uid=uid,
                         emit=emit,
+                        model=frame.get("model"),
                     )
                 )
                 continue

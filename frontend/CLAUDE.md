@@ -19,8 +19,10 @@ See root `/CLAUDE.md` first. Scoped conventions for `frontend/` only. Full walkt
   `ReaderView`, `SectionContent`, `MermaidDiagram`, `SourcesCard`, `ActivityFeed`,
   `nodes/`, `edges/`.
 - `src/components/ui/` — hand-rolled primitives (no Radix/shadcn): `Button`, `Card`,
-  `Input`, `Select`, `Tabs`, `ChipInput`, `ConfirmDialog`, `EmptyState`, `Skeleton`,
-  `Badge`. Match this style for any new primitive.
+  `Input`, `Select`, `Tabs`, `ChipInput`, `ChipSelect` (model/search-provider chip
+  popover, moved here from `studio/chat/ComposerSelect.tsx` once the dashboard
+  `PromptBox` grew its own chips — shared by both), `ConfirmDialog`, `EmptyState`,
+  `Skeleton`, `Badge`. Match this style for any new primitive.
 - `src/lib/` — `api.ts` (fetch wrapper), `ws.ts` (`ChatSocket`), `env.ts`, `types.ts`
   (mirrors every spec-01 shape), `utils.ts` (`cn`, `timeAgo`, `initials`).
 - `src/hooks/useChatSocket.ts` — owns the `ChatSocket` lifecycle + the entire
@@ -53,7 +55,9 @@ See root `/CLAUDE.md` first. Scoped conventions for `frontend/` only. Full walkt
 ## How WS events map to store actions
 
 Dispatched in `src/hooks/useChatSocket.ts` (the single place this mapping lives — don't
-add a second WS listener elsewhere): `session_ready`→`setCurriculumId`,
+add a second WS listener elsewhere): `session_ready`→`setCurriculumId` +
+`setAgentRunning(agent_running)` + `setModelOptions(available_models, selected_model,
+search_providers, search_provider)` (hydrates the composer's model/search chips),
 `message_start`→`startMessage`, `reasoning_delta`→`appendReasoningDelta`,
 `text_delta`→`appendTextDelta`, `tool_call_start`→`startToolCall`,
 `tool_call_result`→`resolveToolCall`, `message_end`→`endMessage`,

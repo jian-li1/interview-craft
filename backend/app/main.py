@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import auth, conversations, curricula, health, onboarding, settings as settings_routes
+from app.api import auth, conversations, curricula, health, models as models_routes, onboarding, settings as settings_routes
 from app.core.config import get_settings
 from app.core.logging import configure_logging, get_logger
 from app.ws import chat as ws_chat
@@ -53,21 +53,24 @@ def create_app() -> FastAPI:
     app.include_router(curricula.router)
     app.include_router(conversations.router)
     app.include_router(settings_routes.router)
+    app.include_router(models_routes.router)
     app.include_router(ws_chat.router)
 
     @app.on_event("startup")
     async def _on_startup() -> None:
         """Log a single structured line once the app finishes booting.
 
-        Useful for confirming which environment and LLM provider a deployed instance is
-        actually running with, without needing to inspect env vars directly.
+        Useful for confirming which environment and default model a deployed instance is
+        actually running with, without needing to inspect env vars directly. Model
+        selection is now per-conversation (composer chips), so this logs the server
+        default (first OPENAI_MODEL entry) rather than a single fixed provider.
 
         Returns:
             None: This function only has the side effect of emitting a log line.
         """
         logger.info(
             "InterviewBlueprint backend starting up",
-            extra={"extra_fields": {"app_env": settings.app_env, "llm_provider": settings.llm_provider}},
+            extra={"extra_fields": {"app_env": settings.app_env, "default_model": settings.default_model}},
         )
 
     return app

@@ -87,19 +87,20 @@ class OpenAIProvider:
         self,
         api_key: str | None,
         model: str,
-        small_model: str,
         base_url: str | None = None,
         max_output_tokens: int = 8192,
         request_timeout_seconds: float = 120.0,
     ) -> None:
         """Initialize the provider's async OpenAI SDK client.
 
+        Each instance serves exactly one model (chosen by the factory's model
+        resolution) — there is no "small model" concept; construct a second instance
+        for a different model.
+
         Args:
             api_key (str | None): The OpenAI API key, or None when targeting an
                 OpenAI-compatible server that doesn't check the key.
-            model (str): The main model name/id to use for regular completions.
-            small_model (str): The cheaper/faster model name/id to use when `small=True`
-                (e.g. for summarization).
+            model (str): The model name/id this instance uses for every completion.
             base_url (str | None): Points the client at an OpenAI-compatible endpoint;
                 None uses OpenAI's default endpoint.
             max_output_tokens (int): The `max_tokens` cap applied to every completion
@@ -119,32 +120,18 @@ class OpenAIProvider:
         )
         self._client = AsyncOpenAI(api_key=resolved_key, base_url=base_url, timeout=timeout)
         self._model = model
-        self._small_model = small_model
         self._max_output_tokens = max_output_tokens
-
-    def _model_for(self, small: bool) -> str:
-        """Select the main or small model name based on the `small` flag.
-
-        Args:
-            small (bool): Whether to use the small/cheap model instead of the main one.
-
-        Returns:
-            str: The resolved model name/id to pass to the OpenAI SDK.
-        """
-        return self._small_model if small else self._model
 
     async def chat_stream(
         self,
         messages: list[ChatMessage],
         tools: list[ToolSpec] | None = None,
-        small: bool = False,
     ) -> AsyncIterator[LLMEvent]:
         """Stream a chat completion from the OpenAI-compatible API.
 
         Args:
             messages (list[ChatMessage]): The conversation history to send.
             tools (list[ToolSpec] | None): Tool definitions the model may call, or None.
-            small (bool): If True, use the small/cheap model instead of the main one.
 
         Yields:
             LLMEvent: `ReasoningDelta` for each streamed native-reasoning chunk (only
@@ -155,9 +142,8 @@ class OpenAIProvider:
                 across chunks and only emitted once complete), and finally one `Done`
                 carrying the stream's finish reason.
         """
-        model = self._model_for(small)
         kwargs: dict[str, Any] = {
-            "model": model,
+            "model": self._model,
             "messages": _to_openai_messages(messages),
             "stream": True,
             "max_tokens": self._max_output_tokens,
@@ -215,20 +201,18 @@ class OpenAIProvider:
 
         yield Done(finish_reason=finish_reason)
 
-    async def complete(self, messages: list[ChatMessage], small: bool = False) -> str:
+    async def complete(self, messages: list[ChatMessage]) -> str:
         """Perform a non-streaming chat completion.
 
         Args:
             messages (list[ChatMessage]): The conversation history to send.
-            small (bool): If True, use the small/cheap model instead of the main one.
 
         Returns:
             str: The complete text of the model's response (empty string if the model
                 returned no content).
         """
-        model = self._model_for(small)
         response = await self._client.chat.completions.create(
-            model=model,
+            model=self._model,
             messages=_to_openai_messages(messages),
             stream=False,
             max_tokens=self._max_output_tokens,

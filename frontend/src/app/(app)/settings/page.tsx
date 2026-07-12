@@ -2,7 +2,6 @@
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/Tabs";
 import { ProfileTab } from "@/components/settings/ProfileTab";
-import { PreferencesTab } from "@/components/settings/PreferencesTab";
 import { AppearanceTab } from "@/components/settings/AppearanceTab";
 import { AccountTab } from "@/components/settings/AccountTab";
 
@@ -11,13 +10,14 @@ import { AccountTab } from "@/components/settings/AccountTab";
  * shell. Purely a tab-switcher shell: it owns no state of its own beyond
  * which tab is active (delegated entirely to the hand-rolled `Tabs`
  * primitive from `components/ui/Tabs`, defaulting to "profile"). Each of the
- * four tabs is a self-contained component under `components/settings/` that
+ * three tabs is a self-contained component under `components/settings/` that
  * fetches/mutates its own slice of settings:
  * - `ProfileTab` — the onboarding profile fields (bio, roles, skills, etc.).
- * - `PreferencesTab` — agent/LLM behavior preferences.
  * - `AppearanceTab` — theme/display preferences.
  * - `AccountTab` — account-level info/actions (e.g. sign out, danger zone).
- * All four `TabsContent` panels use `forceMount` so they stay mounted at once
+ * (LLM model / search provider selection moved out of here entirely — it's now
+ * per-conversation via the chat composer's model/search chips, not a settings tab.)
+ * All three `TabsContent` panels use `forceMount` so they stay mounted at once
  * (each tab's own data fetch runs in parallel on page load, and switching
  * tabs never re-triggers a fetch or shows a loading spinner); inactive
  * panels are hidden via the `hidden` attribute rather than unmounted,
@@ -34,18 +34,14 @@ export default function SettingsPage() {
       <Tabs defaultValue="profile" className="mt-8">
         <TabsList aria-label="Settings sections">
           <TabsTrigger value="profile">Profile</TabsTrigger>
-          <TabsTrigger value="preferences">Preferences</TabsTrigger>
           <TabsTrigger value="appearance">Appearance</TabsTrigger>
           <TabsTrigger value="account">Account</TabsTrigger>
         </TabsList>
 
         <div className="mt-6">
-          {/* forceMount keeps all four panels mounted so their fetches fire in parallel and tab switches are instant */}
+          {/* forceMount keeps all three panels mounted so their fetches fire in parallel and tab switches are instant */}
           <TabsContent value="profile" forceMount>
             <ProfileTab />
-          </TabsContent>
-          <TabsContent value="preferences" forceMount>
-            <PreferencesTab />
           </TabsContent>
           <TabsContent value="appearance" forceMount>
             <AppearanceTab />

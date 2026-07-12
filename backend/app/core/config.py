@@ -40,18 +40,20 @@ class Settings(BaseSettings):
     firestore_emulator_host: str | None = None
 
     # --- LLM ---
-    # "openai" also serves any OpenAI-compatible endpoint via openai_base_url.
-    llm_provider: Literal["openai", "gemini"] = "openai"
+    # openai_model/gemini_model are RAW comma-separated model lists (env var names
+    # unchanged) — use the `openai_models`/`gemini_models` properties below to get the
+    # parsed list. "openai" also serves any OpenAI-compatible endpoint via
+    # openai_base_url. There is no more server-wide default provider: model selection
+    # is per-conversation (see the composer chips / app/services/llm/factory.py).
     openai_api_key: str | None = None
     openai_model: str = "gpt-4o"
-    openai_small_model: str = "gpt-4o-mini"
     openai_base_url: str | None = None
     gemini_api_key: str | None = None
     gemini_model: str = "gemini-2.5-pro"
-    gemini_small_model: str = "gemini-2.5-flash"
 
     # --- Search ---
-    search_provider: Literal["duckduckgo", "google", "tavily"] = "duckduckgo"
+    # No more server-wide default provider name — selection is per-conversation
+    # (see app/services/search/factory.py's DEFAULT_SEARCH_PROVIDER constant).
     google_cse_api_key: str | None = None
     google_cse_engine_id: str | None = None
     tavily_api_key: str | None = None
@@ -78,6 +80,48 @@ class Settings(BaseSettings):
             bool: True if `app_env` is "production", False otherwise (e.g. "development").
         """
         return self.app_env == "production"
+
+    @property
+    def openai_models(self) -> list[str]:
+        """Parse `openai_model` (raw comma-separated string) into an ordered model list.
+
+        Returns:
+            list[str]: Model ids in the order listed, stripped of whitespace, with empty
+                entries dropped (e.g. a trailing comma never produces a blank id).
+        """
+        return [m.strip() for m in self.openai_model.split(",") if m.strip()]
+
+    @property
+    def gemini_models(self) -> list[str]:
+        """Parse `gemini_model` (raw comma-separated string) into an ordered model list.
+
+        Returns:
+            list[str]: Model ids in the order listed, stripped of whitespace, with empty
+                entries dropped.
+        """
+        return [m.strip() for m in self.gemini_model.split(",") if m.strip()]
+
+    @property
+    def default_model(self) -> str:
+        """The server-wide default model: the first OPENAI_MODEL entry.
+
+        Used both as the composer's default model-chip selection and as the model for
+        one-shot server-side generations (onboarding profile synthesis) that have no
+        conversation to inherit a selection from. Falls back to the first Gemini model
+        in the unlikely case the OpenAI list is empty.
+
+        Returns:
+            str: The default model id.
+
+        Raises:
+            ValueError: If both `openai_models` and `gemini_models` are empty (no model
+                configured at all).
+        """
+        if self.openai_models:
+            return self.openai_models[0]
+        if self.gemini_models:
+            return self.gemini_models[0]
+        raise ValueError("No models configured: OPENAI_MODEL and GEMINI_MODEL are both empty")
 
 
 @lru_cache

@@ -42,10 +42,14 @@ specs silently.
   saved URL via fetch_url, and duplicate fetches of a URL are stripped from the
   conversation keeping only the latest — likewise, duplicate reads/writes of a curriculum
   section's content are stripped keeping only the latest) → conversation (with rolling
-  compaction summary at 0.8× CONTEXT_TOKEN_LIMIT via the small model).
-- Providers are swappable via env/user settings: LLM_PROVIDER (openai | gemini — the
-  openai provider serves any OpenAI-compatible endpoint via OPENAI_BASE_URL),
-  SEARCH_PROVIDER (duckduckgo | google | tavily). DuckDuckGo uses the `ddgs` package (keyless).
+  compaction summary at 0.8× CONTEXT_TOKEN_LIMIT via the conversation's selected model —
+  there is no separate "small model").
+- Model/search provider are picked per conversation via chips under the chat composer
+  (not env/user settings): OPENAI_MODEL/GEMINI_MODEL are comma-separated model lists (the
+  openai provider serves any OpenAI-compatible endpoint via OPENAI_BASE_URL; Gemini
+  models only offered once GEMINI_API_KEY is set); the first OPENAI_MODEL entry is the
+  server default. Search chip offers duckduckgo (default, keyless `ddgs` package) plus
+  google/tavily once their keys are set.
 - Citations are non-negotiable: web_search (snippet triage) → fetch_url (full page as
   Markdown, mandatory read) → save_sources pins URL + agent summary into working memory →
   sections cite `[^n]` footnotes mirrored in a `citations` array. No fabricated sources.

@@ -107,18 +107,18 @@ class LLMProvider(Protocol):
         self,
         messages: list[ChatMessage],
         tools: list[ToolSpec] | None = None,
-        small: bool = False,
     ) -> AsyncIterator[LLMEvent]:
         """Stream a chat completion. Yields TextDelta/ToolCallDelta events, ends with Done.
+
+        Each provider instance is bound to exactly one model (chosen at construction via
+        the factory's model resolution) — there is no "small model" concept; every call
+        uses that instance's model.
 
         Args:
             messages (list[ChatMessage]): The conversation history to send to the model,
                 in provider-neutral form.
             tools (list[ToolSpec] | None): Tool definitions the model may call, or None
                 to disable tool use for this request.
-            small (bool): If True, route the request to the provider's cheaper/faster
-                "small" model (used for summarization and other lightweight generations)
-                instead of the main model.
 
         Yields:
             LLMEvent: A sequence of `ReasoningDelta` (native reasoning/thinking text,
@@ -128,14 +128,12 @@ class LLMProvider(Protocol):
         """
         ...
 
-    async def complete(self, messages: list[ChatMessage], small: bool = False) -> str:
-        """Non-streaming helper used for small, one-shot generations (e.g. summarization).
+    async def complete(self, messages: list[ChatMessage]) -> str:
+        """Non-streaming helper used for one-shot generations (e.g. compaction summaries).
 
         Args:
             messages (list[ChatMessage]): The conversation history to send to the model,
                 in provider-neutral form.
-            small (bool): If True, route the request to the provider's cheaper/faster
-                "small" model instead of the main model.
 
         Returns:
             str: The complete text of the model's response.

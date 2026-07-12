@@ -3,8 +3,10 @@
 import { useEffect, useRef } from "react";
 import type { KeyboardEvent } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { ArrowUp, Loader2, Square, TriangleAlert } from "lucide-react";
+import { ArrowUp, Bot, Globe, Loader2, Square, TriangleAlert } from "lucide-react";
 import { cn } from "@/lib/utils";
+import type { ModelOption } from "@/lib/types";
+import { ChipSelect, SEARCH_PROVIDER_LABELS } from "@/components/ui/ChipSelect";
 
 // Context-usage warning card appears once usage crosses 70% of the limit — ahead of
 // COMPACTION_TRIGGER_FRACTION (0.8, "threshold" below), where auto-compaction actually fires.
@@ -27,19 +29,30 @@ interface ComposerProps {
   onCompact?: () => void;
   /** True while a manual or auto compaction is in flight; disables the button and swaps its label. */
   compacting?: boolean;
+  /** Model chip options (union of OPENAI_MODEL/GEMINI_MODEL), from `session_ready`. */
+  availableModels: ModelOption[];
+  /** Model chip's current selection; null before `session_ready` arrives. */
+  selectedModel: string | null;
+  onModelChange: (id: string) => void;
+  /** Search-provider chip options, from `session_ready`. */
+  searchProviders: string[];
+  /** Search-provider chip's current selection; null before `session_ready` arrives. */
+  selectedSearchProvider: string | null;
+  onSearchProviderChange: (name: string) => void;
 }
 
 /**
- * Bottom-pinned message input for the chat panel. A controlled, auto-growing
- * textarea (grows up to 200px, then scrolls) plus a single action button that
- * toggles between "send" and "stop":
+ * Bottom-pinned message input for the chat panel. Inside a single outlined box: a
+ * controlled, auto-growing textarea on top (grows up to 200px, then scrolls), and a
+ * bottom row with the model/search-provider chips on the left and a single action
+ * button on the right that toggles between "send" and "stop":
  *  - `running` (agent is mid-turn) shows a Stop button that calls `onStop`,
  *    which forwards to `ChatSocket.sendStop()` via the parent.
  *  - otherwise shows a Send button, disabled when `disabled` is true or the
  *    draft is empty/whitespace-only.
- * `disabled` also greys out and locks the textarea itself (e.g. while a HITL
- * plan decision is awaiting the user, per ChatPanel's composerDisabled) and
- * swaps the placeholder to explain why input is blocked.
+ * `disabled` also greys out and locks the textarea and both chips (e.g. while a HITL
+ * plan decision is awaiting the user, per ChatPanel's composerDisabled) and swaps the
+ * placeholder to explain why input is blocked.
  */
 export function Composer({
   value,
@@ -52,6 +65,12 @@ export function Composer({
   contextUsage,
   onCompact,
   compacting,
+  availableModels,
+  selectedModel,
+  onModelChange,
+  searchProviders,
+  selectedSearchProvider,
+  onSearchProviderChange,
 }: ComposerProps) {
   const ref = useRef<HTMLTextAreaElement>(null);
 
@@ -121,7 +140,7 @@ export function Composer({
 
       <div
         className={cn(
-          "flex items-end gap-2 border border-input bg-background p-2 transition-colors focus-within:ring-2 focus-within:ring-ring",
+          "flex flex-col border border-input bg-background p-2 transition-colors focus-within:ring-2 focus-within:ring-ring",
           // Swap full rounding for bottom-only when the warning card is attached above,
           // so the two read as one continuous unit rather than two separate boxes.
           showContextWarning ? "rounded-b-xl" : "rounded-xl",
@@ -143,28 +162,51 @@ export function Composer({
               ? (disabledPlaceholder ?? "Waiting…")
               : "Ask anything, or describe what to change…"
           }
-          className="max-h-[200px] flex-1 resize-none bg-transparent px-2 py-1.5 text-sm outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed"
+          className="max-h-[200px] w-full resize-none bg-transparent px-2 py-1.5 text-sm outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed"
         />
-        {running ? (
-          <button
-            type="button"
-            onClick={onStop}
-            aria-label="Stop the agent"
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-destructive text-destructive-foreground shadow-sm transition-opacity hover:opacity-90"
-          >
-            <Square className="h-3.5 w-3.5" aria-hidden="true" fill="currentColor" />
-          </button>
-        ) : (
-          <button
-            type="button"
-            onClick={onSend}
-            disabled={disabled || !value.trim()}
-            aria-label="Send message"
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground shadow-sm transition-opacity disabled:opacity-40"
-          >
-            <ArrowUp className="h-4 w-4" aria-hidden="true" />
-          </button>
-        )}
+
+        {/* Chip row: model + search-provider selectors on the left, action button on the
+            right — flex-wrap lets the chips drop to a second line on very narrow widths
+            rather than overflowing the outline. */}
+        <div className="flex flex-wrap items-center gap-1.5 px-1 pb-0.5">
+          <ChipSelect
+            icon={Bot}
+            ariaLabel="Select model"
+            value={selectedModel}
+            onChange={onModelChange}
+            disabled={disabled}
+            options={availableModels.map((m) => ({ id: m.id, label: m.id, badge: m.provider }))}
+          />
+          <ChipSelect
+            icon={Globe}
+            ariaLabel="Select search provider"
+            value={selectedSearchProvider}
+            onChange={onSearchProviderChange}
+            disabled={disabled}
+            options={searchProviders.map((p) => ({ id: p, label: SEARCH_PROVIDER_LABELS[p] ?? p }))}
+          />
+          <div className="flex-1" />
+          {running ? (
+            <button
+              type="button"
+              onClick={onStop}
+              aria-label="Stop the agent"
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-destructive text-destructive-foreground shadow-sm transition-opacity hover:opacity-90"
+            >
+              <Square className="h-3.5 w-3.5" aria-hidden="true" fill="currentColor" />
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={onSend}
+              disabled={disabled || !value.trim()}
+              aria-label="Send message"
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground shadow-sm transition-opacity disabled:opacity-40"
+            >
+              <ArrowUp className="h-4 w-4" aria-hidden="true" />
+            </button>
+          )}
+        </div>
       </div>
       <p className="mt-1.5 px-1 text-[11px] text-muted-foreground">
         Enter to send &middot; Shift+Enter for a new line

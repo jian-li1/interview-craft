@@ -49,16 +49,25 @@ drawer behavior is unchanged (slide-in overlay, unaffected by the desktop collap
   then POST /synthesize; shows the synthesized profile with an editable/regenerate step;
   finish → /dashboard. Revisitable from settings ("Edit background").
 - **Dashboard**: greeting with user name; prominent prompt box ("What interview are you
-  preparing for?") with example prompt chips — submitting creates a conversation
-  (POST /api/conversations with the prompt) and routes to /studio/[id]; grid of curriculum
-  cards (emoji, title, subtitle showing the agent-written `description` — falling back to
-  `user_prompt` for legacy curricula or before a plan is first proposed, `line-clamp-3` —
-  status badge, progress bar when generating, module count, updated time, delete w/
-  confirm). Empty state illustration. The dashboard's prompt box is the *only* way to
-  create a curriculum — the sidebar's "New curriculum" button never calls the API; it just
+  preparing for?") with a column layout — textarea on top, then a bottom row with model
+  (`Bot` icon) / search-provider (`Globe` icon) `ChipSelect` chips on the left, a flexible
+  spacer, and the send button on the right, then a row of example prompt chips below the
+  box. The model/search-provider chip options come from `GET /api/models` (fetched once
+  on mount via `modelsApi.get()`, since the dashboard has no WS connection yet — the
+  studio composer instead hydrates from `session_ready`); options default-select to the
+  response's `default_model`/`default_search_provider` and are rendered only once their
+  list is non-empty (a fetch failure just leaves the chips off, never blocking the box).
+  Submitting creates a conversation (POST /api/conversations with the prompt plus any
+  chip selection) and routes to /studio/[id]; grid of curriculum cards (emoji, title,
+  subtitle showing the agent-written `description` — falling back to `user_prompt` for
+  legacy curricula or before a plan is first proposed, `line-clamp-3` — status badge,
+  progress bar when generating, module count, updated time, delete w/ confirm). Empty
+  state illustration. The dashboard's prompt box is the *only* way to create a
+  curriculum — the sidebar's "New curriculum" button never calls the API; it just
   navigates to /dashboard (see §2 sidebar note below).
-- **Settings**: tabs — Profile (link/embed onboarding edit), Preferences (LLM provider,
-  search provider dropdowns — "server default" option), Appearance (theme), Account (email, logout).
+- **Settings**: tabs — Profile (link/embed onboarding edit), Appearance (theme), Account
+  (email, logout). No more Preferences tab — LLM model / search provider selection moved
+  to the chat composer's chips (per-conversation, see §3 below), not a settings page.
 
 ## 3. Studio (the core screen)
 
@@ -113,6 +122,27 @@ studio page unmounts.
   is running (sends `stop`, which aborts promptly — see spec 01 §7 — rather than waiting
   for the current LLM stream chunk or tool call to finish on its own), disabled states,
   reconnect logic with exponential backoff and "reconnecting…" toast.
+- **Model / search-provider chips**: inside the SAME outlined input box as the textarea
+  (not a separate row below it) — the box is a column: textarea on top, then a bottom row
+  (`ChipSelect`, `components/ui/ChipSelect.tsx` — a shared primitive also used by the
+  dashboard prompt box) with the two chips on the left, a flexible spacer, and the
+  send/stop button on the right. Each chip is a compact pill (icon + current value +
+  chevron) — `Bot` for the model chip, `Globe` for the search-provider chip (friendly
+  labels via the shared `SEARCH_PROVIDER_LABELS` map exported alongside `ChipSelect`:
+  duckduckgo → "DuckDuckGo", google → "Google", tavily → "Tavily") — that opens an
+  UPWARD-anchored popover (the composer sits at the bottom of the chat panel, so a
+  downward popover would be clipped) listing options with a check mark on the current
+  selection and, for the model chip, a muted `openai`/`gemini` badge per option; closes
+  on outside click, Escape, or picking an option. The chip trigger hovers to
+  `accent-soft` (not the vivid `--accent` fill, which reads unreadable against the
+  chip's muted text in both themes) and popover option rows hover the same way. Options/
+  current values come from `useChatStore`'s `availableModels`/`selectedModel`/
+  `searchProviders`/`selectedSearchProvider`, hydrated from the `session_ready` WS event
+  (spec 01 §7) via `setModelOptions`; picking an option calls `setSelectedModel`/
+  `setSelectedSearchProvider` (local-only — no WS frame is sent on selection). The
+  current selections are then attached to every subsequent `user_message`/
+  `plan_decision`/`compact` frame the composer sends. Both chips are disabled (reduced
+  opacity, non-interactive) whenever the composer itself is disabled.
 - History hydration: on load fetch GET /api/conversations/{id}/messages and render
   (including persisted tool calls + reasoning as collapsed blocks). Messages with
   `role: "system"` (internal bookkeeping — auto-continue nudges, plan-approval records) are

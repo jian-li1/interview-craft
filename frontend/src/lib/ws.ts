@@ -163,14 +163,23 @@ export class ChatSocket {
     }
   }
 
-  /** Sends a user chat message to the agent. */
-  sendUserMessage(content: string): void {
-    this.send({ type: "user_message", content });
+  /**
+   * Sends a user chat message to the agent. `model`/`searchProvider` are the composer
+   * chips' current selections — omitted (rather than sent as null) when unset so the
+   * backend falls through to the conversation's persisted selection / server default.
+   */
+  sendUserMessage(content: string, model?: string, searchProvider?: string): void {
+    this.send({ type: "user_message", content, model, search_provider: searchProvider });
   }
 
   /** Approves or requests changes to a proposed task plan (HITL plan-approval flow). */
-  sendPlanDecision(decision: "approve" | "modify", feedback: string | null): void {
-    this.send({ type: "plan_decision", decision, feedback });
+  sendPlanDecision(
+    decision: "approve" | "modify",
+    feedback: string | null,
+    model?: string,
+    searchProvider?: string
+  ): void {
+    this.send({ type: "plan_decision", decision, feedback, model, search_provider: searchProvider });
   }
 
   /** Requests the agent run be cancelled. */
@@ -179,8 +188,8 @@ export class ChatSocket {
   }
 
   /** Requests a manual compaction pass now (the composer's "Compact now" button). */
-  sendCompact(): void {
-    this.send({ type: "compact" });
+  sendCompact(model?: string, searchProvider?: string): void {
+    this.send({ type: "compact", model, search_provider: searchProvider });
   }
 
   /**

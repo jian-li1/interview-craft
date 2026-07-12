@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
+from app.core.config import Settings, get_settings
 from app.core.deps import (
     CurrentUser,
     enforce_rate_limit,
@@ -18,6 +19,8 @@ from app.models.conversation import (
     NewConversationResponse,
 )
 from app.services import firestore as fs
+from app.services.llm.factory import resolve_model
+from app.services.search.factory import resolve_search_provider
 
 router = APIRouter(prefix="/api/conversations", tags=["conversations"])
 
@@ -49,7 +52,9 @@ async def list_conversations(user: CurrentUser = Depends(get_current_user)) -> l
 
 @router.post("", response_model=NewConversationResponse, dependencies=[Depends(require_csrf_header)])
 async def create_conversation(
-    body: NewConversationRequest, user: CurrentUser = Depends(get_current_user)
+    body: NewConversationRequest,
+    user: CurrentUser = Depends(get_current_user),
+    settings: Settings = Depends(get_settings),
 ) -> NewConversationResponse:
     """Start a new conversation. If a curriculum_prompt is given, also creates a new
     curriculum doc (status=researching) linked to this conversation, ready for the agent
@@ -63,9 +68,13 @@ async def create_conversation(
 
     Args:
         body (NewConversationRequest): Optionally includes `curriculum_prompt`, the
-            user's initial prompt describing what curriculum to build.
+            user's initial prompt describing what curriculum to build, plus optional
+            `selected_model`/`search_provider` chip selections from the dashboard
+            prompt box.
         user (CurrentUser): The authenticated caller, resolved via
             `Depends(get_current_user)`.
+        settings (Settings): Application settings, used to resolve any requested
+            model/search-provider selection.
 
     Returns:
         NewConversationResponse: The id of the newly created conversation.
@@ -77,7 +86,22 @@ async def create_conversation(
     enforce_rate_limit(user)
 
     title = (body.curriculum_prompt or "New conversation")[:80]
-    conversation = fs.create_conversation(user.uid, title=title, curriculum_id=None)
+
+    # Only resolve/persist a selection when the client actually sent one — a null body
+    # value must stay null on the doc (falls back to server defaults), not get resolved
+    # to the default and persisted as an explicit choice.
+    resolved_model = resolve_model(body.selected_model, settings)[1] if body.selected_model is not None else None
+    resolved_search = (
+        resolve_search_provider(body.search_provider, settings) if body.search_provider is not None else None
+    )
+
+    conversation = fs.create_conversation(
+        user.uid,
+        title=title,
+        curriculum_id=None,
+        selected_model=resolved_model,
+        search_provider=resolved_search,
+    )
 
     if body.curriculum_prompt:
         curriculum = fs.create_curriculum(

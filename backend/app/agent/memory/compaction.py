@@ -1,4 +1,4 @@
-"""Auto-compaction: summarizes older messages using the small model when context grows large.
+"""Auto-compaction: summarizes older messages using the conversation's selected model when context grows large.
 
 See docs/specs/02-agent-system-spec.md §5 and agent/prompts/compaction.md for the
 contract this implements.
@@ -49,7 +49,7 @@ def load_compaction_prompt() -> str:
 
     Returns:
         str: The raw markdown contents of `compaction.md`, used verbatim as the system
-            prompt for the small-model summarization call.
+            prompt for the summarization call.
     """
     return (_PROMPTS_DIR / "compaction.md").read_text(encoding="utf-8")
 
@@ -58,7 +58,7 @@ def _render_message_for_summary(msg: dict) -> str:
     """Render a single stored message dict into a compact plain-text line for the summarizer.
 
     Includes role, sequence number, a truncated reasoning preview, the message content,
-    and a truncated preview of any tool calls — enough detail for the small model to fold
+    and a truncated preview of any tool calls — enough detail for the summarizer to fold
     the message into the rolling summary without needing the full structured form.
 
     Args:
@@ -90,15 +90,15 @@ async def run_compaction(
     existing_summary: str | None,
     messages_to_compact: list[dict],
 ) -> str:
-    """Summarize `messages_to_compact` (older ~60% of the conversation) via the small model.
+    """Summarize `messages_to_compact` (older ~60% of the conversation) via `llm`.
 
-    Merges with `existing_summary` if present, per the compaction.md contract. Uses
-    `llm.complete(..., small=True)` so this always routes to the cheap/fast model even
-    when the main conversation is using a larger one.
+    Merges with `existing_summary` if present, per the compaction.md contract. `llm` is
+    the conversation's selected model (there is no separate "small model" anymore —
+    compaction now runs on whatever model the user picked for the run).
 
     Args:
-        llm (LLMProvider): The provider instance to call (routed to its small model via
-            `small=True`); this is the `small_llm` passed down from the orchestrator.
+        llm (LLMProvider): The provider instance to call — the `compaction_llm` passed
+            down from the orchestrator (the conversation's selected model).
         existing_summary (str | None): The prior rolling summary to merge new content
             into, or None if this is the first compaction for the conversation.
         messages_to_compact (list[dict]): The older messages (raw Firestore message
@@ -121,7 +121,7 @@ async def run_compaction(
         ChatMessage(role="system", content=system_prompt),
         ChatMessage(role="user", content=user_content),
     ]
-    summary = await llm.complete(chat_messages, small=True)
+    summary = await llm.complete(chat_messages)
     return summary.strip()
 
 

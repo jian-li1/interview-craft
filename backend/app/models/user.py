@@ -15,20 +15,18 @@ Theme = Literal["system", "light", "dark"]
 class UserSettings(ApiModel):
     """Per-user overridable settings. None means "use server default".
 
-    Embedded in the `users/{uid}` Firestore document under the `settings` field.
+    Embedded in the `users/{uid}` Firestore document under the `settings` field. LLM
+    model and search provider are no longer per-user settings — they're picked
+    per-conversation via the composer chips (see `conversations/{convId}.selected_model`/
+    `search_provider` in `app/models/conversation.py`). `ApiModel` ignores unknown
+    fields on parse, so stored docs still carrying the old `llm_provider`/
+    `search_provider` keys deserialize fine (the keys are just dropped).
 
     Attributes:
         theme (Theme): UI theme preference ("system", "light", or "dark").
-        llm_provider (str | None): Per-user override of the global `LLM_PROVIDER` env
-            var (e.g. "openai", "gemini"); None defers to the server default.
-        search_provider (str | None): Per-user override of the global `SEARCH_PROVIDER`
-            env var (e.g. "duckduckgo", "google", "tavily"); None defers to the server
-            default.
     """
 
     theme: Theme = "system"
-    llm_provider: str | None = None
-    search_provider: str | None = None
 
 
 class UserSettingsUpdate(ApiModel):
@@ -38,14 +36,9 @@ class UserSettingsUpdate(ApiModel):
 
     Attributes:
         theme (Theme | None): New theme preference, or None to leave unchanged.
-        llm_provider (str | None): New LLM provider override, or None to leave unchanged.
-        search_provider (str | None): New search provider override, or None to leave
-            unchanged.
     """
 
     theme: Theme | None = None
-    llm_provider: str | None = None
-    search_provider: str | None = None
 
 
 class UserRecord(ApiModel):
@@ -62,7 +55,7 @@ class UserRecord(ApiModel):
         google_sub (str): Google's stable subject identifier for the account.
         created_at (dt.datetime): Timestamp the user record was first created.
         last_login_at (dt.datetime): Timestamp of the most recent successful login.
-        settings (UserSettings): Per-user overridable settings (theme, providers).
+        settings (UserSettings): Per-user overridable settings (currently just theme).
         onboarding_completed (bool): Whether the user has finished the onboarding wizard.
     """
 

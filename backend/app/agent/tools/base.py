@@ -26,8 +26,9 @@ class AgentContext:
     conversation_id: str
     owner_uid: str
     settings: Settings
+    # The single LLM provider for this run's selected model — no more "small model"
+    # concept (compaction/profile synthesis now run on the same selected model too).
     llm: LLMProvider
-    small_llm: LLMProvider
     search: SearchProvider
     phase: str = "intake"
 

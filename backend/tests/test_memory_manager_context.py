@@ -1,5 +1,5 @@
 """MemoryManager.build_context: layered assembly + auto-compaction trigger, using a fake
-small LLM and the in-memory fake Firestore (no network/credentials).
+compaction LLM and the in-memory fake Firestore (no network/credentials).
 """
 
 from __future__ import annotations
@@ -10,7 +10,7 @@ from app.agent.memory.manager import MemoryManager
 from app.services.llm.base import ChatMessage
 
 
-class FakeSmallLLM:
+class FakeCompactionLLM:
     """Minimal LLMProvider stand-in: complete() returns a canned compaction summary."""
 
     def __init__(self, summary: str = "## Summary\n\nStub compacted summary.") -> None:
@@ -22,12 +22,11 @@ class FakeSmallLLM:
         self._summary = summary
         self.complete_calls: list[list[ChatMessage]] = []
 
-    async def complete(self, messages, small: bool = False) -> str:
+    async def complete(self, messages) -> str:
         """Record the call and return the canned summary, standing in for a real LLM.
 
         Args:
             messages: The chat messages that would have been sent to the LLM.
-            small (bool): Unused; present to match the `LLMProvider` protocol signature.
 
         Returns:
             str: The fixed summary text configured at construction time.
@@ -35,7 +34,7 @@ class FakeSmallLLM:
         self.complete_calls.append(messages)
         return self._summary
 
-    async def chat_stream(self, messages, tools=None, small: bool = False):
+    async def chat_stream(self, messages, tools=None):
         """Unimplemented streaming stand-in — this fake only supports `complete`.
 
         Raises:
@@ -74,7 +73,7 @@ async def test_build_context_includes_static_and_working_memory_blocks(manager, 
         synthesized_profile="A career-changer targeting PM roles.",
         profile={"target_roles": ["Product Manager"]},
         agent_state={"phase": "intake", "task_queue": [], "scratchpad": ""},
-        small_llm=None,
+        compaction_llm=None,
         on_compaction=None,
     )
 
@@ -95,7 +94,7 @@ async def test_build_context_does_not_compact_below_threshold(manager, fake_fs):
     """
     conv = fake_fs.fs.create_conversation("uid1", "New chat", curriculum_id="cur1")
     fake_fs.fs.append_message(conv["id"], {"role": "user", "content": "short message"})
-    small_llm = FakeSmallLLM()
+    compaction_llm = FakeCompactionLLM()
 
     await manager.build_context(
         conversation_id=conv["id"],
@@ -104,11 +103,11 @@ async def test_build_context_does_not_compact_below_threshold(manager, fake_fs):
         synthesized_profile=None,
         profile=None,
         agent_state={"phase": "refinement"},
-        small_llm=small_llm,
+        compaction_llm=compaction_llm,
         on_compaction=None,
     )
 
-    assert small_llm.complete_calls == []
+    assert compaction_llm.complete_calls == []
     updated_conv = fake_fs.fs.get_conversation(conv["id"])
     assert updated_conv["summary"] is None
 
@@ -133,7 +132,7 @@ async def test_build_context_triggers_compaction_above_threshold(manager, fake_f
             conv["id"], {"role": "user", "content": f"message number {i} with some extra padding text to add tokens"}
         )
 
-    small_llm = FakeSmallLLM(summary="## Summary\n\nCondensed everything.")
+    compaction_llm = FakeCompactionLLM(summary="## Summary\n\nCondensed everything.")
     # Records (event_name, payload) in the order each callback fires, so ordering
     # between on_compaction_start and on_compaction can be asserted below.
     call_order = []
@@ -151,12 +150,12 @@ async def test_build_context_triggers_compaction_above_threshold(manager, fake_f
         synthesized_profile=None,
         profile=None,
         agent_state={"phase": "refinement"},
-        small_llm=small_llm,
+        compaction_llm=compaction_llm,
         on_compaction=on_compaction,
         on_compaction_start=on_compaction_start,
     )
 
-    assert len(small_llm.complete_calls) == 1
+    assert len(compaction_llm.complete_calls) == 1
     # on_compaction_start must fire before on_compaction, both exactly once.
     assert [c[0] for c in call_order] == ["start", "compaction"]
     _, start_before = call_order[0]
@@ -187,7 +186,7 @@ async def test_build_context_force_compact_below_threshold(manager, fake_fs):
     for i in range(5):
         fake_fs.fs.append_message(conv["id"], {"role": "user", "content": f"short message {i}"})
 
-    small_llm = FakeSmallLLM(summary="## Summary\n\nForced compaction.")
+    compaction_llm = FakeCompactionLLM(summary="## Summary\n\nForced compaction.")
 
     await manager.build_context(
         conversation_id=conv["id"],
@@ -196,11 +195,11 @@ async def test_build_context_force_compact_below_threshold(manager, fake_fs):
         synthesized_profile=None,
         profile=None,
         agent_state={"phase": "refinement"},
-        small_llm=small_llm,
+        compaction_llm=compaction_llm,
         force_compact=True,
     )
 
-    assert len(small_llm.complete_calls) == 1
+    assert len(compaction_llm.complete_calls) == 1
     updated_conv = fake_fs.fs.get_conversation(conv["id"])
     assert updated_conv["summary"] == "## Summary\n\nForced compaction."
     assert updated_conv["compacted_through"] is not None
@@ -216,7 +215,7 @@ async def test_build_context_force_compact_too_few_messages_skips(manager, fake_
     fake_fs.fs.append_message(conv["id"], {"role": "user", "content": "first"})
     fake_fs.fs.append_message(conv["id"], {"role": "assistant", "content": "second"})
 
-    small_llm = FakeSmallLLM()
+    compaction_llm = FakeCompactionLLM()
     compaction_calls = []
 
     async def on_compaction(summary, before, after, compacted_through):
@@ -229,12 +228,12 @@ async def test_build_context_force_compact_too_few_messages_skips(manager, fake_
         synthesized_profile=None,
         profile=None,
         agent_state={"phase": "refinement"},
-        small_llm=small_llm,
+        compaction_llm=compaction_llm,
         force_compact=True,
         on_compaction=on_compaction,
     )
 
-    assert small_llm.complete_calls == []
+    assert compaction_llm.complete_calls == []
     assert compaction_calls == []
     updated_conv = fake_fs.fs.get_conversation(conv["id"])
     assert updated_conv["summary"] is None
@@ -253,7 +252,7 @@ async def test_build_context_on_context_usage_fires_both_branches(manager, fake_
     async def on_context_usage(tokens):
         usage_calls.append(tokens)
 
-    # Branch 1: no small_llm at all, well under any threshold — no compaction.
+    # Branch 1: no compaction_llm at all, well under any threshold — no compaction.
     await manager.build_context(
         conversation_id=conv["id"],
         curriculum_id="cur1",
@@ -261,7 +260,7 @@ async def test_build_context_on_context_usage_fires_both_branches(manager, fake_
         synthesized_profile=None,
         profile=None,
         agent_state={"phase": "refinement"},
-        small_llm=None,
+        compaction_llm=None,
         on_context_usage=on_context_usage,
     )
     assert len(usage_calls) == 1
@@ -271,7 +270,7 @@ async def test_build_context_on_context_usage_fires_both_branches(manager, fake_
     # Branch 2: force compaction to run, so on_context_usage should report tokens_after.
     for i in range(5):
         fake_fs.fs.append_message(conv["id"], {"role": "user", "content": f"padding message {i}"})
-    small_llm = FakeSmallLLM(summary="## Summary\n\nForced.")
+    compaction_llm = FakeCompactionLLM(summary="## Summary\n\nForced.")
     await manager.build_context(
         conversation_id=conv["id"],
         curriculum_id="cur1",
@@ -279,7 +278,7 @@ async def test_build_context_on_context_usage_fires_both_branches(manager, fake_
         synthesized_profile=None,
         profile=None,
         agent_state={"phase": "refinement"},
-        small_llm=small_llm,
+        compaction_llm=compaction_llm,
         force_compact=True,
         on_context_usage=on_context_usage,
     )
@@ -315,7 +314,7 @@ async def test_build_context_injects_sources_block_between_working_memory_and_su
         synthesized_profile=None,
         profile=None,
         agent_state={"phase": "writing"},
-        small_llm=None,
+        compaction_llm=None,
         on_compaction=None,
     )
 

@@ -43,7 +43,6 @@ def _make_ctx(phase: str = "deep_research") -> AgentContext:
         owner_uid="uid1",
         settings=get_settings(),
         llm=object(),
-        small_llm=object(),
         search=object(),
         phase=phase,
     )

@@ -97,18 +97,19 @@ FIREBASE_PROJECT_ID=interview-blueprint-dev
 GOOGLE_APPLICATION_CREDENTIALS=./serviceAccountKey.json   # path A only; blank for emulator
 FIRESTORE_EMULATOR_HOST=                                   # path B only, e.g. localhost:8686
 
-# --- LLM: pick one provider ---
-LLM_PROVIDER=openai                  # openai | gemini
-OPENAI_API_KEY=sk-...                # required if LLM_PROVIDER=openai
-OPENAI_MODEL=gpt-4o                  # main model, used for the ReAct loop
-OPENAI_SMALL_MODEL=gpt-4o-mini       # used for compaction, profile synthesis (cheaper/faster)
+# --- LLM: comma-separated model lists; the chat composer's model chip (per-conversation)
+# offers the union of both lists. FIRST entry of OPENAI_MODEL is the server default (also
+# used for onboarding profile synthesis, which has no conversation to inherit from).
+OPENAI_API_KEY=sk-...                # required to use any OPENAI_MODEL entry
+OPENAI_MODEL=gpt-4o,gpt-4o-mini      # used for the ReAct loop AND compaction/summarization
+                                      # (there's no separate "small model" anymore)
 OPENAI_BASE_URL=                     # set for a local OpenAI-compatible server — see §6 below
-GEMINI_API_KEY=                      # required if LLM_PROVIDER=gemini
-GEMINI_MODEL=gemini-2.5-pro
-GEMINI_SMALL_MODEL=gemini-2.5-flash
+GEMINI_API_KEY=                      # Gemini models are only offered by the composer's
+                                      # model chip when this is set
+GEMINI_MODEL=gemini-2.5-pro,gemini-2.5-flash
 
-# --- Search: duckduckgo needs nothing; others need a key ---
-SEARCH_PROVIDER=duckduckgo           # duckduckgo | google | tavily
+# --- Search: duckduckgo needs nothing; google/tavily are offered by the composer's
+# search chip only once their keys below are set ---
 GOOGLE_CSE_API_KEY=
 GOOGLE_CSE_ENGINE_ID=
 TAVILY_API_KEY=
@@ -170,11 +171,12 @@ OpenAI-compatible `/v1` chat-completions API instead — e.g. vLLM, Ollama, or L
 Then in `backend/.env`:
 
 ```
-LLM_PROVIDER=openai
 OPENAI_BASE_URL=http://localhost:8080/v1   # or wherever your server listens
 OPENAI_API_KEY=                      # leave blank — see below
 OPENAI_MODEL=<whatever your server reports as its model name, often ignored by local servers>
-OPENAI_SMALL_MODEL=<same, or a second/smaller local model if you're running two servers>
+                                      # comma-separate a second entry if you're running two
+                                      # local servers/models — both show up in the composer's
+                                      # model chip; there's no separate "small model" field
 ```
 
 There is no separate provider value for this — the `openai` provider itself, pointed at
@@ -319,9 +321,10 @@ setup gives a connection-refused error that looks identical either way.
 occasionally rate-limits; `DuckDuckGoSearchProvider` retries once after a 2-second
 backoff and then gives up silently (returns `[]`, not an error) — the agent will notice
 via `web_search`'s `count: 0` result and should adapt its query, per
-`base_system.md`'s tool-error-adaptation rules. If it's persistent, switch
-`SEARCH_PROVIDER` to `google` or `tavily` temporarily (see
-[setup-cloud-services.md](setup-cloud-services.md) §6/§7).
+`base_system.md`'s tool-error-adaptation rules. If it's persistent, set the
+`GOOGLE_CSE_*`/`TAVILY_API_KEY` env vars (see [setup-cloud-services.md](setup-cloud-services.md)
+§6/§7) so google/tavily appear in the chat composer's search chip, then pick one there —
+search provider selection is per-conversation now, not a single env-var default.
 
 ## Related documents
 

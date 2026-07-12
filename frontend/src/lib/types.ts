@@ -38,8 +38,16 @@ export type MessageRole = "user" | "assistant" | "system";
 
 export interface UserSettings {
   theme: ThemePref;
-  llm_provider: string | null;
-  search_provider: string | null;
+}
+
+/**
+ * One selectable model option for the composer's model chip — the union of
+ * OPENAI_MODEL/GEMINI_MODEL configured server-side (Gemini entries only present
+ * when GEMINI_API_KEY is set). `provider` is shown as a muted badge per option.
+ */
+export interface ModelOption {
+  id: string;
+  provider: "openai" | "gemini";
 }
 
 export interface UserOut {
@@ -218,10 +226,22 @@ export interface MessageOut {
 
 export interface CreateConversationRequest {
   curriculum_prompt: string | null;
+  /** Dashboard prompt box's chip selections (see `modelsApi.get`); omitted/null leaves the doc's fields null. */
+  selected_model?: string | null;
+  search_provider?: string | null;
 }
 
 export interface CreateConversationResponse {
   conversation_id: string;
+}
+
+/** Response shape for `GET /api/models` — backs the dashboard prompt box's chips
+ * (the studio composer instead hydrates from the WS `session_ready` event). */
+export interface ModelOptionsResponse {
+  models: ModelOption[];
+  default_model: string;
+  search_providers: string[];
+  default_search_provider: string;
 }
 
 export interface OkResponse {
@@ -230,22 +250,31 @@ export interface OkResponse {
 
 export interface SettingsUpdateRequest {
   theme?: ThemePref;
-  llm_provider?: string | null;
-  search_provider?: string | null;
 }
 
 // ---------------------------------------------------------------------------
 // WebSocket protocol — Client -> Server
 // ---------------------------------------------------------------------------
 
-/** Discriminated union (on `type`) of every frame the client may send over the chat WebSocket. */
+/**
+ * Discriminated union (on `type`) of every frame the client may send over the chat
+ * WebSocket. `user_message`/`plan_decision`/`compact` carry optional `model`/
+ * `search_provider` — the composer's chip selections, forwarded to the backend for
+ * resolution/persistence (see `Orchestrator.run_turn`/`compact_now`).
+ */
 export type ClientEvent =
-  | { type: "user_message"; content: string }
-  | { type: "plan_decision"; decision: "approve" | "modify"; feedback: string | null }
+  | { type: "user_message"; content: string; model?: string; search_provider?: string }
+  | {
+      type: "plan_decision";
+      decision: "approve" | "modify";
+      feedback: string | null;
+      model?: string;
+      search_provider?: string;
+    }
   | { type: "stop" }
   | { type: "ping" }
   // Manual "Compact now" request from the composer's context-usage warning card.
-  | { type: "compact" };
+  | { type: "compact"; model?: string; search_provider?: string };
 
 // ---------------------------------------------------------------------------
 // WebSocket protocol — Server -> Client
@@ -263,6 +292,14 @@ export interface SessionReadyEvent {
    * event to imply it.
    */
   agent_running: boolean;
+  /** Every model the composer's model chip may offer (union of OPENAI_MODEL/GEMINI_MODEL). */
+  available_models: ModelOption[];
+  /** The conversation's persisted model selection, resolved/validated server-side (never a stale/unavailable id). */
+  selected_model: string;
+  /** Every search provider name the composer's search chip may offer. */
+  search_providers: string[];
+  /** The conversation's persisted search provider selection, resolved/validated server-side. */
+  search_provider: string;
 }
 
 export interface MessageStartEvent {

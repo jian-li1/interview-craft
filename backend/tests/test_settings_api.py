@@ -2,6 +2,10 @@
 
 Covers the "Server default" bug fix — sending `{"field": null}` on PUT must clear a
 previously-set override back to the server default rather than being silently dropped.
+`UserSettings` now only carries `theme` (LLM model / search provider selection moved to
+per-conversation composer chips — see `app/models/conversation.py`), so these tests
+exercise the null-clears-override semantics on `theme` instead of the removed
+`llm_provider`/`search_provider` fields.
 """
 
 from __future__ import annotations
@@ -45,80 +49,73 @@ def _authed_client(client) -> TestClient:
 
 
 def test_get_settings_returns_defaults_for_fresh_user(client, fake_fs):
-    """Verify GET /api/settings returns model defaults when the user has no stored settings."""
+    """Verify GET /api/settings returns the model default theme when the user has no
+    stored settings.
+    """
     authed = _authed_client(client)
     response = authed.get("/api/settings")
 
     assert response.status_code == 200
     body = response.json()
     assert body["theme"] == "system"
-    assert body["llm_provider"] is None
-    assert body["search_provider"] is None
 
 
-def test_put_settings_sets_llm_provider(client, fake_fs):
-    """Verify PUT with llm_provider="gemini" is reflected in the response and a subsequent GET."""
+def test_put_settings_sets_theme(client, fake_fs):
+    """Verify PUT with theme="dark" is reflected in the response and a subsequent GET."""
     authed = _authed_client(client)
     put_response = authed.put(
         "/api/settings",
-        json={"llm_provider": "gemini"},
+        json={"theme": "dark"},
         headers={"X-Requested-With": "XMLHttpRequest"},
     )
 
     assert put_response.status_code == 200
-    assert put_response.json()["llm_provider"] == "gemini"
+    assert put_response.json()["theme"] == "dark"
 
     get_response = authed.get("/api/settings")
-    assert get_response.json()["llm_provider"] == "gemini"
+    assert get_response.json()["theme"] == "dark"
 
 
-def test_put_settings_explicit_null_clears_override(client, fake_fs):
-    """Verify explicit null clears a previously-set override back to server default,
-    leaving an unrelated, separately-set field untouched.
+def test_put_settings_explicit_null_clears_theme_override(client, fake_fs):
+    """Verify explicit null clears a previously-set theme override back to the server
+    default ("system").
     """
     authed = _authed_client(client)
-    # Set both providers first so we can confirm only llm_provider gets cleared.
     authed.put(
         "/api/settings",
-        json={"llm_provider": "gemini", "search_provider": "tavily"},
+        json={"theme": "dark"},
         headers={"X-Requested-With": "XMLHttpRequest"},
     )
 
     clear_response = authed.put(
         "/api/settings",
-        json={"llm_provider": None},
+        json={"theme": None},
         headers={"X-Requested-With": "XMLHttpRequest"},
     )
 
     assert clear_response.status_code == 200
-    cleared_body = clear_response.json()
-    assert cleared_body["llm_provider"] is None
-    assert cleared_body["search_provider"] == "tavily"
+    assert clear_response.json()["theme"] == "system"
 
     get_response = authed.get("/api/settings")
-    get_body = get_response.json()
-    assert get_body["llm_provider"] is None
-    assert get_body["search_provider"] == "tavily"
+    assert get_response.json()["theme"] == "system"
 
 
 def test_put_settings_omitted_field_left_unchanged(client, fake_fs):
-    """Verify a PUT that omits a field leaves its previously-set value unchanged."""
+    """Verify a PUT that omits `theme` entirely leaves its previously-set value unchanged
+    (only an explicit null clears it — see the test above)."""
     authed = _authed_client(client)
-    # Set both providers first.
     authed.put(
         "/api/settings",
-        json={"llm_provider": "gemini", "search_provider": "tavily"},
+        json={"theme": "light"},
         headers={"X-Requested-With": "XMLHttpRequest"},
     )
 
-    # PUT only search_provider; llm_provider is omitted, not nulled, so it must survive.
+    # Empty body: theme is omitted (not nulled), so it must survive untouched.
     response = authed.put(
         "/api/settings",
-        json={"search_provider": "google"},
+        json={},
         headers={"X-Requested-With": "XMLHttpRequest"},
     )
 
     assert response.status_code == 200
-    body = response.json()
-    assert body["search_provider"] == "google"
-    assert body["llm_provider"] == "gemini"
+    assert response.json()["theme"] == "light"

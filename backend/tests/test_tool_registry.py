@@ -179,7 +179,6 @@ def _make_ctx(phase: str = "intake") -> AgentContext:
         owner_uid="uid1",
         settings=get_settings(),
         llm=object(),
-        small_llm=object(),
         search=object(),
         phase=phase,
     )

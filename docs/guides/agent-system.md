@@ -96,11 +96,16 @@ tool allowlist (§3) restricting what the LLM can even attempt to call.
 
 `_run_turn_inner` does the actual work:
 
-1. Resolves the LLM/search providers for this run, honoring the user's per-account
-   override (`fs.get_user(owner_uid)["settings"]["llm_provider"/"search_provider"]`) over
-   the server default. `small_llm` is **the same provider instance** — `small=True`
-   routing to the small model happens *inside* each provider implementation, not via a
-   separate object.
+1. Resolves the LLM/search providers for this run: this call's `model`/`search_provider`
+   args (forwarded from the WS frame's chip selections) beat the conversation doc's
+   persisted `selected_model`/`search_provider`, which beat the server defaults
+   (`Settings.default_model` / `DEFAULT_SEARCH_PROVIDER`) — via `resolve_model`/
+   `resolve_search_provider`. There is no more per-user provider override lookup. The
+   resolved values are persisted back onto the conversation doc when they differ from
+   what's stored, so a reconnect/subsequent run inherits the same selection without the
+   client resending it. `llm` is passed straight to `MemoryManager.build_context` as
+   `compaction_llm` too — there is no separate "small model"/`small_llm` anymore;
+   compaction just runs on whichever model the conversation is using.
 2. Records the turn's trigger: a plain string `user_message` is appended to
    `conversations/{id}/messages` immediately; a `PlanDecision` instead calls
    `_apply_plan_decision` (§7) — there is no chat message for a plan decision itself.
@@ -492,18 +497,19 @@ After assembling the full message list once, `build_context` estimates its token
 undercount if you only join `.content`).
 If `tokens_before > COMPACTION_TRIGGER_FRACTION (0.8) * settings.context_token_limit`
 (or the caller passed `force_compact=True` — the manual "Compact now" path, see below)
-**and** a `small_llm` was passed **and** there are more than 2 candidate messages:
+**and** a `compaction_llm` was passed **and** there are more than 2 candidate messages:
 
 1. `select_messages_to_compact(candidate_messages)` splits at
    `cutoff = max(1, int(len(messages) * 0.6))` (or `0` if there's only one message,
    meaning nothing gets compacted) into `(older, remaining)`.
 2. If `older` is non-empty: `on_compaction_start(tokens_before)` fires first if provided
    (so the client can show an in-progress chip before the potentially slow call below),
-   then `run_compaction(small_llm, existing_summary, older)` calls the small model
-   (`llm.complete(..., small=True)`) with `compaction.md` as the system prompt and a user
-   message containing the existing rolling summary (if any) plus every older message
-   rendered via `_render_message_for_summary` (role, seq, a 200-char reasoning preview,
-   content, and one line per tool call with a 200-char output preview).
+   then `run_compaction(compaction_llm, existing_summary, older)` calls `llm.complete(...)`
+   on the conversation's currently-selected model (no more separate "small model") with
+   `compaction.md` as the system prompt and a user message containing the existing
+   rolling summary (if any) plus every older message rendered via
+   `_render_message_for_summary` (role, seq, a 200-char reasoning preview, content, and
+   one line per tool call with a 200-char output preview).
 3. The new summary **replaces** `conversations/{id}.summary`, `compacted_through` is set
    to the id of the last compacted message (`older[-1]["id"]`), `token_estimate` is set
    to `tokens_after` (the POST-compaction estimate — computed before this write, not the
@@ -519,21 +525,26 @@ If `tokens_before > COMPACTION_TRIGGER_FRACTION (0.8) * settings.context_token_l
    event (`summary` = the FULL new rolling summary, untruncated; the client scroll-caps
    its dropdown). `on_context_usage(tokens_after)` fires last if provided.
 
-If compaction does **not** fire (below threshold and not forced, or no `small_llm`, or
-trivially few messages), `build_context` still updates `conversations/{id}.token_estimate`
-(as `tokens_before`) before returning, and fires `on_context_usage(tokens_before)` if
-provided, so the running estimate stays visible even between compactions.
+If compaction does **not** fire (below threshold and not forced, or no `compaction_llm`,
+or trivially few messages), `build_context` still updates
+`conversations/{id}.token_estimate` (as `tokens_before`) before returning, and fires
+`on_context_usage(tokens_before)` if provided, so the running estimate stays visible
+even between compactions.
 
 **Manual compaction** (`Orchestrator.compact_now`, `app/ws/chat.py`'s `compact` frame
 handler): the composer's context-usage warning card (shown once `context_usage`'s
-`tokens/limit` crosses 70%) sends a `compact` WS frame; the handler spawns
-`compact_now` as a background task, mirroring `run_turn`'s one-run-per-conversation lock
-(busy → recoverable error, not queued). It loads the user's LLM provider (no search
-provider needed) and calls `build_context(..., force_compact=True, ...)` with the same
-three callbacks, discarding the returned message list (the point of the call is purely
-the persisted side effect). If `build_context` still skipped compaction anyway (too few
-candidate messages even with `force_compact`), `compact_now` emits a recoverable "not
-enough conversation history" error instead of silently no-op'ing.
+`tokens/limit` crosses 70%) sends a `compact` WS frame, optionally carrying `model` (the
+composer's model-chip selection); the handler spawns `compact_now` as a background task,
+mirroring `run_turn`'s one-run-per-conversation lock (busy → recoverable error, not
+queued). It resolves the effective model the same way `run_turn` does (frame value →
+conversation doc's persisted `selected_model` → server default, via `resolve_model`;
+no more per-user settings lookup), persists it if it changed, loads that model's LLM
+provider (no search provider needed — compaction never calls tools), and calls
+`build_context(..., force_compact=True, ...)` with the same three callbacks, discarding
+the returned message list (the point of the call is purely the persisted side effect).
+If `build_context` still skipped compaction anyway (too few candidate messages even with
+`force_compact`), `compact_now` emits a recoverable "not enough conversation history"
+error instead of silently no-op'ing.
 
 **Token estimation** (`memory/tokens.py`): `estimate_tokens(text)` uses a
 `@lru_cache`d `tiktoken.get_encoding("cl100k_base")` encoder when available, falling
@@ -630,8 +641,8 @@ All eleven files live in `backend/app/agent/prompts/` and are treated as code (p
 | `refinement_phase.md` | 74 | `ready`, `refinement` | Three request types and how to handle each: edits (read-before-write, minimal targeted changes, preserve citations, `change_note`), explanations (teach in chat, never silently modify content), additions/deep-dives (scoped targeted research, not a full re-run of `deep_research`; new sections/modules must use the next sequential id — `s{K+1}`/`m{N+1}` — arbitrary slugs are rejected server-side). |
 | `citation_guidelines.md` | 79 | Every phase (always layer 3) | The exact `[^n]` marker mechanics, the `## Sources` footnote section format, the `citations` array contract (must mirror footnotes exactly), the hard "no fabricated URLs" rule, and a checklist of what does/doesn't need a citation. |
 | `visual_guidelines.md` | 90 | Every phase (always layer 4) | Mermaid syntax guardrails (always quote labels, avoid unquoted parens, cap ~25 nodes, short node IDs, one edge per line, always fence with `` ```mermaid ``); a note that there is no server-side syntax check — a broken diagram degrades to a plain code block in the UI, so the agent must self-check before writing; which diagram type for which content (flowchart default, sequenceDiagram for party interactions, mindmap for topic breakdowns); a worked correct example; `classDef`-based highlighting restrained to 2-3 accent classes; sparse, heading-only emoji usage. |
-| `profile_synthesis.md` | 63 | Onboarding `/api/onboarding/synthesize` endpoint only (small model, no tools) | Transforms raw onboarding fields + resume text into a 200-350 word third-person profile covering background, strengths, gaps vs. target roles, learning style translated into content-design guidance, and 2-4 concrete personalization hooks. Explicitly: no fabrication, no meta-commentary, plain prose only. |
-| `compaction.md` | 76 | `MemoryManager`'s auto-compaction only (small model, no tools) | What to preserve (key decisions, user preferences/corrections, curriculum/plan state, open threads) vs. drop (pleasantries, superseded tool detail, dead-end reasoning, full tool payloads); fixed-heading structured markdown output contract (`## Key Decisions` / `## User Preferences & Corrections` / `## Curriculum & Plan State` / `## Open Threads`); how to merge with an existing rolling summary (later decision wins, trim oldest/least-actionable first). |
+| `profile_synthesis.md` | 63 | Onboarding `/api/onboarding/synthesize` endpoint only (server default model, no tools) | Transforms raw onboarding fields + resume text into a 200-350 word third-person profile covering background, strengths, gaps vs. target roles, learning style translated into content-design guidance, and 2-4 concrete personalization hooks. Explicitly: no fabrication, no meta-commentary, plain prose only. |
+| `compaction.md` | 76 | `MemoryManager`'s auto-compaction only (the conversation's selected model, no tools) | What to preserve (key decisions, user preferences/corrections, curriculum/plan state, open threads) vs. drop (pleasantries, superseded tool detail, dead-end reasoning, full tool payloads); fixed-heading structured markdown output contract (`## Key Decisions` / `## User Preferences & Corrections` / `## Curriculum & Plan State` / `## Open Threads`); how to merge with an existing rolling summary (later decision wins, trim oldest/least-actionable first). |
 
 Composition per phase, concretely (from `_PHASE_PROMPT_FILES` in `memory/manager.py`):
 `intake`→`intake_phase.md`, `deep_research`→`research_phase.md`,

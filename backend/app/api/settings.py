@@ -20,8 +20,8 @@ async def get_settings_route(user: CurrentUser = Depends(get_current_user)) -> U
             `Depends(get_current_user)`.
 
     Returns:
-        UserSettings: The user's settings (e.g. provider overrides), defaulted if the
-            user has never customized them.
+        UserSettings: The user's settings (currently just theme), defaulted if the user
+            has never customized them.
     """
     data = fs.get_user(user.uid) or {}
     return UserSettings(**(data.get("settings") or {}))

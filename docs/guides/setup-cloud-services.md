@@ -110,18 +110,19 @@ verification entirely.
    **Create new secret key**. Copy it immediately (shown once).
 2. `backend/.env`:
    ```
-   LLM_PROVIDER=openai
    OPENAI_API_KEY=sk-...
-   OPENAI_MODEL=gpt-4o
-   OPENAI_SMALL_MODEL=gpt-4o-mini
+   OPENAI_MODEL=gpt-4o,gpt-4o-mini
    ```
-   `OPENAI_MODEL` is used for the main ReAct loop; `OPENAI_SMALL_MODEL` is used for
-   compaction, profile synthesis, and anywhere `small=True` is passed to the provider
-   (see [agent-system.md](agent-system.md) §6). Any two chat-completions-capable model
-   names work — swap them for cheaper/faster or more capable models as needed.
+   `OPENAI_MODEL` is a comma-separated list — every entry shows up as an option in the
+   chat composer's model chip (per-conversation selection, not a server-wide default),
+   and the FIRST entry is the server default (also used for onboarding profile
+   synthesis, which has no conversation to inherit a selection from). There is no
+   separate "small model" env var anymore — compaction/summarization now runs on
+   whichever model the conversation has selected (see [agent-system.md](agent-system.md)
+   §6). Any chat-completions-capable model names work — list cheaper/faster and more
+   capable models side by side and let users pick per conversation.
 3. This is a paid API — there is no free tier. For a free local alternative, see
-   [setup-local.md](setup-local.md)'s local-inference section (`LLM_PROVIDER=openai` +
-   `OPENAI_BASE_URL`).
+   [setup-local.md](setup-local.md)'s local-inference section (`OPENAI_BASE_URL`).
 
 ## 4. Google Gemini API key (optional)
 
@@ -129,28 +130,29 @@ verification entirely.
    Vertex AI, for a GCP-billed alternative), **Create API key**.
 2. `backend/.env`:
    ```
-   LLM_PROVIDER=gemini
    GEMINI_API_KEY=...
-   GEMINI_MODEL=gemini-2.5-pro
-   GEMINI_SMALL_MODEL=gemini-2.5-flash
+   GEMINI_MODEL=gemini-2.5-pro,gemini-2.5-flash
    ```
+   Gemini models are only offered by the composer's model chip once `GEMINI_API_KEY` is
+   set — leaving it blank simply omits them from the chip's option list (OpenAI models
+   still work fine on their own).
 3. Has a free tier with rate limits; check current quotas on the AI Studio dashboard.
    Implemented in `backend/app/services/llm/gemini_provider.py` via the `google-genai`
-   SDK — same `LLMProvider` interface as OpenAI, so switching `LLM_PROVIDER` is the only
-   change needed.
-4. Per-user override: even with a server default of `openai`, an individual signed-in
-   user can pick Gemini from **Settings → Preferences** if their account settings
-   specify it (`users/{uid}.settings.llm_provider`) — see
-   `app/services/llm/factory.py`'s override resolution.
+   SDK — same `LLMProvider` interface as OpenAI, so a user picking a Gemini model from
+   the composer's chip is all it takes to switch providers mid-conversation.
+4. Per-conversation selection: model choice (OpenAI or Gemini) is made via the chat
+   composer's model chip, per conversation — not a per-user account setting. See
+   `app/services/llm/factory.py`'s `resolve_model`/`available_models`.
 
 ## 5. DuckDuckGo search (default — nothing to configure)
 
-`SEARCH_PROVIDER=duckduckgo` is the default in `backend/.env.example` and requires no
-API key or account — it's the `ddgs` Python package (`backend/app/services/search/
-duckduckgo.py`), which scrapes DuckDuckGo's public search results. It has no official
-API, so it can occasionally rate-limit; the provider retries once with a 2-second
-backoff before giving up and returning an empty result list (never raises). No setup
-needed beyond leaving `SEARCH_PROVIDER` unset or explicitly `duckduckgo`.
+DuckDuckGo (`DEFAULT_SEARCH_PROVIDER` in `backend/app/services/search/factory.py`) is
+always available in the composer's search chip and requires no API key or account — it's
+the `ddgs` Python package (`backend/app/services/search/duckduckgo.py`), which scrapes
+DuckDuckGo's public search results. It has no official API, so it can occasionally
+rate-limit; the provider retries once with a 2-second backoff before giving up and
+returning an empty result list (never raises). No setup needed — it's the fallback
+whenever a conversation hasn't picked (or a requested provider isn't configured).
 
 ## 6. Google Custom Search (CSE) (optional)
 
@@ -166,10 +168,10 @@ needed beyond leaving `SEARCH_PROVIDER` unset or explicitly `duckduckgo`.
    client and/or Firebase project.)
 4. `backend/.env`:
    ```
-   SEARCH_PROVIDER=google
    GOOGLE_CSE_API_KEY=<api-key>
    GOOGLE_CSE_ENGINE_ID=<search-engine-id>
    ```
+   Google only appears in the composer's search chip once BOTH keys above are set.
 5. Free tier: 100 queries/day; paid beyond that. Implemented in
    `backend/app/services/search/google_cse.py`, which caps results at Google's hard
    maximum of 10 per request regardless of the tool's requested `max_results`.
@@ -180,9 +182,9 @@ needed beyond leaving `SEARCH_PROVIDER` unset or explicitly `duckduckgo`.
    (free tier available, credit-based).
 2. `backend/.env`:
    ```
-   SEARCH_PROVIDER=tavily
    TAVILY_API_KEY=tvly-...
    ```
+   Tavily only appears in the composer's search chip once this key is set.
 3. Implemented in `backend/app/services/search/tavily.py` — a search API purpose-built
    for LLM/agent use cases; its `content` field is mapped to our `snippet` field.
 
