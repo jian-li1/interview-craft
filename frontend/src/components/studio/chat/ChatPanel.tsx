@@ -105,6 +105,9 @@ export function ChatPanel({
   // UNLESS the user has deliberately scrolled up to read earlier context. In
   // that case, don't yank them back down — instead surface the
   // ScrollToBottomPill so they can opt back in.
+  // Also depends on `compactions`: the inline CompactionChip lives in a
+  // separate store slice from `messages`, so its start/finish transitions
+  // grow the transcript's height too and must re-trigger the same scroll.
   useEffect(() => {
     if (!userScrolledUp.current) {
       // Instant (not smooth) scroll: a smooth scroll restarted on every
@@ -116,7 +119,7 @@ export function ChatPanel({
     } else {
       setShowScrollPill(true);
     }
-  }, [messages]);
+  }, [messages, compactions]);
 
   // Recompute the "am I scrolled up" flag on every scroll. A small threshold
   // (80px) counts as "at bottom" so minor rendering jitter / scrollbar

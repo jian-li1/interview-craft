@@ -80,7 +80,9 @@ export function CompactionChip({ item }: CompactionChipProps) {
             transition={{ duration: 0.2 }}
             className="overflow-hidden"
           >
-            <div className="mx-auto max-w-lg rounded-lg border border-border/70 bg-muted/30 p-3 text-left">
+            {/* Fills the transcript's full width (not capped like ReasoningBlock's pane) since
+                this chip is already a full-width divider row rather than a narrow bubble. */}
+            <div className="w-full rounded-lg border border-border/70 bg-muted/30 p-3 text-left">
               {/* Caption sits OUTSIDE the scrollable pane below so it never scrolls away. */}
               <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
                 Summary of compacted history
