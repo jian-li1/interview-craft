@@ -1,13 +1,17 @@
 """WS chat endpoint: session_ready payload carries the composer's model/search options.
 
 Covers the four new session_ready fields (available_models, selected_model,
-search_providers, search_provider) added for the per-conversation composer chips, and
-that a `compact` frame forwards its `model` field through to `Orchestrator.compact_now`.
-No real network/credentials — Firestore is faked via `fake_fs` and the WS is driven
-through Starlette's `TestClient.websocket_connect`.
+search_providers, search_provider) added for the per-conversation composer chips, that a
+`compact` frame forwards its `model` field through to `Orchestrator.compact_now`, and that
+a `user_message` frame's optional `section_context` (the composer's "current section"
+toggle chip) is validated and forwarded to `Orchestrator.run_turn`. No real network/
+credentials — Firestore is faked via `fake_fs` and the WS is driven through Starlette's
+`TestClient.websocket_connect`.
 """
 
 from __future__ import annotations
+
+import threading
 
 import pytest
 from fastapi.testclient import TestClient
@@ -158,3 +162,92 @@ def test_compact_frame_forwards_model_to_orchestrator(client, fake_fs, monkeypat
     assert "gpt-4o-mini" in captured_models
     updated_conv = fake_fs.fs.get_conversation(conv["id"])
     assert updated_conv["selected_model"] == "gpt-4o-mini"
+
+
+def _capture_run_turn_kwargs(monkeypatch) -> tuple[dict, threading.Event]:
+    """Monkeypatch `Orchestrator.run_turn` to record its kwargs instead of running a turn.
+
+    `run_turn` is launched fire-and-forget via `asyncio.create_task` inside the app's own
+    event loop (which `TestClient` drives on a separate thread), so a plain
+    `threading.Event` — thread-safe regardless of which event loop sets it — is used to
+    let the test block until the background call has actually happened before asserting.
+
+    Args:
+        monkeypatch: pytest's monkeypatch fixture, used to patch the class method.
+
+    Returns:
+        tuple[dict, threading.Event]: The (initially empty) dict that will be filled with
+            the captured kwargs, and the event that's set once that happens.
+    """
+    captured: dict = {}
+    done = threading.Event()
+
+    async def fake_run_turn(self, **kwargs):
+        """Record kwargs and signal completion instead of running a real ReAct loop."""
+        captured.update(kwargs)
+        done.set()
+
+    monkeypatch.setattr("app.agent.orchestrator.Orchestrator.run_turn", fake_run_turn)
+    return captured, done
+
+
+def test_user_message_frame_forwards_valid_section_context_to_run_turn(client, fake_fs, monkeypatch):
+    """A `user_message` frame with a well-formed `section_context` (non-empty string
+    `module_id`/`section_id`) must be forwarded to `Orchestrator.run_turn` verbatim.
+    """
+    conv = fake_fs.fs.create_conversation("uid1", "Test chat", curriculum_id=None)
+    curriculum = fake_fs.fs.create_curriculum("uid1", "Test curriculum", "prep me", conversation_id=conv["id"])
+    fake_fs.fs.update_conversation(conv["id"], {"curriculum_id": curriculum["id"]})
+
+    captured, done = _capture_run_turn_kwargs(monkeypatch)
+
+    authed = _authed_client(client)
+    with authed.websocket_connect(f"/ws/chat/{conv['id']}") as ws:
+        ws.receive_json()  # session_ready
+        ws.send_json(
+            {
+                "type": "user_message",
+                "content": "explain this section",
+                "section_context": {"module_id": "m1", "section_id": "s1"},
+            }
+        )
+        assert done.wait(timeout=2), "Orchestrator.run_turn was never called"
+
+    assert captured.get("section_context") == {"module_id": "m1", "section_id": "s1"}
+
+
+@pytest.mark.parametrize(
+    "malformed_section_context",
+    [
+        "not-a-dict",
+        {"module_id": "m1"},  # missing section_id
+        {"module_id": "", "section_id": "s1"},  # empty string module_id
+        {"module_id": "m1", "section_id": 5},  # wrong type
+    ],
+)
+def test_user_message_frame_drops_malformed_section_context(
+    client, fake_fs, monkeypatch, malformed_section_context
+):
+    """A malformed `section_context` (wrong type, or missing/empty ids) must forward
+    `section_context=None` to `Orchestrator.run_turn` — silently ignored, matching the
+    model/search_provider fallback philosophy, rather than erroring the frame.
+    """
+    conv = fake_fs.fs.create_conversation("uid1", "Test chat", curriculum_id=None)
+    curriculum = fake_fs.fs.create_curriculum("uid1", "Test curriculum", "prep me", conversation_id=conv["id"])
+    fake_fs.fs.update_conversation(conv["id"], {"curriculum_id": curriculum["id"]})
+
+    captured, done = _capture_run_turn_kwargs(monkeypatch)
+
+    authed = _authed_client(client)
+    with authed.websocket_connect(f"/ws/chat/{conv['id']}") as ws:
+        ws.receive_json()  # session_ready
+        ws.send_json(
+            {
+                "type": "user_message",
+                "content": "hello",
+                "section_context": malformed_section_context,
+            }
+        )
+        assert done.wait(timeout=2), "Orchestrator.run_turn was never called"
+
+    assert captured.get("section_context") is None

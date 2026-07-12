@@ -1164,3 +1164,147 @@ async def test_compact_now_forwards_model_and_persists_it(monkeypatch, fake_fs, 
     assert event_types == ["compaction_start", "compaction", "context_usage"]
     updated_conv = fake_fs.fs.get_conversation(conv["id"])
     assert updated_conv["selected_model"] == "gpt-4o-mini"
+
+
+# ---------------------------------------------------------------------------
+# Composer "current section" chip: section_context system-note injection.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_run_turn_with_valid_section_context_injects_system_note(monkeypatch, fake_fs, orchestrator):
+    """A valid `section_context` pointing at an existing, already-written section must
+    append a system-role note BEFORE the user message, naming both ids and the section
+    title (the LLM-facing prompt text asserted verbatim per app/agent/CLAUDE.md).
+    """
+    conv, curriculum = _setup_conversation(fake_fs, phase="refinement")
+    fake_fs.fs.create_module(
+        curriculum["id"], "m1", {"order": 0, "title": "Module One", "description": "", "objectives": [], "status": "writing", "estimated_minutes": 0}
+    )
+    fake_fs.fs.create_section(
+        curriculum["id"],
+        "m1",
+        "s1",
+        {"order": 0, "title": "System Design", "content_markdown": "content", "citations": [], "status": "complete"},
+    )
+
+    scripted = ScriptedLLM([TextDelta(text="ok"), Done()])
+    monkeypatch.setattr("app.agent.orchestrator.get_llm_provider", lambda *a, **k: scripted)
+    monkeypatch.setattr("app.agent.orchestrator.get_search_provider", lambda *a, **k: StubSearch())
+
+    async def emit(event):
+        pass
+
+    result = await orchestrator.run_turn(
+        conversation_id=conv["id"],
+        curriculum_id=curriculum["id"],
+        owner_uid="uid1",
+        user_input="explain this more",
+        emit=emit,
+        section_context={"module_id": "m1", "section_id": "s1"},
+    )
+
+    assert result.outcome == TurnOutcome.DONE
+    messages = fake_fs.fs.list_messages(conv["id"])
+    # System note must be persisted (and, by seq ordering, BEFORE the user message).
+    system_msgs = [m for m in messages if m["role"] == "system"]
+    assert len(system_msgs) == 1
+    note = system_msgs[0]["content"]
+    assert 'module_id="m1"' in note
+    assert 'section_id="s1"' in note
+    assert "System Design" in note
+    assert "read_section" in note
+    user_msg = next(m for m in messages if m["role"] == "user")
+    assert system_msgs[0]["seq"] < user_msg["seq"]
+
+
+@pytest.mark.asyncio
+async def test_run_turn_with_planned_section_context_skips_note(monkeypatch, fake_fs, orchestrator):
+    """A `section_context` pointing at a section that exists but is still `"planned"`
+    (not written yet) must skip the injection entirely — no system message appended.
+    """
+    conv, curriculum = _setup_conversation(fake_fs, phase="refinement")
+    fake_fs.fs.create_module(
+        curriculum["id"], "m1", {"order": 0, "title": "Module One", "description": "", "objectives": [], "status": "planned", "estimated_minutes": 0}
+    )
+    fake_fs.fs.create_section(
+        curriculum["id"],
+        "m1",
+        "s1",
+        {"order": 0, "title": "System Design", "content_markdown": "", "citations": [], "status": "planned"},
+    )
+
+    scripted = ScriptedLLM([TextDelta(text="ok"), Done()])
+    monkeypatch.setattr("app.agent.orchestrator.get_llm_provider", lambda *a, **k: scripted)
+    monkeypatch.setattr("app.agent.orchestrator.get_search_provider", lambda *a, **k: StubSearch())
+
+    async def emit(event):
+        pass
+
+    await orchestrator.run_turn(
+        conversation_id=conv["id"],
+        curriculum_id=curriculum["id"],
+        owner_uid="uid1",
+        user_input="explain this more",
+        emit=emit,
+        section_context={"module_id": "m1", "section_id": "s1"},
+    )
+
+    messages = fake_fs.fs.list_messages(conv["id"])
+    assert not any(m["role"] == "system" for m in messages)
+
+
+@pytest.mark.asyncio
+async def test_run_turn_with_missing_section_context_skips_note(monkeypatch, fake_fs, orchestrator):
+    """A `section_context` pointing at a module/section that doesn't exist (stale
+    client-side reference — e.g. deleted since the chip rendered) must skip the
+    injection entirely rather than raising.
+    """
+    conv, curriculum = _setup_conversation(fake_fs, phase="refinement")
+    # No module/section created at all — "m1"/"s1" don't exist under this curriculum.
+
+    scripted = ScriptedLLM([TextDelta(text="ok"), Done()])
+    monkeypatch.setattr("app.agent.orchestrator.get_llm_provider", lambda *a, **k: scripted)
+    monkeypatch.setattr("app.agent.orchestrator.get_search_provider", lambda *a, **k: StubSearch())
+
+    async def emit(event):
+        pass
+
+    result = await orchestrator.run_turn(
+        conversation_id=conv["id"],
+        curriculum_id=curriculum["id"],
+        owner_uid="uid1",
+        user_input="explain this more",
+        emit=emit,
+        section_context={"module_id": "m1", "section_id": "s1"},
+    )
+
+    assert result.outcome == TurnOutcome.DONE
+    messages = fake_fs.fs.list_messages(conv["id"])
+    assert not any(m["role"] == "system" for m in messages)
+
+
+@pytest.mark.asyncio
+async def test_run_turn_with_no_section_context_appends_no_system_message(monkeypatch, fake_fs, orchestrator):
+    """The default case (no `section_context` passed at all, e.g. an ordinary composer
+    send with the chip off or hidden) must never append a system-role note.
+    """
+    conv, curriculum = _setup_conversation(fake_fs, phase="refinement")
+
+    scripted = ScriptedLLM([TextDelta(text="ok"), Done()])
+    monkeypatch.setattr("app.agent.orchestrator.get_llm_provider", lambda *a, **k: scripted)
+    monkeypatch.setattr("app.agent.orchestrator.get_search_provider", lambda *a, **k: StubSearch())
+
+    async def emit(event):
+        pass
+
+    await orchestrator.run_turn(
+        conversation_id=conv["id"],
+        curriculum_id=curriculum["id"],
+        owner_uid="uid1",
+        user_input="hello",
+        emit=emit,
+    )
+
+    messages = fake_fs.fs.list_messages(conv["id"])
+    assert not any(m["role"] == "system" for m in messages)

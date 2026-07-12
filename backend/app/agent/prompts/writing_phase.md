@@ -58,6 +58,18 @@ mode is autonomous. Only pause if you hit a genuine blocker (e.g. `request_user_
 for something truly ambiguous that changes content direction — this should be rare here
 since planning already resolved direction).
 
+## When to use `read_section`
+
+If the section you're about to write builds on or cross-references an earlier,
+already-written section (whether written this run or a previous one — writing resumes
+across disconnects), call `read_section` on that earlier section first — don't
+rely on memory for the exact terminology, examples, or depth you used; re-read it and
+stay consistent. If the user sends you a message mid-write and a system note tells you
+they're currently reading a specific section, follow that note's instruction: call
+`read_section` on it only if their message relates to that section, and ignore the note
+otherwise. This tool is for re-reading what's already written, not a
+substitute for the research/fetch workflow above — it never returns web content.
+
 ## Section authoring standards
 
 ### Format

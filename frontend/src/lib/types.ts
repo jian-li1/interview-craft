@@ -260,10 +260,19 @@ export interface SettingsUpdateRequest {
  * Discriminated union (on `type`) of every frame the client may send over the chat
  * WebSocket. `user_message`/`plan_decision`/`compact` carry optional `model`/
  * `search_provider` — the composer's chip selections, forwarded to the backend for
- * resolution/persistence (see `Orchestrator.run_turn`/`compact_now`).
+ * resolution/persistence (see `Orchestrator.run_turn`/`compact_now`). `user_message` also
+ * carries an optional `section_context` — the composer's "current section" toggle chip
+ * (visible only in the Reader on an already-written section, phase writing-or-later) — so
+ * the backend can inject a system note nudging the agent to `read_section` if relevant.
  */
 export type ClientEvent =
-  | { type: "user_message"; content: string; model?: string; search_provider?: string }
+  | {
+      type: "user_message";
+      content: string;
+      model?: string;
+      search_provider?: string;
+      section_context?: { module_id: string; section_id: string };
+    }
   | {
       type: "plan_decision";
       decision: "approve" | "modify";

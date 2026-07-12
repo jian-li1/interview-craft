@@ -91,6 +91,9 @@ _PHASE_TOOLS: dict[str, list[str]] = {
         "save_sources",
         "get_task_plan",
         "list_curriculum_structure",
+        # Re-read already-written sections for continuity/cross-refs, and to honor the
+        # reader-context system note (spec 01 §7) when the user chats mid-write.
+        "read_section",
         "write_section",
         "write_curriculum_overview",
         "set_module_status",

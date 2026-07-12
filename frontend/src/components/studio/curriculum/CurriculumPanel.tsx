@@ -1,14 +1,17 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { memo, useCallback, useEffect, useState } from "react";
+import { memo, useCallback, useEffect } from "react";
 import { motion } from "framer-motion";
 import { BookOpen, Loader2, Maximize2, Minimize2, Workflow as WorkflowIcon } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/Tabs";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ActivityFeed } from "@/components/studio/curriculum/ActivityFeed";
 import { useChatStore } from "@/stores/useChatStore";
-import { useCurriculumStore } from "@/stores/useCurriculumStore";
+import { useCurriculumStore, type CurriculumView } from "@/stores/useCurriculumStore";
+// Re-exported for backward-compat: ActiveSelection now lives in the store (lifted out of
+// this component's local state) but other modules still import the type from here.
+export type { ActiveSelection } from "@/stores/useCurriculumStore";
 
 // *** THIS is the ssr:false dynamic-import boundary referenced by root/frontend
 // CLAUDE.md's "ssr:false rule" for BOTH libraries that must never touch the
@@ -41,13 +44,6 @@ interface CurriculumPanelProps {
   onExplain: (prompt: string) => void;
 }
 
-type View = "workflow" | "reader";
-
-export interface ActiveSelection {
-  moduleId: string;
-  sectionId: string | null;
-}
-
 function CurriculumPanelImpl({ curriculumId, onExplain }: CurriculumPanelProps) {
   const curriculum = useCurriculumStore((s) => s.curriculum);
   const loading = useCurriculumStore((s) => s.loading);
@@ -56,22 +52,29 @@ function CurriculumPanelImpl({ curriculumId, onExplain }: CurriculumPanelProps) 
   // Full-screen focus mode: hides app chrome + chat (see AppShell/StudioPage).
   const focusMode = useCurriculumStore((s) => s.focusMode);
   const setFocusMode = useCurriculumStore((s) => s.setFocusMode);
+  // View/selection now live in the store (not local state) so ChatPanel's
+  // section-context chip can read them without prop-drilling through this component.
+  const view = useCurriculumStore((s) => s.view);
+  const setView = useCurriculumStore((s) => s.setView);
+  const activeSelection = useCurriculumStore((s) => s.activeSelection);
+  const setActiveSelection = useCurriculumStore((s) => s.setActiveSelection);
 
   const activity = useChatStore((s) => s.activity);
   const phaseLabel = useChatStore((s) => s.phaseLabel);
   const plan = useChatStore((s) => s.plan);
 
-  const [view, setView] = useState<View>("workflow");
-  const [activeSelection, setActiveSelection] = useState<ActiveSelection | null>(null);
-
   useEffect(() => {
-    // Reset local view state whenever the curriculum identity changes so the
-    // reader never shows a section carried over from the previous
-    // curriculum, and the panel always lands back on the workflow view.
+    // Reset view state whenever the curriculum identity changes so the reader never
+    // shows a section carried over from the previous curriculum, and the panel always
+    // lands back on the workflow view. This effect covers EVERY curriculumId change
+    // (including first mount) — the store's own fetchCurriculum switching-branch reset
+    // (see useCurriculumStore.ts) only fires for subsequent id changes it observes
+    // directly, so this effect is still the one source of truth for the reset-on-mount
+    // case and stays in place even though the store now owns the underlying state.
     setView("workflow");
     setActiveSelection(null);
     if (curriculumId) void fetchCurriculum(curriculumId);
-  }, [curriculumId, fetchCurriculum]);
+  }, [curriculumId, fetchCurriculum, setView, setActiveSelection]);
 
   // Safety net: force-clear focus mode on unmount so navigating away from the
   // studio never leaves the app shell (sidebar/header) permanently hidden.
@@ -126,7 +129,7 @@ function CurriculumPanelImpl({ curriculumId, onExplain }: CurriculumPanelProps) 
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Tabs value={view} onValueChange={(v) => setView(v as View)}>
+          <Tabs value={view} onValueChange={(v) => setView(v as CurriculumView)}>
             <TabsList aria-label="Curriculum view">
               <TabsTrigger value="workflow">
                 <span className="flex items-center gap-1.5">

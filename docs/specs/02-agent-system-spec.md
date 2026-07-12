@@ -147,6 +147,12 @@ Key requirements:
   client's phase banner updates immediately rather than only on the next reconnect; the
   modify branch emits no `phase_change` — `transition_phase` emits its own once the agent
   picks a target phase.
+- **Synthetic system message for the reader's "current section" chip**: when a
+  `user_message` frame carries a valid `section_context` (spec 01 §7 — the composer's
+  section-context toggle chip; ids re-validated against the curriculum, section must not
+  be `"planned"`), `_run_turn_inner` appends a `{"role": "system", ...}` note ahead of
+  the user's own message naming the module/section the user is reading and instructing
+  the agent to call `read_section` on it if the upcoming message relates to it.
 
 ## 4. Tool catalog (`agent/tools/`)
 
@@ -186,7 +192,7 @@ during writing-only refinements, etc. — keep filtering simple: a phase→allow
 **Curriculum tools**
 - `list_curriculum_structure()` → modules/sections tree with statuses (compact).
 - `write_section(module_id, section_id, title, content_markdown, citations[])` → target guard first: in `writing`/`review`, module_id/section_id must already exist (materialized from the approved plan) or the write is rejected with an error listing existing ids; in `ready`/`refinement`, the module must already exist (write_section never creates modules — error directs the model to `create_module`, naming the next sequential module id), and only a brand-new section at the next sequential id (`s{K+1}`) may be created — an already-existing section id is rejected too (error directs the model to `update_section`), and any other new id is rejected naming the expected `s{K+1}`. Then validates citations non-empty for research-based content; marks task done (matching `module_id-section_id` or, for legacy docs, the section id alone); emits `curriculum_updated` + `progress`; also refreshes the parent module's derived status (planned→writing→complete, from its sections) and estimated_minutes (~200 wpm from written content).
-- `read_section(module_id, section_id)` → full content (for explanation/refinement).
+- `read_section(module_id, section_id)` → full content (available from `writing` onward: continuity re-reads while writing, explanation/refinement later).
 - `update_section(module_id, section_id, content_markdown, citations[], change_note)` → for refinement phase; also refreshes the parent module's derived status/estimated_minutes.
 - `create_module(module_id, title, description)` → `ready`/`refinement` only. Creates a brand-new module. `module_id` must be exactly the next sequential id `m{N+1}` (N = current highest numbered module id) or the call is rejected naming the expected id; an already-existing `module_id` is rejected too (error directs the model to `update_module`). `title` non-empty, <=80 chars; `description` non-empty, <=300 chars (same bounds as `propose_task_plan`'s per-module validation) — both checked at runtime, error observation on failure, no write. On success, creates the module doc (`order` = current module count, `objectives: []`, `status: "planned"`, `estimated_minutes: 0`), refreshes the curriculum's cached `module_count`, and emits `curriculum_updated` (scope `module`).
 - `update_module(module_id, title?, description?)` → `ready`/`refinement` only. Updates an existing module's `title` and/or `description` in place (sections/status/ordering untouched). Errors if the module doesn't exist (lists existing ids) or if neither field is provided; whichever field is provided is bounds-validated with the same rules as `create_module`. Emits `curriculum_updated` (scope `module`) on success.

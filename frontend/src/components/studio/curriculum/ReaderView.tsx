@@ -14,8 +14,9 @@ import {
 import { SectionContent } from "@/components/studio/curriculum/SectionContent";
 import { usePanelResize } from "@/hooks/usePanelResize";
 import { cn } from "@/lib/utils";
-import type { CurriculumFull, ModuleOut, ModuleStatus, SectionOut, SectionStatus } from "@/lib/types";
-import type { ActiveSelection } from "@/components/studio/curriculum/CurriculumPanel";
+import { flattenCurriculum, resolveActiveIndex, type FlatEntry } from "@/lib/reader";
+import type { CurriculumFull, ModuleStatus, SectionStatus } from "@/lib/types";
+import type { ActiveSelection } from "@/stores/useCurriculumStore";
 
 interface ReaderViewProps {
   curriculum: CurriculumFull;
@@ -40,17 +41,6 @@ function statusClasses(status: ModuleStatus | SectionStatus): string {
   if (status === "complete") return "text-success";
   if (status === "writing") return "text-accent";
   return "text-muted-foreground";
-}
-
-/**
- * One row in the flattened module/section traversal order (see `flat`
- * below). `section` is null for a module that has no sections yet (still
- * being planned) — that case is represented as its own single flat entry so
- * it's still selectable/navigable in the TOC and via Prev/Next.
- */
-interface FlatEntry {
-  module: ModuleOut;
-  section: SectionOut | null;
 }
 
 /**
@@ -85,18 +75,9 @@ export function ReaderView({
 
   // Flattened module/section order used for prev/next traversal and for
   // resolving the active selection to a concrete (module, section) pair.
-  const flat = useMemo<FlatEntry[]>(() => {
-    const entries: FlatEntry[] = [];
-    for (const mod of modules) {
-      const sections = [...mod.sections].sort((a, b) => a.order - b.order);
-      if (sections.length === 0) {
-        entries.push({ module: mod, section: null });
-      } else {
-        for (const sec of sections) entries.push({ module: mod, section: sec });
-      }
-    }
-    return entries;
-  }, [modules]);
+  // Logic lives in lib/reader.ts (flattenCurriculum) so the composer's section-context
+  // chip (ChatPanel) can compute the exact same traversal without importing ReaderView.
+  const flat = useMemo<FlatEntry[]>(() => flattenCurriculum(curriculum), [curriculum]);
 
   // Resizable lg+ mini-TOC width, via the same drag/keyboard hook the studio
   // page uses for its chat/curriculum divider.
@@ -126,24 +107,9 @@ export function ReaderView({
     return () => document.removeEventListener("mousedown", onClick);
   }, [tocOpen]);
 
-  // Resolve the active index within `flat`, falling back gracefully when the
-  // selection is null, or points at a module/section that no longer exists
-  // (e.g. after a refetch) — default to the very first entry.
-  const activeIndex = useMemo(() => {
-    if (activeSelection) {
-      const idx = flat.findIndex((e) => {
-        if (e.module.id !== activeSelection.moduleId) return false;
-        if (activeSelection.sectionId == null) return e.section == null;
-        return e.section?.id === activeSelection.sectionId;
-      });
-      if (idx !== -1) return idx;
-      // Selection's module still exists but the exact section vanished —
-      // land on that module's first entry instead of jumping away entirely.
-      const modIdx = flat.findIndex((e) => e.module.id === activeSelection.moduleId);
-      if (modIdx !== -1) return modIdx;
-    }
-    return 0;
-  }, [activeSelection, flat]);
+  // Resolve the active index within `flat`; see lib/reader.ts's resolveActiveIndex for
+  // the fallback rules (null selection / vanished section / vanished module).
+  const activeIndex = useMemo(() => resolveActiveIndex(flat, activeSelection), [activeSelection, flat]);
 
   const current = flat[activeIndex] ?? null;
 

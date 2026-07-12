@@ -68,7 +68,7 @@ tool allowlist (§3) restricting what the LLM can even attempt to call.
 | `deep_research` | `research_phase.md` | `researching` | `web_search`, `fetch_url`, `save_sources` |
 | `outline_planning` | `planning_phase.md` | `planning` | `web_search`, `fetch_url`, `save_sources`, `propose_task_plan`, `get_task_plan` |
 | `awaiting_approval` | `planning_phase.md` | `awaiting_approval` | `get_task_plan` only (research/writing tools hidden) |
-| `writing` | `writing_phase.md` | `writing` | `web_search`, `fetch_url`, `save_sources`, `list_curriculum_structure`, `write_section`, `write_curriculum_overview`, `set_module_status`, `get_task_plan` |
+| `writing` | `writing_phase.md` | `writing` | `web_search`, `fetch_url`, `save_sources`, `list_curriculum_structure`, `read_section`, `write_section`, `write_curriculum_overview`, `set_module_status`, `get_task_plan` |
 | `review` | `review_phase.md` | `reviewing` | `list_curriculum_structure`, `read_section`, `write_section`, `write_curriculum_overview`, `set_module_status`, `fetch_url` (re-read saved sources only — no `web_search`/`save_sources`) |
 | `ready` | `refinement_phase.md` | `ready` | full refinement toolset (below) |
 | `refinement` | `refinement_phase.md` | `ready` | `list_curriculum_structure`, `read_section`, `update_section`, `write_section`, `create_module`, `update_module`, `web_search`, `fetch_url`, `save_sources` |
@@ -624,6 +624,17 @@ side effect: because `user_input` is a plain `str` here, `_run_turn_inner` also 
 {"pending_user_input": None})`) right after appending the message — this is what makes
 the question card disappear from a reconnecting client's resume snapshot once it's been
 answered.
+
+**The reader's "current section" chip**: a `user_message` frame may also carry
+`section_context: {module_id, section_id}` — the composer's toggle chip, sent only while
+the user is looking at an already-written section in the curriculum Reader (spec 01 §7).
+Also inside the `isinstance(user_input, str)` branch, `_run_turn_inner` re-fetches the
+module/section from Firestore and, only if both exist and the section's `status !=
+"planned"`, appends a `role:"system"` note (via `fs.append_message`, immediately BEFORE
+the user's own message) naming the module/section and instructing the model to call
+`read_section(module_id, section_id)` if the upcoming user message relates to it, or
+ignore the note otherwise. A stale/malformed `section_context` (deleted section, ids that
+don't exist, still-`"planned"` status) is silently skipped — no note, no error.
 
 ## 8. Prompt files — what each does and how they compose
 

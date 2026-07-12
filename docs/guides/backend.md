@@ -288,6 +288,13 @@ Key mechanics:
   straight to `Orchestrator.run_turn`/`compact_now`, which resolve them (frame value →
   the conversation doc's persisted selection → server default) and persist the resolved
   value back onto the conversation doc when it changes.
+- **Reader "current section" chip**: a `user_message` frame may also carry
+  `section_context: {module_id, section_id}` (the composer's toggle chip). The handler
+  only forwards it as `run_turn`'s `section_context` kwarg when it's a dict with
+  non-empty string `module_id`/`section_id`; any other shape (wrong type, missing field)
+  is silently normalized to `None` — no error frame. `run_turn`/`_run_turn_inner` then
+  re-validate the ids against the curriculum before injecting a system-role note (see
+  `docs/guides/agent-system.md` §7).
 
 ## 6. Firestore service & schema — `app/services/firestore.py`
 

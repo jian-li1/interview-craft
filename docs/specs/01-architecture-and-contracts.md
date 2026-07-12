@@ -301,7 +301,8 @@ All frames are JSON: `{ "type": string, ...payload }`.
 
 ### Client → Server
 ```
-{type:"user_message", content: str, model?: str, search_provider?: str}
+{type:"user_message", content: str, model?: str, search_provider?: str,
+      section_context?: {module_id: str, section_id: str}}
 {type:"plan_decision", decision:"approve"|"modify", feedback: str|null, model?: str, search_provider?: str}
 {type:"stop"}                      # cancel of current agent run — see below, takes effect promptly
 {type:"ping"}
@@ -320,6 +321,18 @@ unrecognized/unavailable value (e.g. a model removed from `OPENAI_MODEL` since i
 picked) silently falls back rather than erroring. Auto-compaction (and a manual
 `compact` frame) always runs on whichever model is currently selected for that
 conversation — there is no separate "small model".
+
+`user_message`'s optional `section_context` is the composer's "current section" toggle
+chip (visible only in the curriculum Reader, on an already-written section, once the
+agent phase is `writing` or later — a `FileText`/`EyeOff` toggle, sticky-on by default
+for the session). The server re-validates `module_id`/`section_id` against the
+curriculum before use: when both resolve to an existing module/section and the section's
+status isn't `"planned"`, a `role:"system"` note is persisted immediately ahead of the
+user message telling the agent which section the user is reading and instructing it to
+call `read_section` if the message relates to it; a malformed frame value (wrong type,
+missing/empty ids) or a stale reference (deleted/reverted-to-planned since the chip
+rendered) is silently ignored — no error, no note. Not accepted on `plan_decision`/
+`compact` frames.
 
 `stop` aborts promptly rather than only at the next iteration boundary: it interrupts
 both a pending LLM stream read (the wait on the next streamed chunk, including a long

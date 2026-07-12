@@ -167,9 +167,23 @@ export class ChatSocket {
    * Sends a user chat message to the agent. `model`/`searchProvider` are the composer
    * chips' current selections — omitted (rather than sent as null) when unset so the
    * backend falls through to the conversation's persisted selection / server default.
+   * `sectionContext` (module_id/section_id) is the composer's "current section" toggle
+   * chip's selection when included — also omitted (not sent as null/undefined fields)
+   * when not provided, matching the model/searchProvider omission pattern.
    */
-  sendUserMessage(content: string, model?: string, searchProvider?: string): void {
-    this.send({ type: "user_message", content, model, search_provider: searchProvider });
+  sendUserMessage(
+    content: string,
+    model?: string,
+    searchProvider?: string,
+    sectionContext?: { module_id: string; section_id: string }
+  ): void {
+    this.send({
+      type: "user_message",
+      content,
+      model,
+      search_provider: searchProvider,
+      section_context: sectionContext,
+    });
   }
 
   /** Approves or requests changes to a proposed task plan (HITL plan-approval flow). */

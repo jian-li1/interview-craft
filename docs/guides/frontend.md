@@ -215,10 +215,13 @@ typed send/receive helpers. Connection states: `"idle" | "connecting" | "open" |
   firing.
 - Public surface: `connect()`, `close()`, `onEvent(handler)`, `onStateChange(handler)`,
   `getState()`, `send(event)`, plus typed helpers `sendUserMessage(content, model?,
-  searchProvider?)`, `sendPlanDecision(decision, feedback, model?, searchProvider?)`,
-  `sendStop()`, `sendCompact(model?, searchProvider?)`. The optional `model`/
-  `searchProvider` args are the composer's chip selections (§5.4) — included on the
-  frame only when set, so the backend falls through to its own resolution when omitted.
+  searchProvider?, sectionContext?)`, `sendPlanDecision(decision, feedback, model?,
+  searchProvider?)`, `sendStop()`, `sendCompact(model?, searchProvider?)`. The optional
+  `model`/`searchProvider` args are the composer's chip selections (§5.4) — included on
+  the frame only when set, so the backend falls through to its own resolution when
+  omitted. `sendUserMessage`'s `sectionContext` (`{module_id, section_id}`) is the
+  section-context toggle chip's selection, included the same way (omitted when the chip
+  is hidden or toggled off) — never accepted by `sendPlanDecision`/`sendCompact`.
 
 ### 5.2 `useChatSocket` — `hooks/useChatSocket.ts`
 
@@ -293,19 +296,24 @@ called from the composer chips' `onChange`; no WS frame is sent on selection, th
 is just attached to the next `user_message`/`plan_decision`/`compact` frame).
 
 **`stores/useCurriculumStore.ts`** shape: `{ curriculum: CurriculumFull | null, currentId:
-string | null, loading, error, lastUpdatedScope: {scope, moduleId?, sectionId?} | null }`.
+string | null, loading, error, lastUpdatedScope: {scope, moduleId?, sectionId?} | null,
+view: "workflow" | "reader", activeSelection: ActiveSelection | null }`.
 `currentId` tracks which curriculum id is "current" independent of whether `curriculum`
 has loaded yet. `fetchCurriculum(id)` sets `currentId` synchronously and — if `id` differs
-from the previous `currentId` — clears `curriculum`/`lastUpdatedScope` immediately, so a
-previously-loaded curriculum never renders while a different one is being fetched; once
-the awaited `GET /api/curricula/{id}` resolves (success or error), the result is only
-committed if `get().currentId` still equals `id` (guards against out-of-order responses
-when switching curricula quickly). `refetch(scope?)` reads `currentId` (not
-`curriculum?.id`) and bails silently if there's no current id — it works even while
-`curriculum` is still null mid-load, which matters because a `curriculum_updated` WS event
-can arrive during the initial fetch. `CurriculumPanel` resets its local `view`/
-`activeSelection` state whenever `curriculumId` changes, in addition to the store clearing
-`curriculum`, so switching curricula never leaves the Reader showing a stale section.
+from the previous `currentId` — clears `curriculum`/`lastUpdatedScope`/`view`/
+`activeSelection` immediately, so a previously-loaded curriculum never renders while a
+different one is being fetched; once the awaited `GET /api/curricula/{id}` resolves
+(success or error), the result is only committed if `get().currentId` still equals `id`
+(guards against out-of-order responses when switching curricula quickly). `refetch(scope?)`
+reads `currentId` (not `curriculum?.id`) and bails silently if there's no current id — it
+works even while `curriculum` is still null mid-load, which matters because a
+`curriculum_updated` WS event can arrive during the initial fetch. `view`/`activeSelection`
+(and the `ActiveSelection` type) live here — not local `CurriculumPanel` state — so
+`ChatPanel`'s section-context chip can read exactly what the Reader has open without
+prop-drilling; `CurriculumPanel`'s own effect additionally resets both to
+`"workflow"`/`null` on every `curriculumId` change (including first mount), on top of the
+store's own switching-branch reset, so switching curricula never leaves the Reader showing
+a stale section.
 
 ### 5.4 Chat panel components (`components/studio/chat/`)
 
@@ -323,21 +331,37 @@ can arrive during the initial fetch. `CurriculumPanel` resets its local `view`/
   the first message) → `PlanApprovalCard` (when a plan awaits a decision) → `QuestionCard`
   (when a `request_user_input` gate awaits an answer and no plan card is showing) →
   `ScrollToBottomPill` → `Composer` (passed `contextUsage`, `onCompact`,
-  `compacting = compactions.some(c => c.status === "running")`, and the
+  `compacting = compactions.some(c => c.status === "running")`, the
   `availableModels`/`selectedModel`/`onModelChange`/`searchProviders`/
   `selectedSearchProvider`/`onSearchProviderChange` chip props read straight off
-  `useChatStore`). `handleSend`/`handlePlanDecision`/`handleQuestionAnswer`/
-  `handleCompact` all forward `selectedModel ?? undefined`/`selectedSearchProvider ??
-  undefined` into the corresponding `ChatSocket` send method.
+  `useChatStore`, and `sectionContext`/`sectionContextOn`/`onToggleSectionContext` — see
+  below). `handleSend`/`handlePlanDecision`/`handleQuestionAnswer`/`handleCompact` all
+  forward `selectedModel ?? undefined`/`selectedSearchProvider ?? undefined` into the
+  corresponding `ChatSocket` send method. `ChatPanel` also reads
+  `useCurriculumStore`'s `curriculum`/`view`/`activeSelection` and `useChatStore`'s
+  `phase` to derive `sectionContext` (a `useMemo`): null unless `phase` is one of
+  `writing`/`review`/`ready`/`refinement`, `view === "reader"`, and the Reader's resolved
+  active entry (via `lib/reader.ts`'s `flattenCurriculum`/`resolveActiveIndex` — the same
+  helpers `ReaderView` uses, so the chip always matches what's on screen) has a non-null
+  section whose `status !== "planned"`; otherwise `{ moduleId, sectionId, label }`. A
+  local `sectionContextOn` boolean (`useState(true)`, never auto-reset — sticky for the
+  session) tracks the toggle; `handleSend` attaches
+  `section_context: {module_id, section_id}` to `sendUserMessage` only when both
+  `sectionContext` is non-null and `sectionContextOn` is true — `handleQuestionAnswer`
+  and `handlePlanDecision` never attach it.
 - **`Composer.tsx`** — a single outlined box, column layout: an auto-growing textarea on
   top (height capped at 200px), Enter sends (Shift+Enter inserts a newline), then a
-  bottom row with the model/search-provider chips on the left, a flexible spacer, and the
-  send/stop button (swaps to stop while `running`) on the right. Optional
-  `contextUsage`/`onCompact`/`compacting` props render a warning card attached to the top
-  of the input box (shares its rounding, swapping `rounded-xl`→`rounded-b-xl`) once
-  `tokens/limit >= 0.7` (`CONTEXT_WARN_FRACTION`): "Context X% full", an explanation that
-  auto-compaction fires at `threshold` (80%), and a "Compact now" button (disabled while
-  `running || compacting`, sending `compact` via `onCompact`).
+  bottom row with the model/search-provider chips, the section-context toggle chip (when
+  `sectionContext !== null`), a flexible spacer, and the send/stop button (swaps to stop
+  while `running`) on the right. Optional `contextUsage`/`onCompact`/`compacting` props
+  render a warning card attached to the top of the input box (shares its rounding,
+  swapping `rounded-xl`→`rounded-b-xl`) once `tokens/limit >= 0.7`
+  (`CONTEXT_WARN_FRACTION`): "Context X% full", an explanation that auto-compaction fires
+  at `threshold` (80%), and a "Compact now" button (disabled while `running ||
+  compacting`, sending `compact` via `onCompact`). The section-context chip is a plain
+  toggle button (not a `ChipSelect` popover) styled to match the other chips exactly:
+  `FileText` icon + label when `sectionContextOn`, `EyeOff` icon + label + `opacity-50`
+  when off (still clickable); `aria-pressed`/`title` communicate the state.
 - **`components/ui/ChipSelect.tsx`** — the hand-rolled chip-select primitive backing the
   model and search-provider chips in both the studio composer and the dashboard
   `PromptBox` (moved here from `studio/chat/ComposerSelect.tsx` once the dashboard grew

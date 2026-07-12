@@ -226,6 +226,7 @@ class Orchestrator:
         emit: Emitter,
         model: str | None = None,
         search_provider: str | None = None,
+        section_context: dict[str, str] | None = None,
     ) -> RunResult:
         """Run a bounded ReAct loop for one user turn, streaming events via `emit`.
 
@@ -259,6 +260,13 @@ class Orchestrator:
             search_provider (str | None): Optional per-call search provider selection
                 (from the composer's search chip); beats the conversation doc's
                 persisted `search_provider`, which beats `DEFAULT_SEARCH_PROVIDER`.
+            section_context (dict[str, str] | None): Optional `{module_id, section_id}`
+                from the composer's "current section" toggle chip (only sent alongside a
+                plain-string `user_input`). When both ids resolve to an existing, already-
+                written section, a system-role note is appended ahead of the user message
+                telling the agent which section the user is reading and to `read_section`
+                it if their message relates to it; a stale/missing module or section (or
+                one still `"planned"`) silently skips the note. See `_run_turn_inner`.
 
         Returns:
             RunResult: The terminal outcome and optional detail message for this turn.
@@ -297,6 +305,7 @@ class Orchestrator:
                     cancel_event=cancel_event,
                     model=model,
                     search_provider=search_provider,
+                    section_context=section_context,
                     run_started=run_started,
                 )
             except Exception as exc:  # last-resort guard: the loop itself must not crash the WS
@@ -460,6 +469,7 @@ class Orchestrator:
         cancel_event: asyncio.Event,
         model: str | None,
         search_provider: str | None,
+        section_context: dict[str, str] | None = None,
         run_started: float,
     ) -> RunResult:
         """Run the actual ReAct loop body, already holding the per-conversation lock.
@@ -486,6 +496,11 @@ class Orchestrator:
             search_provider (str | None): Optional per-call search provider selection
                 (composer chip); resolved against the conversation doc's persisted
                 `search_provider` and `DEFAULT_SEARCH_PROVIDER`.
+            section_context (dict[str, str] | None): Optional `{module_id, section_id}`
+                from the composer's "current section" chip, as described in `run_turn`.
+                Only consulted when `user_input` is a plain string (see the injection
+                block below) — validated against the curriculum before use, so a stale
+                or malformed value is silently skipped rather than erroring the turn.
             run_started (float): `time.monotonic()` timestamp captured by `run_turn`
                 right before this call, used to compute the server-measured
                 `elapsed_ms` stamped on `agent_done` and on the run's tail message.
@@ -548,6 +563,29 @@ class Orchestrator:
         # Record the incoming user turn (unless this is a plan_decision resume, which has
         # no new chat message of its own — it's handled as a synthetic tool observation).
         if isinstance(user_input, str):
+            # Composer's "current section" chip: re-validate against the curriculum before
+            # injecting anything, since the client/server race means the section may have
+            # been restructured (deleted, renamed id, reverted to "planned") since the chip
+            # rendered — a stale reference must silently skip the note, not raise or 500.
+            if section_context is not None:
+                ctx_module_id = section_context.get("module_id", "")
+                ctx_section_id = section_context.get("section_id", "")
+                ctx_module = fs.get_module(curriculum_id, ctx_module_id)
+                ctx_section = fs.get_section(curriculum_id, ctx_module_id, ctx_section_id)
+                if ctx_module is not None and ctx_section is not None and ctx_section.get("status") != "planned":
+                    # LLM-facing prompt text — keep verbatim (see app/agent/CLAUDE.md
+                    # "LLM-facing strings are prompts, not docs").
+                    note = (
+                        f'The user is currently reading section {ctx_module["order"] + 1}.'
+                        f'{ctx_section["order"] + 1} "{ctx_section["title"]}" '
+                        f'(module_id="{ctx_module_id}", section_id="{ctx_section_id}") of module '
+                        f'"{ctx_module["title"]}" in the curriculum reader. If their next message '
+                        f"relates to this section's content, call "
+                        f'read_section(module_id="{ctx_module_id}", section_id="{ctx_section_id}") '
+                        f"to load its current content before responding. If the message is "
+                        f"unrelated to this section, ignore this note."
+                    )
+                    fs.append_message(conversation_id, {"role": "system", "content": note})
             fs.append_message(conversation_id, {"role": "user", "content": user_input})
             # A plain string user_input is either a normal chat message or the reply to a
             # pending request_user_input question (option click or free text both arrive

@@ -95,6 +95,11 @@ async def ws_chat(ws: WebSocket, conversation_id: str) -> None:
     `user_message`/`plan_decision`/`compact` frames may carry optional `model`/
     `search_provider` fields (the composer's chip selections) — forwarded straight to
     `run_turn`/`compact_now`, which resolve/persist them (see `Orchestrator`).
+    `user_message` may additionally carry a `section_context: {module_id, section_id}`
+    field (the composer's "current section" toggle chip) — forwarded to `run_turn` only
+    when it's a dict with non-empty string `module_id`/`section_id`; any other shape is
+    silently dropped (treated as `None`), matching the model/search fallback philosophy.
+    Not accepted on `plan_decision`/`compact` frames.
 
     Args:
         ws (WebSocket): The WebSocket connection, not yet accepted at entry.
@@ -295,6 +300,23 @@ async def ws_chat(ws: WebSocket, conversation_id: str) -> None:
                         }
                     )
                     continue
+                # The composer's "current section" toggle chip: only forwarded when it's a
+                # dict with non-empty string module_id/section_id — any other shape (missing
+                # field, wrong type, stale/malformed value) is silently treated as None,
+                # matching the model/search_provider fallback philosophy above.
+                raw_section_context = frame.get("section_context")
+                section_context: dict[str, str] | None = None
+                if (
+                    isinstance(raw_section_context, dict)
+                    and isinstance(raw_section_context.get("module_id"), str)
+                    and raw_section_context["module_id"]
+                    and isinstance(raw_section_context.get("section_id"), str)
+                    and raw_section_context["section_id"]
+                ):
+                    section_context = {
+                        "module_id": raw_section_context["module_id"],
+                        "section_id": raw_section_context["section_id"],
+                    }
                 # Fire-and-forget: run_turn streams its own events via emit() as it
                 # progresses, so the caller doesn't need (and shouldn't await) its result
                 # here — the receive loop must stay responsive to stop/ping frames.
@@ -309,6 +331,7 @@ async def ws_chat(ws: WebSocket, conversation_id: str) -> None:
                         # Composer chip selections, forwarded for resolution/persistence.
                         model=frame.get("model"),
                         search_provider=frame.get("search_provider"),
+                        section_context=section_context,
                     )
                 )
                 continue
@@ -377,7 +400,8 @@ async def _run_turn_safely(orchestrator: Orchestrator, **kwargs: Any) -> None:
     Args:
         orchestrator (Orchestrator): The orchestrator instance to run the turn on.
         **kwargs (Any): Forwarded directly to `orchestrator.run_turn` (conversation_id,
-            curriculum_id, owner_uid, user_input, emit).
+            curriculum_id, owner_uid, user_input, emit, model, search_provider,
+            section_context).
 
     Returns:
         None:

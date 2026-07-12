@@ -143,6 +143,30 @@ studio page unmounts.
   current selections are then attached to every subsequent `user_message`/
   `plan_decision`/`compact` frame the composer sends. Both chips are disabled (reduced
   opacity, non-interactive) whenever the composer itself is disabled.
+- **"Current section as context" chip**: a third chip, rendered immediately after the
+  model/search-provider chips (same pill styling, `h-7 max-w-[160px]` etc. — a plain
+  toggle button, not a `ChipSelect` popover). Visible only when ALL of: the curriculum
+  panel is in Reader view (`useCurriculumStore`'s `view === "reader"`), the Reader's
+  active section (resolved via `lib/reader.ts`'s `flattenCurriculum`/
+  `resolveActiveIndex` — the same logic ReaderView itself uses, so the chip always names
+  exactly what's on screen) is non-null and not `status: "planned"`, and the agent
+  `phase` is one of `writing`/`review`/`ready`/`refinement` (derived in `ChatPanel`, not
+  `Composer`, which just renders whatever it's given). Label:
+  `` `${module.order + 1}.${section.order + 1} ${section.title}` `` (1-based display of
+  the 0-based `order` fields), truncated like the other chips. Toggle states, both
+  sticky for the session (a single boolean, default **included**, never auto-resets when
+  the underlying section changes — only user clicks flip it):
+  - **Included** (default): `FileText` icon + label, normal chip styling.
+  - **Excluded**: `EyeOff` icon + label, `opacity-50` — dimmed but still fully clickable
+    to toggle back (not disabled).
+  `aria-pressed` reflects the toggle state; `aria-label`/`title` name the action/current
+  state. When hidden (wrong view/phase/no section/still-planned), nothing about it is
+  ever sent — not even an "excluded" marker. When visible AND included, the next
+  `user_message` frame's `send` call attaches
+  `section_context: {module_id, section_id}` (see spec 01 §7); the plan-decision and
+  HITL-question-answer send paths never attach it, since neither is "the user's own next
+  message about what they're reading." Respects the composer's `disabled` prop like the
+  other two chips.
 - History hydration: on load fetch GET /api/conversations/{id}/messages and render
   (including persisted tool calls + reasoning as collapsed blocks). Messages with
   `role: "system"` (internal bookkeeping — auto-continue nudges, plan-approval records) are
@@ -234,9 +258,14 @@ Two views, toggle: **Workflow** and **Reader**.
 - `lib/ws.ts`: ChatSocket class — connect/reconnect/backoff, typed event handlers,
   send helpers, ping keepalive.
 - `lib/types.ts`: TypeScript mirrors of every contract shape from spec 01.
+- `lib/reader.ts`: pure (no DOM/ssr:false coupling) `flattenCurriculum`/
+  `resolveActiveIndex` helpers shared by `ReaderView` and `ChatPanel`'s section-context
+  chip, so both agree on exactly which (module, section) is "current."
 - Zustand stores: `useAuthStore` (user, loading), `useChatStore` (messages, streaming
   buffers keyed by message_id, phase, plan, agent running flag), `useCurriculumStore`
-  (curriculum tree, refetch actions).
+  (curriculum tree, refetch actions, plus the curriculum panel's `view`
+  (Workflow/Reader) and `activeSelection` (module/section) — lifted out of
+  `CurriculumPanel` local state so the composer's section-context chip can read them).
 - All components typed strictly; `npm run build` must pass with zero type errors.
 
 ## 5. Quality bar

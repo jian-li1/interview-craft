@@ -2,6 +2,19 @@ import { create } from "zustand";
 import type { CurriculumFull } from "@/lib/types";
 import { curriculaApi } from "@/lib/api";
 
+/** Which (module, section) the Reader view currently has open — null section means the
+ * module has no sections yet (still planned). Moved here (from CurriculumPanel.tsx) so
+ * both the Reader and the composer's "current section" chip (ChatPanel) can read it. */
+export interface ActiveSelection {
+  moduleId: string;
+  sectionId: string | null;
+}
+
+/** Curriculum panel's top-level view toggle — Workflow (React Flow canvas) or Reader
+ * (single-section paging view). Lives here (not local component state) so the composer's
+ * section-context chip can read it without prop-drilling through CurriculumPanel. */
+export type CurriculumView = "workflow" | "reader";
+
 /**
  * Concern boundary: ONE ACTIVE CURRICULUM.
  *
@@ -38,6 +51,10 @@ interface CurriculumState {
    * @xyflow/react coupling.
    */
   workflowViewport: { x: number; y: number; zoom: number } | null;
+  /** Curriculum panel's Workflow/Reader toggle; see `CurriculumView` doc comment above. Lifted from CurriculumPanel local state so ChatPanel's section-context chip can read it too. */
+  view: CurriculumView;
+  /** The Reader's current (module, section) selection; see `ActiveSelection` doc comment above. Lifted from CurriculumPanel local state for the same reason as `view`. */
+  activeSelection: ActiveSelection | null;
   /** Loads a curriculum by id from scratch, clearing any previously-loaded curriculum first if the id is changing (see in-line comment below). */
   fetchCurriculum: (id: string) => Promise<void>;
   /**
@@ -50,6 +67,10 @@ interface CurriculumState {
   setFocusMode: (on: boolean) => void;
   /** Saves the Workflow canvas's pan/zoom; see `workflowViewport` doc comment above. */
   setWorkflowViewport: (viewport: { x: number; y: number; zoom: number }) => void;
+  /** Switches the curriculum panel's Workflow/Reader view. */
+  setView: (view: CurriculumView) => void;
+  /** Updates the Reader's active (module, section) selection. */
+  setActiveSelection: (selection: ActiveSelection | null) => void;
   reset: () => void;
 }
 
@@ -61,6 +82,8 @@ export const useCurriculumStore = create<CurriculumState>((set, get) => ({
   lastUpdatedScope: null,
   focusMode: false,
   workflowViewport: null,
+  view: "workflow",
+  activeSelection: null,
 
   fetchCurriculum: async (id: string) => {
     // Set currentId synchronously so out-of-order responses (and refetch,
@@ -72,8 +95,11 @@ export const useCurriculumStore = create<CurriculumState>((set, get) => ({
       currentId: id,
       loading: true,
       error: null,
-      // A saved camera from one curriculum makes no sense on another, so clear it too.
-      ...(switchingCurriculum ? { curriculum: null, lastUpdatedScope: null, workflowViewport: null } : {}),
+      // A saved camera (and reader position) from one curriculum makes no sense on
+      // another, so clear view/selection back to the workflow default too.
+      ...(switchingCurriculum
+        ? { curriculum: null, lastUpdatedScope: null, workflowViewport: null, view: "workflow", activeSelection: null }
+        : {}),
     });
     try {
       const curriculum = await curriculaApi.get(id);
@@ -105,6 +131,12 @@ export const useCurriculumStore = create<CurriculumState>((set, get) => ({
   // Simple setter: overwrites the saved camera; called from WorkflowView's onMoveEnd.
   setWorkflowViewport: (viewport) => set({ workflowViewport: viewport }),
 
+  // Simple setter: switches the panel's Workflow/Reader tab (CurriculumPanel's Tabs).
+  setView: (view) => set({ view }),
+
+  // Simple setter: updates the Reader's active (module, section) pair.
+  setActiveSelection: (selection) => set({ activeSelection: selection }),
+
   reset: () =>
     set({
       curriculum: null,
@@ -114,5 +146,7 @@ export const useCurriculumStore = create<CurriculumState>((set, get) => ({
       lastUpdatedScope: null,
       focusMode: false,
       workflowViewport: null,
+      view: "workflow",
+      activeSelection: null,
     }),
 }));

@@ -12,7 +12,13 @@ import { Composer } from "@/components/studio/chat/Composer";
 import { ScrollToBottomPill } from "@/components/studio/chat/ScrollToBottomPill";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { useChatStore, type CompactionItem } from "@/stores/useChatStore";
+import { useCurriculumStore } from "@/stores/useCurriculumStore";
+import { flattenCurriculum, resolveActiveIndex } from "@/lib/reader";
 import type { ChatSocket } from "@/lib/ws";
+
+// Phases at which the reader-section chip may appear — before "writing" there's nothing
+// written yet to attach as context (mirrors the backend's own guard in orchestrator.py).
+const SECTION_CONTEXT_PHASES = new Set(["writing", "review", "ready", "refinement"]);
 
 interface ChatPanelProps {
   conversationId: string;
@@ -78,6 +84,33 @@ export function ChatPanel({
   // Derived: true whenever any compaction chip is still in the "running" state — drives
   // the composer's "Compacting…" button label.
   const compacting = compactions.some((c) => c.status === "running");
+
+  // Curriculum panel state, read here (not passed as props) so the section-context chip
+  // can be derived independently of whatever prop-drilling CurriculumPanel already does.
+  const curriculum = useCurriculumStore((s) => s.curriculum);
+  const curriculumView = useCurriculumStore((s) => s.view);
+  const activeSelection = useCurriculumStore((s) => s.activeSelection);
+
+  // The composer's "current section" chip target: the Reader's active (module, section)
+  // pair, but only once it's actually written content the agent could usefully re-read —
+  // null hides the chip entirely (see Composer's `sectionContext !== null` render guard).
+  const sectionContext = useMemo(() => {
+    if (!phase || !SECTION_CONTEXT_PHASES.has(phase)) return null;
+    if (curriculumView !== "reader" || !curriculum) return null;
+    const flat = flattenCurriculum(curriculum);
+    const idx = resolveActiveIndex(flat, activeSelection);
+    const entry = flat[idx];
+    if (!entry || !entry.section || entry.section.status === "planned") return null;
+    return {
+      moduleId: entry.module.id,
+      sectionId: entry.section.id,
+      // order fields are 0-based in Firestore; display 1-based, matching Reader/TOC labels.
+      label: `${entry.module.order + 1}.${entry.section.order + 1} ${entry.section.title}`,
+    };
+  }, [phase, curriculumView, curriculum, activeSelection]);
+
+  // Sticky for the session (not per-section, never auto-reset) — defaults to included.
+  const [sectionContextOn, setSectionContextOn] = useState(true);
 
   const [draft, setDraft] = useState("");
   const [showScrollPill, setShowScrollPill] = useState(false);
@@ -146,7 +179,18 @@ export function ChatPanel({
     setAgentRunning(true);
     // Forward the composer chips' current selections (omitted when null so the
     // backend falls through to the conversation's persisted selection / default).
-    socketRef.current?.sendUserMessage(content, selectedModel ?? undefined, selectedSearchProvider ?? undefined);
+    // section_context is only attached when the chip is visible AND toggled on — the
+    // backend silently ignores it for plan-decision/HITL-answer resumptions, since
+    // those go through separate socket calls that never pass it (see handlePlanDecision/
+    // handleQuestionAnswer below).
+    socketRef.current?.sendUserMessage(
+      content,
+      selectedModel ?? undefined,
+      selectedSearchProvider ?? undefined,
+      sectionContext && sectionContextOn
+        ? { module_id: sectionContext.moduleId, section_id: sectionContext.sectionId }
+        : undefined
+    );
     setDraft("");
   }
 
@@ -314,6 +358,9 @@ export function ChatPanel({
         searchProviders={searchProviders}
         selectedSearchProvider={selectedSearchProvider}
         onSearchProviderChange={setSelectedSearchProvider}
+        sectionContext={sectionContext}
+        sectionContextOn={sectionContextOn}
+        onToggleSectionContext={() => setSectionContextOn((on) => !on)}
       />
     </div>
   );

@@ -3,7 +3,7 @@
 import { useEffect, useRef } from "react";
 import type { KeyboardEvent } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { ArrowUp, Bot, Globe, Loader2, Square, TriangleAlert } from "lucide-react";
+import { ArrowUp, Bot, EyeOff, FileText, Globe, Loader2, Square, TriangleAlert } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { ModelOption } from "@/lib/types";
 import { ChipSelect, SEARCH_PROVIDER_LABELS } from "@/components/ui/ChipSelect";
@@ -39,12 +39,21 @@ interface ComposerProps {
   /** Search-provider chip's current selection; null before `session_ready` arrives. */
   selectedSearchProvider: string | null;
   onSearchProviderChange: (name: string) => void;
+  /** The Reader's current written section, or null to hide the "current section" chip
+   * entirely (wrong view/phase/no section/section still "planned" — see ChatPanel). */
+  sectionContext: { label: string } | null;
+  /** Whether the section-context chip is in its "included" (true) or "excluded" (false)
+   * state — sticky for the session, defaults to included. */
+  sectionContextOn: boolean;
+  /** Toggles `sectionContextOn`; the chip stays clickable even when excluded. */
+  onToggleSectionContext: () => void;
 }
 
 /**
  * Bottom-pinned message input for the chat panel. Inside a single outlined box: a
  * controlled, auto-growing textarea on top (grows up to 200px, then scrolls), and a
- * bottom row with the model/search-provider chips on the left and a single action
+ * bottom row with the model/search-provider chips (and, when applicable, the "current
+ * section" toggle chip — see `sectionContext`) on the left and a single action
  * button on the right that toggles between "send" and "stop":
  *  - `running` (agent is mid-turn) shows a Stop button that calls `onStop`,
  *    which forwards to `ChatSocket.sendStop()` via the parent.
@@ -71,6 +80,9 @@ export function Composer({
   searchProviders,
   selectedSearchProvider,
   onSearchProviderChange,
+  sectionContext,
+  sectionContextOn,
+  onToggleSectionContext,
 }: ComposerProps) {
   const ref = useRef<HTMLTextAreaElement>(null);
 
@@ -185,6 +197,41 @@ export function Composer({
             disabled={disabled}
             options={searchProviders.map((p) => ({ id: p, label: SEARCH_PROVIDER_LABELS[p] ?? p }))}
           />
+          {/* "Current section as context" toggle — VS Code's "current file as context" chip,
+              adapted for the curriculum Reader. Only rendered when ChatPanel resolves a
+              written, in-context-window section (see its sectionContext memo); a plain toggle
+              button (not a ChipSelect popover), styled to match ChipSelect's chip exactly so
+              it reads as a sibling of the model/search chips. */}
+          {sectionContext !== null && (
+            <button
+              type="button"
+              onClick={onToggleSectionContext}
+              disabled={disabled}
+              aria-pressed={sectionContextOn}
+              aria-label={
+                sectionContextOn ? "Exclude current section as context" : "Include current section as context"
+              }
+              title={
+                sectionContextOn
+                  ? `Sending "${sectionContext.label}" as context — click to exclude`
+                  : `Not sending "${sectionContext.label}" as context — click to include`
+              }
+              className={cn(
+                "flex h-7 max-w-[160px] items-center gap-1.5 rounded-lg border border-border px-2 text-xs text-muted-foreground transition-colors",
+                "hover:bg-accent-soft hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                // Excluded state reads as "off" (dimmed) while staying clickable to re-include.
+                !sectionContextOn && "opacity-50",
+                disabled && "pointer-events-none opacity-50"
+              )}
+            >
+              {sectionContextOn ? (
+                <FileText className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+              ) : (
+                <EyeOff className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+              )}
+              <span className="min-w-0 flex-1 truncate text-left">{sectionContext.label}</span>
+            </button>
+          )}
           <div className="flex-1" />
           {running ? (
             <button

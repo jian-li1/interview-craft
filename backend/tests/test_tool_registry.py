@@ -142,6 +142,17 @@ def test_create_and_update_module_available_only_in_ready_and_refinement(registr
         assert "update_module" not in names
 
 
+def test_read_section_available_from_writing_onward(registry):
+    """Verify read_section is exposed from writing through refinement (continuity
+    re-reads while writing, explanation/refinement later) and hidden in earlier phases."""
+    for phase in ["writing", "review", "ready", "refinement"]:
+        names = {s.name for s in registry.specs_for_phase(phase)}
+        assert "read_section" in names
+    for phase in ["intake", "deep_research", "outline_planning", "awaiting_approval"]:
+        names = {s.name for s in registry.specs_for_phase(phase)}
+        assert "read_section" not in names
+
+
 def test_unknown_phase_falls_back_to_always_available(registry):
     """Verify an unrecognized phase name falls back to exposing only the
     always-available tool set, rather than raising or exposing everything."""
