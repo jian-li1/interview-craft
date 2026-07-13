@@ -567,6 +567,10 @@ class Orchestrator:
             # injecting anything, since the client/server race means the section may have
             # been restructured (deleted, renamed id, reverted to "planned") since the chip
             # rendered — a stale reference must silently skip the note, not raise or 500.
+            # Snapshot to stamp on the persisted user message doc for the reader-view
+            # "context included" chip (frontend replay after reload); stays None (and thus
+            # omitted from the doc, not written as null) unless validation below succeeds.
+            section_context_snapshot: dict[str, str] | None = None
             if section_context is not None:
                 ctx_module_id = section_context.get("module_id", "")
                 ctx_section_id = section_context.get("section_id", "")
@@ -586,7 +590,17 @@ class Orchestrator:
                         f"unrelated to this section, ignore this note."
                     )
                     fs.append_message(conversation_id, {"role": "system", "content": note})
-            fs.append_message(conversation_id, {"role": "user", "content": user_input})
+                    # Label format matches ChatPanel.tsx's sectionContext memo (1-based
+                    # module.section numbering) so the composer chip and replayed bubble chip agree.
+                    section_context_snapshot = {
+                        "module_id": ctx_module_id,
+                        "section_id": ctx_section_id,
+                        "label": f'{ctx_module["order"] + 1}.{ctx_section["order"] + 1} {ctx_section["title"]}',
+                    }
+            user_message_doc: dict[str, Any] = {"role": "user", "content": user_input}
+            if section_context_snapshot is not None:
+                user_message_doc["section_context"] = section_context_snapshot
+            fs.append_message(conversation_id, user_message_doc)
             # A plain string user_input is either a normal chat message or the reply to a
             # pending request_user_input question (option click or free text both arrive
             # this way) — either way, clear the persisted question so a reconnecting

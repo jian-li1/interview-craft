@@ -175,7 +175,8 @@ export function ChatPanel({
   function handleSend() {
     const content = draft.trim();
     if (!content) return;
-    addUserMessage(content);
+    // Optimistic bubble chip mirrors what's actually being sent (chip visible + toggled on).
+    addUserMessage(content, sectionContext && sectionContextOn ? { label: sectionContext.label } : undefined);
     setAgentRunning(true);
     // Forward the composer chips' current selections (omitted when null so the
     // backend falls through to the conversation's persisted selection / default).

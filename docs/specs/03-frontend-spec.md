@@ -166,7 +166,17 @@ studio page unmounts.
   `section_context: {module_id, section_id}` (see spec 01 §7); the plan-decision and
   HITL-question-answer send paths never attach it, since neither is "the user's own next
   message about what they're reading." Respects the composer's `disabled` prop like the
-  other two chips.
+  other two chips. When the backend validates the snapshot, `ChatPanel`'s optimistic
+  user bubble (and, after a reload, the replayed history message via the persisted
+  `section_context` field) renders a small `FileText` chip above the message text inside
+  the bubble — same `${module}.${section} ${title}` label, subdued translucent
+  `primary-foreground/10`-`/15` styling so it reads quieter than the message itself on
+  the filled `bg-primary` bubble in both themes (`MessageBubble.tsx`). Chip sizing: the
+  wrapper's `w-0` + `min-w-full` pair zeroes the chip's intrinsic-width contribution (so
+  its nowrap label can never inflate the bubble past the panel at narrow chat-column
+  widths) and then stretches it to the bubble width the message text resolved — the
+  label shows in full whenever the bubble is wide enough and truncates only at the
+  bubble's far edge.
 - History hydration: on load fetch GET /api/conversations/{id}/messages and render
   (including persisted tool calls + reasoning as collapsed blocks). Messages with
   `role: "system"` (internal bookkeeping — auto-continue nudges, plan-approval records) are

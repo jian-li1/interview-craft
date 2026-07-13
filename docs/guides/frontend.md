@@ -348,7 +348,11 @@ a stale section.
   session) tracks the toggle; `handleSend` attaches
   `section_context: {module_id, section_id}` to `sendUserMessage` only when both
   `sectionContext` is non-null and `sectionContextOn` is true — `handleQuestionAnswer`
-  and `handlePlanDecision` never attach it.
+  and `handlePlanDecision` never attach it. `handleSend` also passes a `{ label }`
+  snapshot to `addUserMessage` under the same condition, which `MessageBubble` renders as
+  a small `FileText` chip above the message text; once the backend validates the send, the
+  same snapshot is persisted as `section_context` on the message doc (`useChatStore`'s
+  `toChatMessage` maps it into `sectionContext`), so the chip survives a page reload too.
 - **`Composer.tsx`** — a single outlined box, column layout: an auto-growing textarea on
   top (height capped at 200px), Enter sends (Shift+Enter inserts a newline), then a
   bottom row with the model/search-provider chips, the section-context toggle chip (when

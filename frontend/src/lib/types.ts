@@ -218,6 +218,9 @@ export interface MessageOut {
   /** Server-measured duration (ms) of the run this message concluded; only present on
    * run-tail assistant messages, absent on pre-feature history. */
   run_elapsed_ms?: number | null;
+  /** Composer's "current section" chip snapshot; present only on user messages sent
+   * with the chip on and validated against the curriculum. */
+  section_context?: { module_id: string; section_id: string; label: string } | null;
 }
 
 // ---------------------------------------------------------------------------

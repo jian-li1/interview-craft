@@ -5,7 +5,7 @@ import { motion } from "framer-motion";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
-import { User, Sparkles, Clock } from "lucide-react";
+import { User, Sparkles, Clock, FileText } from "lucide-react";
 import { ReasoningBlock } from "@/components/studio/chat/ReasoningBlock";
 import { ToolCallGroup } from "@/components/studio/chat/ToolCallCard";
 import { cn, formatRunDuration } from "@/lib/utils";
@@ -32,6 +32,10 @@ import type { ChatMessage } from "@/stores/useChatStore";
  *
  * `isRunTail` — true when this is the newest assistant message of an
  * in-flight run — shows the live ticking timer (`LiveRunTimer`, below).
+ *
+ * User bubbles additionally show a small "current section" chip above the text
+ * when `message.sectionContext` is set (composer's context toggle was on for
+ * that send) — mirrors the VS Code extension's file-context chip.
  */
 function MessageBubbleImpl({ message, isRunTail }: { message: ChatMessage; isRunTail?: boolean }) {
   const isUser = message.role === "user";
@@ -68,14 +72,36 @@ function MessageBubbleImpl({ message, isRunTail }: { message: ChatMessage; isRun
         {message.content.trim().length > 0 && (
           <div
             className={cn(
-              "rounded-2xl px-4 py-2.5 text-sm leading-relaxed",
+              // min-w-0 is required here because this div is a flex item of the parent's
+              // flex-col column (isUser branch) — without it, a flex item's default
+              // min-width:auto lets the chip's unbroken label force this div past the
+              // row's max-w-[85%] cap instead of shrinking/truncating to fit.
+              "min-w-0 rounded-2xl px-4 py-2.5 text-sm leading-relaxed",
               isUser
                 ? "rounded-tr-sm bg-primary text-primary-foreground"
                 : "rounded-tl-sm bg-card border border-border"
             )}
           >
             {isUser ? (
-              <p className="whitespace-pre-wrap">{message.content}</p>
+              <>
+                {/* Section-context chip: mirrors the composer's toggle at send time.
+                    Translucent primary-foreground tokens keep it visibly subdued against
+                    the message text on the bg-primary bubble, in both themes. The
+                    wrapper's w-0 + min-w-full pair zeroes the chip's intrinsic-width
+                    contribution (its nowrap label once inflated the bubble past the
+                    panel at narrow widths) and then stretches it to the bubble width
+                    the message text resolved — so the label shows in full whenever the
+                    bubble is wide enough and truncates only at the bubble's far edge. */}
+                {message.sectionContext && (
+                  <div className="mb-1.5 flex w-0 min-w-full">
+                    <span className="flex min-w-0 max-w-full items-center gap-1 rounded-md border border-primary-foreground/15 bg-primary-foreground/10 px-1.5 py-0.5 text-[11px] font-medium text-primary-foreground/75">
+                      <FileText className="h-3 w-3 shrink-0" aria-hidden="true" />
+                      <span className="min-w-0 flex-1 truncate text-left">{message.sectionContext.label}</span>
+                    </span>
+                  </div>
+                )}
+                <p className="whitespace-pre-wrap">{message.content}</p>
+              </>
             ) : (
               <div className="prose-chat">
                 {/* content is guaranteed non-empty by the render gate above */}

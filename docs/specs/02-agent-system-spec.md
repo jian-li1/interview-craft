@@ -152,7 +152,10 @@ Key requirements:
   section-context toggle chip; ids re-validated against the curriculum, section must not
   be `"planned"`), `_run_turn_inner` appends a `{"role": "system", ...}` note ahead of
   the user's own message naming the module/section the user is reading and instructing
-  the agent to call `read_section` on it if the upcoming message relates to it.
+  the agent to call `read_section` on it if the upcoming message relates to it. On the
+  same successful validation, the resolved `{module_id, section_id, label}` snapshot is
+  also stamped onto the persisted user message doc (spec 01 §5) for the frontend's
+  inline "context included" bubble chip.
 
 ## 4. Tool catalog (`agent/tools/`)
 

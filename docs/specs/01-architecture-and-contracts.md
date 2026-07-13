@@ -256,6 +256,11 @@ conversations/{convId}/messages/{msgId}
   run_elapsed_ms: int|null                  # server-measured duration of the whole agentic
                                         # run (all ReAct iterations); present only on each
                                         # run's final assistant message
+  section_context: {module_id, section_id, label}|null
+                                        # composer's "current section" chip snapshot, stamped
+                                        # only on user messages whose section_context was
+                                        # validated against the curriculum and injected;
+                                        # null otherwise and on pre-feature history
   # role:"system" — internal agent-control records synthesized by the orchestrator itself
   # (not typed by the user or the LLM), e.g. plan_decision confirmations. They are
   # persisted so they flow through the same context-rebuild path as any other message,
@@ -332,7 +337,10 @@ user message telling the agent which section the user is reading and instructing
 call `read_section` if the message relates to it; a malformed frame value (wrong type,
 missing/empty ids) or a stale reference (deleted/reverted-to-planned since the chip
 rendered) is silently ignored — no error, no note. Not accepted on `plan_decision`/
-`compact` frames.
+`compact` frames. On a successful validation, the same resolved snapshot (ids + display
+label, e.g. "3.2 Heap Fundamentals") is additionally stamped as `section_context` on the
+persisted user message doc (§5) so clients can render an inline "context included" chip,
+including on history replay after a reload.
 
 `stop` aborts promptly rather than only at the next iteration boundary: it interrupts
 both a pending LLM stream read (the wait on the next streamed chunk, including a long

@@ -31,6 +31,8 @@ export interface ChatMessage {
   seq: number;
   /** Total wall-clock duration of the agentic run this message concluded — present only on each run's final assistant message. */
   runElapsedMs?: number;
+  /** Composer's "current section" chip snapshot, rendered at the top of the bubble (user messages only). */
+  sectionContext?: { label: string } | null;
 }
 
 /** The task plan currently proposed by the agent, awaiting a user approve/modify decision (HITL flow). */
@@ -137,8 +139,8 @@ interface ChatState {
   appendTextDelta: (id: string, delta: string) => void;
   /** Marks a message's streaming flags false (both reasoning and content) — called on the `message_end` WS event. Does NOT clear `agentRunning`: `message_end` fires between ReAct iterations mid-run, so `agent_done` (guaranteed on every terminal path) is the sole authority for that. */
   endMessage: (id: string) => void;
-  /** Optimistically appends a locally-authored user message (synthetic id/timestamp) before the server round-trip confirms it. */
-  addUserMessage: (content: string) => void;
+  /** Optimistically appends a locally-authored user message (synthetic id/timestamp) before the server round-trip confirms it; `sectionContext` mirrors the composer's chip when it was on and included. */
+  addUserMessage: (content: string, sectionContext?: { label: string }) => void;
   /** Marks the start of a new agentic run (idempotent — never overwrites an already-set `runStartedAt`). */
   markRunStart: () => void;
   /** Freezes the elapsed run time onto the run's final assistant message and clears `runStartedAt`. Uses the server-measured `elapsedMs` (from `agent_done`) when given — overwriting any local/legacy value, since the server value is authoritative — else falls back to the local `runStartedAt` diff (matches prior no-arg behavior, e.g. the non-recoverable `error` path). No-op if no run is in flight AND no `elapsedMs` given. */
@@ -222,6 +224,8 @@ function toChatMessage(m: MessageOut & { role: Exclude<MessageRole, "system"> })
     // Persisted server measurement, when present (new runs); undefined on pre-feature
     // history, where hydrateHistory's timestamp-derivation fallback fills the gap.
     runElapsedMs: m.run_elapsed_ms ?? undefined,
+    // Only map when present — absent/null on assistant messages and pre-feature history.
+    sectionContext: m.section_context ? { label: m.section_context.label } : undefined,
   };
 }
 
@@ -361,7 +365,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       selectedSearchProvider: null,
     }),
 
-  addUserMessage: (content) =>
+  addUserMessage: (content, sectionContext) =>
     set((s) => ({
       messages: [
         ...s.messages,
@@ -375,6 +379,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
           tool_calls: [],
           created_at: new Date().toISOString(),
           seq: s.messages.length,
+          // Optimistic chip snapshot — mirrors what the backend will persist once validated.
+          sectionContext,
         },
       ],
       // Send time = run start; covers both composer sends and question-card answers.

@@ -634,7 +634,10 @@ module/section from Firestore and, only if both exist and the section's `status 
 the user's own message) naming the module/section and instructing the model to call
 `read_section(module_id, section_id)` if the upcoming user message relates to it, or
 ignore the note otherwise. A stale/malformed `section_context` (deleted section, ids that
-don't exist, still-`"planned"` status) is silently skipped — no note, no error.
+don't exist, still-`"planned"` status) is silently skipped — no note, no error. On the
+same successful validation, the resolved `{module_id, section_id, label}` snapshot is
+additionally stamped as `section_context` on the persisted user message doc (`Message`
+model), which the frontend renders as an inline "context included" chip on that bubble.
 
 ## 8. Prompt files — what each does and how they compose
 

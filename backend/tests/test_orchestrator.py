@@ -1175,7 +1175,9 @@ async def test_compact_now_forwards_model_and_persists_it(monkeypatch, fake_fs, 
 async def test_run_turn_with_valid_section_context_injects_system_note(monkeypatch, fake_fs, orchestrator):
     """A valid `section_context` pointing at an existing, already-written section must
     append a system-role note BEFORE the user message, naming both ids and the section
-    title (the LLM-facing prompt text asserted verbatim per app/agent/CLAUDE.md).
+    title (the LLM-facing prompt text asserted verbatim per app/agent/CLAUDE.md), and
+    must stamp a `section_context` snapshot (ids + display label) on the persisted user
+    message doc for the reader-view "context included" chip.
     """
     conv, curriculum = _setup_conversation(fake_fs, phase="refinement")
     fake_fs.fs.create_module(
@@ -1216,12 +1218,15 @@ async def test_run_turn_with_valid_section_context_injects_system_note(monkeypat
     assert "read_section" in note
     user_msg = next(m for m in messages if m["role"] == "user")
     assert system_msgs[0]["seq"] < user_msg["seq"]
+    # Snapshot on the user message doc: ids match, label is "{module.order+1}.{section.order+1} {title}".
+    assert user_msg["section_context"] == {"module_id": "m1", "section_id": "s1", "label": "1.1 System Design"}
 
 
 @pytest.mark.asyncio
 async def test_run_turn_with_planned_section_context_skips_note(monkeypatch, fake_fs, orchestrator):
     """A `section_context` pointing at a section that exists but is still `"planned"`
-    (not written yet) must skip the injection entirely — no system message appended.
+    (not written yet) must skip the injection entirely — no system message appended,
+    and no `section_context` key stamped on the persisted user message doc.
     """
     conv, curriculum = _setup_conversation(fake_fs, phase="refinement")
     fake_fs.fs.create_module(
@@ -1252,13 +1257,16 @@ async def test_run_turn_with_planned_section_context_skips_note(monkeypatch, fak
 
     messages = fake_fs.fs.list_messages(conv["id"])
     assert not any(m["role"] == "system" for m in messages)
+    user_msg = next(m for m in messages if m["role"] == "user")
+    assert "section_context" not in user_msg
 
 
 @pytest.mark.asyncio
 async def test_run_turn_with_missing_section_context_skips_note(monkeypatch, fake_fs, orchestrator):
     """A `section_context` pointing at a module/section that doesn't exist (stale
     client-side reference — e.g. deleted since the chip rendered) must skip the
-    injection entirely rather than raising.
+    injection entirely rather than raising, and must not stamp `section_context` on
+    the persisted user message doc.
     """
     conv, curriculum = _setup_conversation(fake_fs, phase="refinement")
     # No module/section created at all — "m1"/"s1" don't exist under this curriculum.
@@ -1282,6 +1290,8 @@ async def test_run_turn_with_missing_section_context_skips_note(monkeypatch, fak
     assert result.outcome == TurnOutcome.DONE
     messages = fake_fs.fs.list_messages(conv["id"])
     assert not any(m["role"] == "system" for m in messages)
+    user_msg = next(m for m in messages if m["role"] == "user")
+    assert "section_context" not in user_msg
 
 
 @pytest.mark.asyncio

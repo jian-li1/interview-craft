@@ -52,6 +52,10 @@ class Message(ApiModel):
         run_elapsed_ms (int | None): Server-measured wall-clock duration (ms) of the
             whole agentic run this message concluded; stamped only on each run's final
             assistant message. None on all other messages and on pre-feature history.
+        section_context (dict[str, str] | None): Composer's "current section" chip
+            snapshot `{module_id, section_id, label}`, stamped only on user messages
+            whose run actually injected the section nudge (validated against the
+            curriculum); None otherwise and on pre-feature history.
     """
 
     id: str
@@ -62,6 +66,7 @@ class Message(ApiModel):
     created_at: dt.datetime
     seq: int
     run_elapsed_ms: int | None = None
+    section_context: dict[str, str] | None = None
 
 
 class MessageOut(Message):

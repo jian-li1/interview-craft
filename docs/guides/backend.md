@@ -294,7 +294,9 @@ Key mechanics:
   non-empty string `module_id`/`section_id`; any other shape (wrong type, missing field)
   is silently normalized to `None` — no error frame. `run_turn`/`_run_turn_inner` then
   re-validate the ids against the curriculum before injecting a system-role note (see
-  `docs/guides/agent-system.md` §7).
+  `docs/guides/agent-system.md` §7); on success, the resolved `{module_id, section_id,
+  label}` snapshot is also stamped onto the persisted user message doc so the frontend
+  can render an inline chip, including on history replay.
 
 ## 6. Firestore service & schema — `app/services/firestore.py`
 
