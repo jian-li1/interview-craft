@@ -444,6 +444,58 @@ records feedback and sets the plan's status to `revising`, leaving phase at
 `awaiting_approval`; the agent itself picks the next phase (`outline_planning` or
 `deep_research`) via `transition_phase`, which emits its own `phase_change` once it does.
 
+## 7b. WebSocket dashboard protocol
+
+Endpoint: `GET /ws/dashboard` — push-based replacement for the dashboard grid's old 8s
+`curriculaApi.list()` polling. Authenticated identically to `/ws/chat/{conversation_id}`
+(the `ic_session` cookie, or `?token=` fallback carrying the same JWT); reject 4401 if
+invalid. There's no per-curriculum ownership check to perform here (unlike the chat
+socket) since this endpoint isn't scoped to a single document — every event is targeted
+by the curriculum doc's own `owner_uid` at emit time instead.
+
+Unlike the chat WS's "latest connection wins" registry, a user may have several dashboard
+tabs open at once — the server keeps a SET of live connections per uid, and every event
+is pushed to all of them.
+
+### Client → Server
+```
+{type:"ping"}
+```
+Any other frame shape is silently ignored — this socket is otherwise read-only from the
+client's perspective.
+
+### Server → Client
+```
+{type:"curriculum_updated", curriculum: CurriculumSummary}   # created or updated
+{type:"curriculum_deleted", curriculum_id: str}               # deleted
+{type:"pong"}
+```
+`curriculum` is the exact same shape `GET /api/curricula` returns per item (built via the
+same `_to_summary` conversion, serialized with `model_dump(mode="json")` so datetimes are
+ISO strings) — the client upserts it into the grid by id rather than refetching.
+
+### Change-signal mechanism
+
+`app/services/firestore.py` keeps a module-level registry of listener callbacks
+(`register_curriculum_listener`, populated at import time by `app/ws/dashboard.py` — kept
+out of `firestore.py` itself to preserve the repo layer's WS-import-free purity) that
+fire, wrapped in a try/except so a listener error never breaks the write, after every
+`create_curriculum`/`update_curriculum`/`delete_curriculum` call: `fn(curriculum_id,
+owner_uid_or_None)` (`create_curriculum`/`delete_curriculum` supply `owner_uid` directly —
+the delete path reads it from the doc *before* deleting, since it's unreadable after;
+`update_curriculum` passes `None`, since it doesn't have it cheaply on hand). The
+dashboard WS module's listener (`notify_curriculum_changed`) is itself synchronous: if
+nobody has a dashboard socket open it returns immediately (skipping a Firestore read
+entirely), otherwise it schedules an asyncio task that re-fetches the curriculum doc —
+if it still exists, emits `curriculum_updated` to its owner's sockets; if it's gone and an
+`owner_uid` hint was supplied, emits `curriculum_deleted` to that owner's sockets instead.
+
+**Known limitation**: this broker is in-process only. On a multi-instance Cloud Run
+deployment, a dashboard socket only receives events for curriculum writes handled by an
+agent run on the *same* instance as the socket — writes on other instances are silently
+missed. Acceptable for the current single-instance deploy; the client refetches the full
+list once on reconnect to catch anything missed while disconnected.
+
 ## 8. Security requirements
 
 - Verify Google ID tokens server-side with `google.oauth2.id_token.verify_oauth2_token`,

@@ -8,23 +8,68 @@ All repository functions are thin, typed wrappers around Firestore calls. They d
 perform ownership checks themselves — callers (API routes / tools) are responsible for
 verifying `owner_uid == current_user.uid` before invoking mutating or reading calls that
 return another user's data. This mirrors spec 01 §5/§8.
+
+Also hosts `register_curriculum_listener`, a small listener registry fired after every
+curriculum write — the change signal backing `/ws/dashboard` (see `app/ws/dashboard.py`
+and spec 01 §7b). Kept here rather than importing anything from `app.ws` so this module
+stays free of WS-layer imports.
 """
 
 from __future__ import annotations
 
 import datetime as dt
 import hashlib
+import logging
 import os
 import uuid
 from functools import lru_cache
-from typing import Any
+from typing import Any, Callable
 
 import firebase_admin
 from firebase_admin import credentials, firestore
 
 from app.core.config import Settings, get_settings
 
+logger = logging.getLogger(__name__)
+
 _APP_NAME = "interview-blueprint"
+
+# Listener registry for the dashboard WS broker (app/ws/dashboard.py). Kept here (not
+# imported from app.ws) to preserve this module's WS-import-free repo-layer purity —
+# app/ws/dashboard.py registers itself at import time instead. Each listener is called
+# synchronously as fn(curriculum_id, owner_uid_or_None) right after a curriculum write;
+# owner_uid is None when the write site doesn't have it cheaply on hand (the subscriber
+# re-fetches the doc to learn it).
+_curriculum_listeners: list[Callable[[str, str | None], None]] = []
+
+
+def register_curriculum_listener(fn: Callable[[str, str | None], None]) -> None:
+    """Register a callback to be invoked after every curriculum document write.
+
+    Args:
+        fn (Callable[[str, str | None], None]): Called as `fn(curriculum_id,
+            owner_uid_or_None)` after `create_curriculum`/`update_curriculum`/
+            `delete_curriculum`. Exceptions raised by `fn` are caught and logged at
+            debug level by the call sites, never propagated to the caller of the
+            firestore write.
+    """
+    _curriculum_listeners.append(fn)
+
+
+def _notify_curriculum_listeners(curriculum_id: str, owner_uid: str | None) -> None:
+    """Fire every registered curriculum listener, isolating failures per-listener.
+
+    Args:
+        curriculum_id (str): The curriculum document id that was just written.
+        owner_uid (str | None): The curriculum's owner uid if cheaply known at the
+            write site, else None (the listener can look it up itself).
+    """
+    for fn in _curriculum_listeners:
+        try:
+            fn(curriculum_id, owner_uid)
+        except Exception:
+            # A listener error must never break the actual Firestore write it followed.
+            logger.debug("curriculum listener raised", exc_info=True)
 
 
 @lru_cache
@@ -291,6 +336,8 @@ def create_curriculum(owner_uid: str, title: str, user_prompt: str, conversation
         "updated_at": now,
     }
     db.collection("curricula").document(cid).set(data)
+    # Owner is already known here, so pass it straight through (no extra read needed).
+    _notify_curriculum_listeners(cid, owner_uid)
     return {"id": cid, **data}
 
 
@@ -344,6 +391,9 @@ def update_curriculum(curriculum_id: str, fields: dict[str, Any]) -> None:
     db = get_firestore_client()
     fields = {**fields, "updated_at": utcnow()}
     db.collection("curricula").document(curriculum_id).set(fields, merge=True)
+    # Owner is unknown here (fields may not include it); the dashboard WS subscriber
+    # re-fetches the doc itself to learn it.
+    _notify_curriculum_listeners(curriculum_id, None)
 
 
 def delete_curriculum(curriculum_id: str) -> None:
@@ -362,6 +412,11 @@ def delete_curriculum(curriculum_id: str) -> None:
     db = get_firestore_client()
     curriculum_ref = db.collection("curricula").document(curriculum_id)
 
+    # Read owner_uid BEFORE deleting so the post-delete listener notification can still
+    # target the right user's dashboard sockets (the doc is gone by the time we notify).
+    pre_delete_snap = curriculum_ref.get()
+    owner_uid = (pre_delete_snap.to_dict() or {}).get("owner_uid") if pre_delete_snap.exists else None
+
     for module_doc in curriculum_ref.collection("modules").stream():
         for section_doc in module_doc.reference.collection("sections").stream():
             section_doc.reference.delete()
@@ -373,6 +428,7 @@ def delete_curriculum(curriculum_id: str) -> None:
     curriculum_ref.collection("plan").document("main").delete()
     curriculum_ref.collection("state").document("main").delete()
     curriculum_ref.delete()
+    _notify_curriculum_listeners(curriculum_id, owner_uid)
 
 
 # --------------------------------------------------------------------------------------

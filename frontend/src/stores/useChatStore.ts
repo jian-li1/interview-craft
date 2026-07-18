@@ -76,8 +76,8 @@ export interface CompactionItem {
  *
  * Carries the full tool-call info (not just a label) so `ActivityFeed` can
  * render the same expandable disclosure UI as `ToolCallCard` — raw input,
- * server-truncated output preview, and elapsed time — rather than just a
- * one-line summary.
+ * full output (falling back to the preview for legacy records), and elapsed
+ * time — rather than just a one-line summary.
  */
 export interface ActivityItem {
   id: string;
@@ -87,7 +87,9 @@ export interface ActivityItem {
   detail: string;
   /** Full tool input, shown in the expandable "Input" panel. */
   input: Record<string, unknown>;
-  /** Server-truncated output preview, filled in by `resolveToolCall` once the call finishes; empty while still running. */
+  /** Complete tool output — same text the model saw. Filled in by `resolveToolCall` once the call finishes; empty while still running or on legacy records that predate this field. */
+  output_full: string;
+  /** Server-truncated output preview, filled in by `resolveToolCall` once the call finishes; empty while still running. Used as a fallback when `output_full` is empty (legacy persisted records). */
   output_preview: string;
   status: ToolCallStatus;
   elapsed_ms?: number;
@@ -330,6 +332,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
           name: tc.name,
           detail: summarizeInput(tc.input),
           input: tc.input,
+          // Full persisted output (falls back to output_preview at render time in
+          // ActivityFeed for pre-feature records where output_full is absent/empty).
+          output_full: tc.output_full,
           output_preview: tc.output_preview,
           // Persisted "running" means turn ended before call resolved; surface as error.
           status: tc.status === "running" ? "error" : tc.status,
@@ -468,6 +473,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             name,
             detail: summarizeInput(input),
             input,
+            output_full: "",
             output_preview: "",
             status: "running",
             timestamp: Date.now(),
@@ -496,7 +502,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
       // detail (subtitle) left untouched — only result fields updated, so subtitle
       // keeps showing "what was asked" rather than the output preview.
       activity: s.activity.map((a) =>
-        a.id === toolCallId ? { ...a, status, output_preview: outputPreview, elapsed_ms: elapsedMs } : a
+        a.id === toolCallId
+          ? { ...a, status, output_full: outputFull, output_preview: outputPreview, elapsed_ms: elapsedMs }
+          : a
       ),
     })),
 

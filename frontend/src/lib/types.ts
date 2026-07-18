@@ -473,6 +473,38 @@ export type ServerEvent =
   | PongEvent;
 
 // ---------------------------------------------------------------------------
+// WebSocket protocol — /ws/dashboard (push-based replacement for the
+// dashboard's old 8s curriculaApi.list() polling; see spec 01 §7b)
+// ---------------------------------------------------------------------------
+
+/** The only client frame `DashboardSocket` sends beyond the inherited keepalive ping. */
+export type DashboardClientEvent = { type: "ping" };
+
+/** A curriculum was created or updated; carries the full up-to-date summary to upsert. */
+export interface DashboardCurriculumUpdatedEvent {
+  type: "curriculum_updated";
+  curriculum: CurriculumSummary;
+}
+
+/** A curriculum was deleted; the client should remove it from the grid by id. */
+export interface DashboardCurriculumDeletedEvent {
+  type: "curriculum_deleted";
+  curriculum_id: string;
+}
+
+/**
+ * Discriminated union (on `type`) of every frame the server may send over the dashboard
+ * WebSocket. Note `"curriculum_updated"` here is a DIFFERENT shape from the chat WS's
+ * `CurriculumUpdatedEvent` above (that one carries a refetch-scope hint; this one
+ * carries the full summary directly) — the two protocols are never mixed on the same
+ * socket, so the same discriminant string is safe to reuse.
+ */
+export type DashboardServerEvent =
+  | DashboardCurriculumUpdatedEvent
+  | DashboardCurriculumDeletedEvent
+  | PongEvent;
+
+// ---------------------------------------------------------------------------
 // API error shape
 // ---------------------------------------------------------------------------
 

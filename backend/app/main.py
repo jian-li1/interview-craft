@@ -9,6 +9,7 @@ from app.api import auth, conversations, curricula, health, models as models_rou
 from app.core.config import get_settings
 from app.core.logging import configure_logging, get_logger
 from app.ws import chat as ws_chat
+from app.ws import dashboard as ws_dashboard
 
 logger = get_logger(__name__)
 
@@ -18,7 +19,7 @@ def create_app() -> FastAPI:
 
     Wires up structured logging, CORS (restricted to the configured frontend origin so
     the session cookie can be sent cross-origin with credentials), and mounts every REST
-    router plus the WebSocket chat router.
+    router plus the chat and dashboard WebSocket routers.
 
     Returns:
         FastAPI: A fully configured application instance, ready to be served by uvicorn.
@@ -55,6 +56,9 @@ def create_app() -> FastAPI:
     app.include_router(settings_routes.router)
     app.include_router(models_routes.router)
     app.include_router(ws_chat.router)
+    # Importing this module (above) already registers its firestore change listener;
+    # including the router here just mounts the /ws/dashboard endpoint itself.
+    app.include_router(ws_dashboard.router)
 
     @app.on_event("startup")
     async def _on_startup() -> None:

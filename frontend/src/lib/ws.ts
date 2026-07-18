@@ -1,5 +1,10 @@
 import { env } from "@/lib/env";
-import type { ClientEvent, ServerEvent } from "@/lib/types";
+import type {
+  ClientEvent,
+  DashboardClientEvent,
+  DashboardServerEvent,
+  ServerEvent,
+} from "@/lib/types";
 
 export type ConnectionState =
   | "idle"
@@ -8,7 +13,7 @@ export type ConnectionState =
   | "reconnecting"
   | "closed";
 
-type EventHandler = (event: ServerEvent) => void;
+type EventHandler<TServerEvent> = (event: TServerEvent) => void;
 type StateHandler = (state: ConnectionState) => void;
 
 const PING_INTERVAL_MS = 25_000;
@@ -16,27 +21,27 @@ const MAX_BACKOFF_MS = 15_000;
 const BASE_BACKOFF_MS = 500;
 
 /**
- * Typed wrapper around the chat WebSocket protocol defined in spec 01 §7.
- * Handles reconnect with exponential backoff + jitter, ping keepalive, and
- * typed event dispatch.
+ * Generic WebSocket wrapper implementing reconnect-with-backoff, ping keepalive, and
+ * typed event dispatch — shared by `ChatSocket` (`/ws/chat/{conversationId}`) and
+ * `DashboardSocket` (`/ws/dashboard`). Subclasses only need to supply the connection
+ * URL (via `getUrl`) and their own protocol's client/server event types; all
+ * connection-lifecycle behavior lives here so it's implemented exactly once.
  */
-export class ChatSocket {
-  private conversationId: string;
+abstract class SocketBase<TServerEvent, TClientEvent extends { type: string }> {
   private ws: WebSocket | null = null;
   private state: ConnectionState = "idle";
   private reconnectAttempt = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private manuallyClosed = false;
-  private eventHandlers = new Set<EventHandler>();
+  private eventHandlers = new Set<EventHandler<TServerEvent>>();
   private stateHandlers = new Set<StateHandler>();
 
-  constructor(conversationId: string) {
-    this.conversationId = conversationId;
-  }
+  /** Returns the full WebSocket URL to connect to; implemented per subclass. */
+  protected abstract getUrl(): string;
 
   /** Subscribe to parsed server events. Returns an unsubscribe function. */
-  onEvent(handler: EventHandler): () => void {
+  onEvent(handler: EventHandler<TServerEvent>): () => void {
     this.eventHandlers.add(handler);
     return () => this.eventHandlers.delete(handler);
   }
@@ -71,7 +76,7 @@ export class ChatSocket {
 
   private open() {
     this.setState(this.reconnectAttempt > 0 ? "reconnecting" : "connecting");
-    const url = `${env.wsBaseUrl}/ws/chat/${this.conversationId}`;
+    const url = this.getUrl();
 
     let socket: WebSocket;
     try {
@@ -89,9 +94,9 @@ export class ChatSocket {
     };
 
     socket.onmessage = (evt) => {
-      let parsed: ServerEvent;
+      let parsed: TServerEvent;
       try {
-        parsed = JSON.parse(evt.data as string) as ServerEvent;
+        parsed = JSON.parse(evt.data as string) as TServerEvent;
       } catch {
         return;
       }
@@ -145,7 +150,10 @@ export class ChatSocket {
   private startPing() {
     this.stopPing();
     this.pingTimer = setInterval(() => {
-      this.send({ type: "ping" });
+      // Sent as a raw literal (not through the typed `send`) since both protocols'
+      // client-event unions include `{type:"ping"}` but TypeScript can't prove that
+      // generically here; this keeps the base class protocol-agnostic.
+      this.sendRaw({ type: "ping" });
     }, PING_INTERVAL_MS);
   }
 
@@ -157,10 +165,47 @@ export class ChatSocket {
   }
 
   /** Sends a typed client event if the socket is currently open; silently drops otherwise. */
-  send(event: ClientEvent): void {
+  send(event: TClientEvent): void {
+    this.sendRaw(event);
+  }
+
+  /** Serializes and sends any JSON-serializable frame if the socket is open; no-ops otherwise. */
+  private sendRaw(event: object): void {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(event));
     }
+  }
+
+  /**
+   * Closes the socket intentionally. Sets `manuallyClosed` first so the
+   * `onclose` handler above knows not to schedule a reconnect, then tears
+   * down any pending reconnect timer and the ping interval before closing
+   * the underlying WebSocket.
+   */
+  close(): void {
+    this.manuallyClosed = true;
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.stopPing();
+    this.ws?.close();
+    this.ws = null;
+  }
+}
+
+/**
+ * Typed wrapper around the chat WebSocket protocol defined in spec 01 §7.
+ * Handles reconnect with exponential backoff + jitter, ping keepalive, and
+ * typed event dispatch (all inherited from `SocketBase`).
+ */
+export class ChatSocket extends SocketBase<ServerEvent, ClientEvent> {
+  private conversationId: string;
+
+  constructor(conversationId: string) {
+    super();
+    this.conversationId = conversationId;
+  }
+
+  protected getUrl(): string {
+    return `${env.wsBaseUrl}/ws/chat/${this.conversationId}`;
   }
 
   /**
@@ -205,18 +250,17 @@ export class ChatSocket {
   sendCompact(model?: string, searchProvider?: string): void {
     this.send({ type: "compact", model, search_provider: searchProvider });
   }
+}
 
-  /**
-   * Closes the socket intentionally. Sets `manuallyClosed` first so the
-   * `onclose` handler above knows not to schedule a reconnect, then tears
-   * down any pending reconnect timer and the ping interval before closing
-   * the underlying WebSocket.
-   */
-  close(): void {
-    this.manuallyClosed = true;
-    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
-    this.stopPing();
-    this.ws?.close();
-    this.ws = null;
+/**
+ * Typed wrapper around the dashboard WebSocket protocol (spec 01 §7b) — the push-based
+ * replacement for `CurriculumGrid`'s old 8s polling. Reuses every bit of `ChatSocket`'s
+ * reconnect/backoff/ping/state machinery via `SocketBase`; the only thing this class
+ * adds is the `/ws/dashboard` URL. No dedicated send helpers are needed beyond the
+ * inherited keepalive ping — this socket is otherwise read-only from the client side.
+ */
+export class DashboardSocket extends SocketBase<DashboardServerEvent, DashboardClientEvent> {
+  protected getUrl(): string {
+    return `${env.wsBaseUrl}/ws/dashboard`;
   }
 }

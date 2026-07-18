@@ -23,8 +23,9 @@ See root `/CLAUDE.md` first. Scoped conventions for `frontend/` only. Full walkt
   popover, moved here from `studio/chat/ComposerSelect.tsx` once the dashboard
   `PromptBox` grew its own chips — shared by both), `ConfirmDialog`, `EmptyState`,
   `Skeleton`, `Badge`. Match this style for any new primitive.
-- `src/lib/` — `api.ts` (fetch wrapper), `ws.ts` (`ChatSocket`), `env.ts`, `types.ts`
-  (mirrors every spec-01 shape), `utils.ts` (`cn`, `timeAgo`, `initials`).
+- `src/lib/` — `api.ts` (fetch wrapper), `ws.ts` (`ChatSocket` + `DashboardSocket`, both
+  subclassing a shared `SocketBase`), `env.ts`, `types.ts` (mirrors every spec-01 shape),
+  `utils.ts` (`cn`, `timeAgo`, `initials`).
 - `src/hooks/useChatSocket.ts` — owns the `ChatSocket` lifecycle + the entire
   WS-event-to-store dispatch table.
 - `src/stores/` — `useAuthStore`, `useChatStore`, `useCurriculumStore` (Zustand).
@@ -53,6 +54,11 @@ See root `/CLAUDE.md` first. Scoped conventions for `frontend/` only. Full walkt
   under the `(app)` route group to inherit the auth+onboarding guard for free.
 
 ## How WS events map to store actions
+
+The dashboard grid has its own `DashboardSocket` (`/ws/dashboard`, opened directly inside
+`CurriculumGrid.tsx` — no dedicated hook) with its own small event union
+(`DashboardServerEvent` in `lib/types.ts`); it is entirely separate from the chat WS
+mapping below.
 
 Dispatched in `src/hooks/useChatSocket.ts` (the single place this mapping lives — don't
 add a second WS listener elsewhere): `session_ready`→`setCurriculumId` +

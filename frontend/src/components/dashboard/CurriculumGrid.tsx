@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AnimatePresence } from "framer-motion";
 import { BookX } from "lucide-react";
 import { CurriculumCard } from "@/components/dashboard/CurriculumCard";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { curriculaApi, ApiError } from "@/lib/api";
+import { DashboardSocket } from "@/lib/ws";
 import type { CurriculumSummary } from "@/lib/types";
 
 /**
@@ -14,18 +15,23 @@ import type { CurriculumSummary } from "@/lib/types";
  * `CurriculumCard`s. Handles three non-happy-path states: a skeleton grid
  * while the initial `curriculaApi.list()` call is in flight, an
  * `EmptyState` if the call fails (and no cached data exists yet) or if the
- * list is empty. While loaded, it polls `curriculaApi.list()` every 8s so
- * in-progress curricula (researching/planning/writing/reviewing) pick up status and
- * progress updates without a manual refresh; deletions are applied
+ * list is empty. Live updates are push-based: a `DashboardSocket`
+ * (`/ws/dashboard`) delivers `curriculum_updated`/`curriculum_deleted` events
+ * as curricula change server-side (researching/planning/writing/reviewing
+ * progress, status transitions, deletions) — no more 8s polling. On
+ * reconnect after a dropped connection, the full list is refetched once to
+ * catch anything missed while offline; deletions are also applied
  * optimistically via the `onDeleted` callback passed to each card.
  */
 export function CurriculumGrid() {
   const [curricula, setCurricula] = useState<CurriculumSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Tracks whether the socket has ever dropped, so the first "open" after a
+  // drop (not the very first connect) triggers a catch-up refetch.
+  const hasDroppedRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
-    let interval: ReturnType<typeof setInterval> | null = null;
 
     async function load() {
       try {
@@ -42,12 +48,44 @@ export function CurriculumGrid() {
     }
 
     load();
-    // Light polling so in-progress curricula update without a full refresh.
-    interval = setInterval(load, 8000);
+
+    // Open the push-based dashboard socket in the same effect; closed in cleanup.
+    const socket = new DashboardSocket();
+    const offEvent = socket.onEvent((event) => {
+      if (event.type === "curriculum_updated") {
+        setCurricula((prev) => {
+          if (!prev) return [event.curriculum];
+          const idx = prev.findIndex((c) => c.id === event.curriculum.id);
+          if (idx === -1) {
+            // New curriculum: prepend (server orders by updated_at desc, so a
+            // freshly-changed one belongs at the front).
+            return [event.curriculum, ...prev];
+          }
+          // Existing card: replace in place, preserving grid position/order.
+          const next = [...prev];
+          next[idx] = event.curriculum;
+          return next;
+        });
+      } else if (event.type === "curriculum_deleted") {
+        setCurricula((prev) => prev?.filter((c) => c.id !== event.curriculum_id) ?? null);
+      }
+    });
+    const offState = socket.onStateChange((state) => {
+      if (state === "reconnecting") {
+        hasDroppedRef.current = true;
+      } else if (state === "open" && hasDroppedRef.current) {
+        // Reconnected after a drop: refetch once to catch anything missed while offline.
+        hasDroppedRef.current = false;
+        void load();
+      }
+    });
+    socket.connect();
 
     return () => {
       cancelled = true;
-      if (interval) clearInterval(interval);
+      offEvent();
+      offState();
+      socket.close();
     };
   }, []);
 

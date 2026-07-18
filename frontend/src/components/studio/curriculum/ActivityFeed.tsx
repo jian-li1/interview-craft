@@ -117,13 +117,16 @@ function ActivityRow({ item }: { item: ActivityItem }) {
               {JSON.stringify(item.input, null, 2)}
             </pre>
           </div>
-          {item.output_preview && (
+          {(item.output_full || item.output_preview) && (
             <div className="min-w-0">
               <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
                 Output
               </p>
+              {/* Full output (falls back to the short preview for legacy records that
+                  predate output_full); scroll-capped so a huge fetch_url result stays
+                  contained rather than growing the card's footprint. */}
               <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-all rounded-md bg-muted/60 p-2 text-[11px] scrollbar-thin">
-                {item.output_preview}
+                {item.output_full || item.output_preview}
               </pre>
             </div>
           )}

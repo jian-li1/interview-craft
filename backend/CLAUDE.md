@@ -18,6 +18,9 @@ See root `/CLAUDE.md` first. Scoped conventions for `backend/` only. Agent core:
   `main.py`.
 - `app/ws/chat.py` — `/ws/chat/{conversation_id}`; spawns `orchestrator.run_turn` as a
   background task per frame.
+- `app/ws/dashboard.py` — `/ws/dashboard`; push-based curriculum-grid updates (replaces
+  the old 8s polling), fed by a listener registered on `firestore.py`'s
+  `register_curriculum_listener` at import time.
 - `app/agent/` — THE CORE. See `app/agent/CLAUDE.md`.
 - `app/services/firestore.py` — Firestore repo functions. **No ownership checks here**
   — callers must check `owner_uid == current_user.uid` first.

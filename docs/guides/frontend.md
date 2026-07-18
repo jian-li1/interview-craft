@@ -179,12 +179,16 @@ light mode.
   rendered only when non-empty — plus example-prompt chips below the box; submitting
   calls `conversationsApi.create({ curriculum_prompt, selected_model?, search_provider? })`
   then routes to `/studio/{id}`), and
-  `CurriculumGrid` (fetches `curriculaApi.list()` on mount **and polls every 8000ms** via
-  `setInterval` for live status/progress updates — a second, independent update
-  mechanism from the WS-driven live updates used inside Studio, since the dashboard has
-  no open WS connection of its own). `CurriculumCard` maps `CurriculumStatus` to a
-  label/Badge-variant via a `STATUS_META` dict, shows a progress bar for
-  `researching|planning|writing|reviewing`, and wraps delete in a `ConfirmDialog`.
+  `CurriculumGrid` (fetches `curriculaApi.list()` on mount, then opens a `DashboardSocket`
+  — `/ws/dashboard`, see spec 01 §7b — in the same effect for live status/progress
+  updates: `curriculum_updated` upserts the matching card by id (preserving grid
+  position; prepends if not yet seen), `curriculum_deleted` filters it out. On
+  reconnect after a dropped connection — tracked via `onStateChange`, a `hasDroppedRef`
+  flips true on `"reconnecting"` and the next `"open"` triggers exactly one refetch — the
+  full list is refetched once to catch anything missed while offline. No more polling).
+  `CurriculumCard` maps `CurriculumStatus` to a label/Badge-variant via a `STATUS_META`
+  dict, shows a progress bar for `researching|planning|writing|reviewing`, and wraps
+  delete in a `ConfirmDialog`.
 - **Settings (`app/(app)/settings/page.tsx`)** — a custom (non-Radix) `Tabs` component
   with three tabs: `ProfileTab` (read-only profile display, "Edit background" links to
   `/onboarding`), `AppearanceTab` (light/dark/system), `AccountTab` (email + logout). No
@@ -195,9 +199,13 @@ light mode.
 
 ### 5.1 `ChatSocket` — `lib/ws.ts`
 
-A small class managing one WebSocket connection with reconnect/backoff, keepalive, and
-typed send/receive helpers. Connection states: `"idle" | "connecting" | "open" |
-"reconnecting" | "closed"`.
+`lib/ws.ts` now factors the shared connection machinery into an abstract `SocketBase`
+class — reconnect/backoff, ping keepalive, typed event/state subscription — so both
+`ChatSocket` (below) and `DashboardSocket` (§4's Dashboard bullet) get it once instead of
+duplicated. `ChatSocket` subclasses it, supplying the `/ws/chat/{conversationId}` URL and
+its own typed send helpers; its public API and observable behavior are unchanged by this
+refactor. Connection states: `"idle" | "connecting" | "open" | "reconnecting" |
+"closed"`.
 
 - **URL**: `` `${env.wsBaseUrl}/ws/chat/${conversationId}` `` (`env.wsBaseUrl` defaults
   to `ws://localhost:8000`, from `NEXT_PUBLIC_WS_BASE_URL`).
@@ -436,7 +444,10 @@ switches to `"reader"`.
 
 - **`ActivityFeed.tsx`** — a spinning `Sparkles` header showing `phaseLabel`, an
   `AnimatePresence`+`layout`-animated list of the most recent 12 activity items, plus
-  skeleton placeholders for the outline-to-come. `humanizeLabel` prefixes "Searching: "
+  skeleton placeholders for the outline-to-come. Each row's expanded Output pane renders
+  `item.output_full || item.output_preview` — the same full-output-with-legacy-fallback
+  approach as `ToolCallCard` (see §5.4) — rather than the old preview-only text.
+  `humanizeLabel` prefixes "Searching: "
   or "Reading: " based on keyword matching the tool name.
 - **`MermaidDiagram.tsx`** — a **raw dynamic ESM `import("mermaid")`** inside a
   `useEffect` (not a Next `dynamic()` call — appropriate since this is a plain library,
@@ -627,9 +638,10 @@ anywhere** (see discrepancies below).
 
 ## Notable behaviors beyond `docs/specs/03-frontend-spec.md`
 
-1. **`CurriculumGrid` polls `curriculaApi.list()` every 8 seconds** on the dashboard so
-   in-progress curricula update live there — an intentional mechanism separate from the
-   WS-driven updates used inside Studio (the dashboard has no WS connection).
+1. **`CurriculumGrid` opens its own `DashboardSocket`** (`/ws/dashboard`) so in-progress
+   curricula update live there — a separate WS connection from the one used inside
+   Studio, but no longer polling: it was replaced by push-based `curriculum_updated`/
+   `curriculum_deleted` events (see spec 01 §7b and the Dashboard bullet in §4 above).
 2. **Tool-call timing**: `tool_call_result`'s `elapsed_ms` is stored on the live
    `ToolCallRecord` (optional field — absent for hydrated history, which doesn't persist
    it) and shown in `ToolCallCard` via `formatElapsed()` once a call finishes.

@@ -21,7 +21,9 @@ Entry point: `backend/app/main.py`, function `create_app()`. It:
    cookie-based session to work cross-origin in dev, where frontend :3000 and backend
    :8000 are different origins).
 4. Includes routers in this order: `health`, `auth`, `onboarding`, `curricula`,
-   `conversations`, `settings`, and the WS router (`app/ws/chat.py`).
+   `conversations`, `settings`, and the WS routers (`app/ws/chat.py`, `app/ws/dashboard.py`
+   — importing the latter also registers its firestore change-listener as a side effect,
+   see §5b).
 5. Registers a startup event that logs `app_env` and `default_model` (the first
    `OPENAI_MODEL` entry — there's no single fixed provider to log anymore since model
    selection is per-conversation).
@@ -298,6 +300,49 @@ Key mechanics:
   label}` snapshot is also stamped onto the persisted user message doc so the frontend
   can render an inline chip, including on history replay.
 
+## 5b. Dashboard WebSocket — `app/ws/dashboard.py`
+
+Endpoint: `GET /ws/dashboard` — a second, much simpler WS endpoint than the chat one
+above, replacing the dashboard grid's old 8s `curriculaApi.list()` polling with push-based
+updates. Auth reuses `_authenticate_ws` imported straight from `app.ws.chat` (same cookie/
+`?token=` fallback, same 4401 close code). Unlike the chat WS's single "live connection"
+per conversation, `_connections: dict[uid, set[_DashboardConnection]]` keeps every
+concurrently-open dashboard tab for a user, since there's no reason to only serve the
+latest one. The receive loop only understands `{"type": "ping"}` (replies `pong`); every
+other frame is silently ignored — this socket is otherwise read-only from the client.
+
+The interesting half is the change-signal path, split across two modules on purpose to
+keep `firestore.py`'s repo layer free of WS imports:
+- `app/services/firestore.py` exposes `register_curriculum_listener(fn)`, appending to a
+  module-level `_curriculum_listeners` list, and calls every registered `fn(curriculum_id,
+  owner_uid_or_None)` (wrapped per-listener in try/except, logged at debug on failure —
+  never allowed to break the write it followed) at the end of `create_curriculum`,
+  `update_curriculum`, and `delete_curriculum`. `create_curriculum` passes the `owner_uid`
+  it already has; `update_curriculum` passes `None` (not cheaply available there);
+  `delete_curriculum` reads `owner_uid` off the doc *before* deleting (it's unreadable
+  after) so it can still be passed post-delete.
+- `app/ws/dashboard.py` registers its own `notify_curriculum_changed` onto that registry
+  at import time (`fs.register_curriculum_listener(notify_curriculum_changed)` at module
+  scope) — this is why including the dashboard router in `main.py` is what actually wires
+  the signal up. `notify_curriculum_changed` is itself synchronous (matching the
+  synchronous firestore call sites): a cheap fast-path returns immediately if
+  `_connections` is empty (no Firestore read at all when nobody's watching), otherwise it
+  schedules `_notify_curriculum_changed_async(...)` via
+  `asyncio.get_running_loop().create_task(...)` (wrapped in try/except RuntimeError, so a
+  sync test context with no running loop just no-ops instead of raising). The async task
+  re-fetches the curriculum (`fs.get_curriculum`); if it still exists, it's converted to a
+  `CurriculumSummary` via `app.api.curricula._to_summary` (imported, not duplicated) and
+  pushed as `curriculum_updated` to every one of `doc["owner_uid"]`'s sockets; if it's
+  gone and an `owner_uid` hint was supplied, `curriculum_deleted` is pushed instead. Sends
+  are per-connection under each connection's own `send_lock`, wrapped in try/except so one
+  dead socket (send raises) is dropped from the registry without affecting delivery to the
+  others.
+
+**Known limitation**: this broker is in-process only — on a multi-instance Cloud Run
+deployment a dashboard socket only sees events from writes handled by an agent run on the
+*same* instance. Acceptable for the current single-instance deploy; the frontend's
+`DashboardSocket` refetches the full list once on reconnect to cover the gap.
+
 ## 6. Firestore service & schema — `app/services/firestore.py`
 
 `get_firestore_client()` is an `@lru_cache`d factory that lazily creates one
@@ -520,14 +565,25 @@ Two central fixtures:
   get injected either by monkeypatching `app.agent.orchestrator.get_llm_provider` /
   `get_search_provider`, or by direct constructor injection where the class under test
   takes a provider as an argument.
+- **Dashboard WS notify path** — `fake_fs`'s fakes replace `create_curriculum`/
+  `update_curriculum`/`delete_curriculum` wholesale, so they never call the real
+  listener-firing code in `firestore.py`. `test_ws_dashboard.py` exercises
+  `notify_curriculum_changed` directly instead (its internal `fs.get_curriculum` call
+  still hits the fake store), invoked via `ws.portal.call(notify_curriculum_changed, ...)`
+  so the sync call actually executes on the SAME event loop/thread the WS connection
+  under test is running on (Starlette's `TestClient` drives the ASGI app via an anyio
+  blocking portal in a background thread — calling the notify function from the test's
+  own thread directly would find no running loop and silently no-op instead of
+  scheduling the delivery task).
 
-217+ tests currently pass (`python -m pytest -q`), covering: app boot/smoke
+240+ tests currently pass (`python -m pytest -q`), covering: app boot/smoke
 (`test_app_smoke.py`), auth+CSRF (`test_auth_and_csrf.py`), the SSRF guard
 (`test_ssrf_guard.py`), memory assembly + compaction thresholds (`test_memory.py`,
 `test_memory_manager_context.py`), the tool registry's phase filtering and
 error-safety (`test_tool_registry.py`), the orchestrator's HITL pause/resume/cancel/
 plan-approval behavior (`test_orchestrator.py`), model/search-provider resolution
-(`test_llm_search_factories.py`), the WS `session_ready` payload (`test_ws_chat.py`),
+(`test_llm_search_factories.py`), the chat WS `session_ready` payload
+(`test_ws_chat.py`), the dashboard WS + firestore change-signal (`test_ws_dashboard.py`),
 and resume parsing (`test_resume_parser.py`). None of these tests require Firestore,
 OpenAI/Gemini credentials, or network access — they run identically in CI or offline.
 

@@ -53,10 +53,11 @@ drawer behavior is unchanged (slide-in overlay, unaffected by the desktop collap
   (`Bot` icon) / search-provider (`Globe` icon) `ChipSelect` chips on the left, a flexible
   spacer, and the send button on the right, then a row of example prompt chips below the
   box. The model/search-provider chip options come from `GET /api/models` (fetched once
-  on mount via `modelsApi.get()`, since the dashboard has no WS connection yet — the
-  studio composer instead hydrates from `session_ready`); options default-select to the
-  response's `default_model`/`default_search_provider` and are rendered only once their
-  list is non-empty (a fetch failure just leaves the chips off, never blocking the box).
+  on mount via `modelsApi.get()` — a plain REST call, since these options aren't part of
+  the dashboard WS's event protocol; the studio composer instead hydrates from
+  `session_ready`); options default-select to the response's
+  `default_model`/`default_search_provider` and are rendered only once their list is
+  non-empty (a fetch failure just leaves the chips off, never blocking the box).
   Submitting creates a conversation (POST /api/conversations with the prompt plus any
   chip selection) and routes to /studio/[id]; grid of curriculum cards (emoji, title,
   subtitle showing the agent-written `description` — falling back to `user_prompt` for
@@ -64,7 +65,13 @@ drawer behavior is unchanged (slide-in overlay, unaffected by the desktop collap
   progress bar when generating, module count, updated time, delete w/ confirm). Empty
   state illustration. The dashboard's prompt box is the *only* way to create a
   curriculum — the sidebar's "New curriculum" button never calls the API; it just
-  navigates to /dashboard (see §2 sidebar note below).
+  navigates to /dashboard (see §2 sidebar note below). The grid loads via
+  `curriculaApi.list()` on mount, then stays live via a `DashboardSocket`
+  (`/ws/dashboard`, see spec 01 §7b) opened in the same effect: `curriculum_updated`
+  upserts the changed card (by id, preserving grid position; a not-yet-seen id is
+  prepended) and `curriculum_deleted` removes it — no more polling. On reconnect after a
+  dropped connection the full list is refetched once, to catch any changes missed while
+  offline.
 - **Settings**: tabs — Profile (link/embed onboarding edit), Appearance (theme), Account
   (email, logout). No more Preferences tab — LLM model / search provider selection moved
   to the chat composer's chips (per-conversation, see §3 below), not a settings page.
@@ -265,8 +272,11 @@ Two views, toggle: **Workflow** and **Reader**.
 
 - `lib/api.ts`: typed fetch wrapper (credentials: "include", X-Requested-With header,
   JSON errors → typed ApiError; 401 → redirect to /login).
-- `lib/ws.ts`: ChatSocket class — connect/reconnect/backoff, typed event handlers,
-  send helpers, ping keepalive.
+- `lib/ws.ts`: a shared `SocketBase` (connect/reconnect/backoff, typed event handlers,
+  ping keepalive) subclassed by `ChatSocket` (`/ws/chat/{conversationId}`, plus its
+  send helpers) and `DashboardSocket` (`/ws/dashboard`, read-only beyond the inherited
+  ping) — see §2's Dashboard bullet and spec 01 §7b for the dashboard grid's live-update
+  protocol.
 - `lib/types.ts`: TypeScript mirrors of every contract shape from spec 01.
 - `lib/reader.ts`: pure (no DOM/ssr:false coupling) `flattenCurriculum`/
   `resolveActiveIndex` helpers shared by `ReaderView` and `ChatPanel`'s section-context
