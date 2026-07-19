@@ -188,6 +188,29 @@ Notable implementation details per router:
     a flat `key: value` block (`_render_input_block`), and calls `get_llm_provider()`
     (no args — always the server default, first `OPENAI_MODEL` entry, since there's no
     conversation here to inherit a selection from) then `llm.complete(messages)`.
+  - `put_onboarding`, when `body.onboarding_completed` is true, synchronously stamps
+    `{prompt_suggestions: None, prompt_placeholder: None, suggestions_status: "pending"}`
+    via `fs.upsert_profile` (so this response and the very next GET already reflect
+    "pending"), then fires `app.services.prompt_suggestions.generate_prompt_suggestions`
+    as an `asyncio.create_task` — deliberately not awaited, so the LLM call never blocks
+    the response. The task reference is held in a module-level `_background_tasks: set`
+    with a `add_done_callback(_background_tasks.discard)` (standard asyncio pattern to
+    stop it being garbage-collected mid-flight, since nothing else references it once the
+    request returns — see `test_onboarding_api.py`, which monkeypatches
+    `asyncio.create_task` itself to assert scheduling deterministically rather than racing
+    the real event loop). `generate_prompt_suggestions` (in
+    `app/services/prompt_suggestions.py`) loads `agent/prompts/dashboard_suggestions.md`
+    the same way, renders `synthesized_profile` + `target_roles`/`skills`/
+    `experience_level`/`timeline` as a `key: value` block, calls the server-default LLM's
+    `complete()`, tolerantly strips a ```` ```json ```` fence if present, and validates the
+    parsed `{suggestions: [str], placeholder: str}` shape (>=3 non-empty suggestions
+    trimmed/capped at 100 chars and capped at 5 entries; non-empty placeholder trimmed/
+    capped at 200 chars) before persisting `suggestions_status: "ready"` and calling
+    `app.ws.dashboard.emit_suggestions_updated`. The whole function is wrapped in
+    try/except: any failure (LLM error, malformed JSON, failed validation) falls back to
+    `suggestions_status: None` so the profile never gets stuck on "pending" — the
+    frontend's `PromptBox` treats `None` exactly like "pending" (no chip row, generic
+    placeholder; there's no hardcoded-example fallback to drop back to).
 - **`curricula.py`**: `get_curriculum_full` nests modules and their sections into one
   `CurriculumFull` response — this is a full N+1 read pattern (`list_modules` then
   `list_sections` per module) but is the only way the current Firestore repo layer
@@ -342,6 +365,15 @@ keep `firestore.py`'s repo layer free of WS imports:
   are per-connection under each connection's own `send_lock`, wrapped in try/except so one
   dead socket (send raises) is dropped from the registry without affecting delivery to the
   others.
+- A second, separate emit path (NOT sourced from the curriculum-change listener registry
+  above) pushes `suggestions_updated`: `app/ws/dashboard.py` exposes an
+  `emit_suggestions_updated(uid, suggestions, placeholder)` async helper — a thin wrapper
+  around `_emit_to_owner` — that `app/services/prompt_suggestions.py`'s
+  `generate_prompt_suggestions` awaits directly once it has persisted a fresh set of
+  personalized dashboard PromptBox suggestions. Import direction is
+  `services.prompt_suggestions -> ws.dashboard -> api.curricula`, which stays acyclic.
+  The frontend's `PromptBox` opens its own dedicated `DashboardSocket` (separate from
+  `CurriculumGrid`'s) to receive this event live.
 
 **Known limitation**: this broker is in-process only — on a multi-instance Cloud Run
 deployment a dashboard socket only sees events from writes handled by an agent run on the

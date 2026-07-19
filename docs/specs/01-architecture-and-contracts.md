@@ -137,6 +137,16 @@ users/{uid}/profile/main
   resume_filename: str|null
   resume_text: str|null         # extracted text
   synthesized_profile: str|null # AI-generated descriptive profile = agent's user memory
+  prompt_suggestions: [str]|null    # up to 5 personalized dashboard PromptBox example
+                                     # chips; null = never generated or generation failed
+                                     # (frontend renders no chip row in that case)
+  prompt_placeholder: str|null      # personalized PromptBox textarea placeholder sentence;
+                                     # null = frontend shows a generic placeholder instead
+  suggestions_status: "pending"|"ready"|null
+                                     # lifecycle of the async generation kicked off by
+                                     # PUT /api/onboarding's onboarding_completed:true path
+                                     # (see §6/§7b); null covers both "never started" and
+                                     # "failed" — same fallback behavior either way
   onboarding_completed: bool
   updated_at
 
@@ -285,7 +295,7 @@ FRONTEND_ORIGIN with credentials. All mutating routes require header
 | POST | /api/auth/logout | clears cookie → `{ok: true}` |
 | GET  | /api/auth/me | → `UserOut` (401 if not logged in) |
 | GET  | /api/onboarding | → `ProfileOut` |
-| PUT  | /api/onboarding | `ProfileIn` → `ProfileOut` |
+| PUT  | /api/onboarding | `ProfileIn` → `ProfileOut` — when `onboarding_completed: true` (first-time onboarding or the settings "Edit background" flow, which reuses this same endpoint), also synchronously stamps `suggestions_status: "pending"` (reflected in this response) and asynchronously kicks off (does not await) LLM generation of personalized `prompt_suggestions`/`prompt_placeholder` for the dashboard PromptBox, using the server default model; on completion the profile is updated to `suggestions_status: "ready"` and a `suggestions_updated` event is pushed over `/ws/dashboard` (see §7b), or falls back to `suggestions_status: null` on any failure |
 | POST | /api/onboarding/resume | multipart file (pdf/docx/txt, ≤5MB) → `{resume_filename, resume_text}` |
 | POST | /api/onboarding/synthesize | → `{synthesized_profile}` (runs LLM profile synthesis, saves) |
 | GET  | /api/curricula | → `[CurriculumSummary]` |
@@ -475,11 +485,22 @@ client's perspective.
 ```
 {type:"curriculum_updated", curriculum: CurriculumSummary}   # created or updated
 {type:"curriculum_deleted", curriculum_id: str}               # deleted
+{type:"suggestions_updated", prompt_suggestions: [str], prompt_placeholder: str}
+                                                                # async PromptBox generation finished
 {type:"pong"}
 ```
 `curriculum` is the exact same shape `GET /api/curricula` returns per item (built via the
 same `_to_summary` conversion, serialized with `model_dump(mode="json")` so datetimes are
 ISO strings) — the client upserts it into the grid by id rather than refetching.
+
+`suggestions_updated` is emitted directly by `app/services/prompt_suggestions.py`'s
+`generate_prompt_suggestions` (via `app/ws/dashboard.py`'s `emit_suggestions_updated`
+helper) once the background LLM generation kicked off by `PUT /api/onboarding` (see §6)
+finishes successfully — NOT sourced from the curriculum-change listener registry described
+below. The dashboard's `PromptBox` component listens for this on its own dedicated
+`DashboardSocket` (a second connection alongside `CurriculumGrid`'s — the per-uid
+connection registry is a set, so multiple concurrent dashboard sockets per user are
+expected) to swap out of "pending" mode without a page refresh.
 
 ### Change-signal mechanism
 

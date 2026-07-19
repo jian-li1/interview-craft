@@ -73,9 +73,11 @@ iteration — a `transition_phase` call takes effect next iteration, not next tu
 - Be concrete and behavior-shaping, not vague — the model only sees these files, not
   the codebase. Code-level enforcement is minimal (mainly `write_section`'s
   citations check and `TransitionPhaseTool`'s transition validation).
-- `profile_synthesis.md`/`compaction.md` are one-shot small-model tasks loaded
-  directly by their call sites, not part of phase composition — their output is
-  stored verbatim with no post-processing, so keep "return ONLY the output" intact.
+- `profile_synthesis.md`/`compaction.md`/`dashboard_suggestions.md` are one-shot
+  small-model tasks loaded directly by their call sites, not part of phase composition —
+  `dashboard_suggestions.md`'s output is strict JSON (parsed + validated by its caller,
+  `app/services/prompt_suggestions.py`), the other two are stored verbatim with no
+  post-processing, so keep "return ONLY the output"/"STRICT JSON ONLY" intact.
 - No automated eval exists — sanity-check prompt edits by running a real turn locally.
 
 ## HITL gate mechanics

@@ -2,21 +2,22 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { motion } from "framer-motion";
+import { AnimatePresence, motion } from "framer-motion";
 import { ArrowUp, Bot, Globe, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { Textarea } from "@/components/ui/Input";
 import { ChipSelect, SEARCH_PROVIDER_LABELS } from "@/components/ui/ChipSelect";
-import { conversationsApi, modelsApi, ApiError } from "@/lib/api";
+import { conversationsApi, modelsApi, onboardingApi, ApiError } from "@/lib/api";
+import { DashboardSocket } from "@/lib/ws";
 import type { ModelOption } from "@/lib/types";
 
-const EXAMPLE_PROMPTS = [
-  "Staff Backend Engineer at a fintech startup",
-  "Frontend interview at a FAANG company",
-  "Data Science role, focus on SQL & stats",
-  "System design interview for senior SWE",
-  "Behavioral interview using the STAR method",
-];
+// Generic placeholder shown whenever personalized suggestions aren't available yet —
+// covers generation still running, never generated, generation failed, or the profile
+// fetch itself failing. No hardcoded example chips are shown in this state.
+const PENDING_PLACEHOLDER = "Describe the interview you're preparing for…";
+
+/** Which of the two suggestion-chip/placeholder modes the box is currently in. */
+type SuggestionMode = "pending" | "personalized";
 
 /**
  * The dashboard's "start a new curriculum" input: a textarea, a chip row
@@ -29,6 +30,17 @@ const EXAMPLE_PROMPTS = [
  * (keyed by the new conversation id) so the studio can auto-send it as the
  * first message once mounted, then navigates to `/studio/{conversation_id}`.
  * Failure surfaces as a toast and re-enables the input.
+ *
+ * Suggestion chips + placeholder are personalized per user (see spec 01 §5/§7b):
+ * on mount, alongside `modelsApi.get()`, this also fetches `onboardingApi.get()` to
+ * read `suggestions_status`/`prompt_suggestions`/`prompt_placeholder` — "ready" with
+ * data renders personalized chips + placeholder; anything else (still generating,
+ * never generated, generation failed, or the profile fetch itself failing) renders NO
+ * chip row and the generic `PENDING_PLACEHOLDER` — there is no hardcoded-example
+ * fallback. A second, dedicated `DashboardSocket` (this component's own —
+ * `CurriculumGrid` already owns one for the grid; the backend supports multiple
+ * concurrent dashboard sockets per uid, see spec 01 §7b) listens for `suggestions_updated`
+ * to swap out of "pending" mode live, without a refresh, once generation finishes.
  */
 export function PromptBox() {
   const [value, setValue] = useState("");
@@ -41,6 +53,13 @@ export function PromptBox() {
   const [searchProviders, setSearchProviders] = useState<string[]>([]);
   const [selectedModel, setSelectedModel] = useState<string | null>(null);
   const [selectedSearchProvider, setSelectedSearchProvider] = useState<string | null>(null);
+
+  // Suggestion-chip/placeholder state — starts in "pending" (no chips, generic
+  // placeholder) so the box is never blocked on the profile fetch; flips to
+  // "personalized" once a ready profile or a `suggestions_updated` WS event arrives.
+  const [mode, setMode] = useState<SuggestionMode>("pending");
+  const [suggestions, setSuggestions] = useState<string[]>([]);
+  const [placeholderText, setPlaceholderText] = useState(PENDING_PLACEHOLDER);
 
   useEffect(() => {
     // `cancelled` guards against setting state after unmount (StrictMode double-fire /
@@ -58,8 +77,43 @@ export function PromptBox() {
       .catch(() => {
         // Options stay empty — the prompt box itself must never be blocked by this.
       });
+
+    // Personalized suggestions/placeholder: only a "ready" status with both fields
+    // present flips into personalized mode. Anything else (pending, never generated,
+    // failed, or the fetch itself failing) leaves the component in its default
+    // "pending" mode — no chips, generic placeholder.
+    onboardingApi
+      .get()
+      .then((profile) => {
+        if (cancelled) return;
+        if (profile.suggestions_status === "ready" && profile.prompt_suggestions && profile.prompt_placeholder) {
+          setMode("personalized");
+          setSuggestions(profile.prompt_suggestions);
+          setPlaceholderText(`e.g. ${profile.prompt_placeholder}`);
+        }
+      })
+      .catch(() => {
+        // Pending mode already active — nothing to do.
+      });
+
+    // Second dashboard socket, separate from CurriculumGrid's — the backend's
+    // per-uid connection registry is a SET, so multiple concurrent dashboard sockets
+    // for the same user are expected (spec 01 §7b). Only `suggestions_updated` is
+    // relevant here; every other event type is ignored.
+    const socket = new DashboardSocket();
+    const offEvent = socket.onEvent((event) => {
+      if (event.type === "suggestions_updated") {
+        setMode("personalized");
+        setSuggestions(event.prompt_suggestions);
+        setPlaceholderText(`e.g. ${event.prompt_placeholder}`);
+      }
+    });
+    socket.connect();
+
     return () => {
       cancelled = true;
+      offEvent();
+      socket.close();
     };
   }, []);
 
@@ -107,7 +161,9 @@ export function PromptBox() {
             }
           }}
           rows={2}
-          placeholder="e.g. Senior Backend Engineer interview at a Series B fintech, focused on system design and Python"
+          // Defaults to the generic PENDING_PLACEHOLDER; swapped to the personalized
+          // sentence once generation completes (see placeholderText's setters above).
+          placeholder={placeholderText}
           className="border-0 shadow-none focus-visible:ring-0 bg-transparent"
         />
         <div className="flex flex-wrap items-center gap-1.5 px-1 pb-0.5">
@@ -148,19 +204,38 @@ export function PromptBox() {
           </motion.button>
         </div>
       </div>
-      <div className="mt-4 flex flex-wrap gap-2">
-        {EXAMPLE_PROMPTS.map((prompt) => (
-          <button
-            key={prompt}
-            type="button"
-            onClick={() => submit(prompt)}
-            disabled={submitting}
-            className="rounded-full border border-border bg-muted/50 px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:border-accent/40 hover:text-foreground disabled:opacity-50"
+      {/* Pending mode renders no chip row at all — AnimatePresence lets the row
+          smoothly grow from zero height once personalized chips arrive. */}
+      <AnimatePresence>
+        {mode === "personalized" && (
+          <motion.div
+            key={mode}
+            className="mt-4 flex flex-wrap gap-2"
+            initial="hidden"
+            animate="visible"
+            exit="hidden"
+            variants={{
+              visible: { transition: { staggerChildren: 0.05 } },
+            }}
           >
-            {prompt}
-          </button>
-        ))}
-      </div>
+            {suggestions.map((prompt) => (
+              <motion.button
+                key={prompt}
+                type="button"
+                onClick={() => submit(prompt)}
+                disabled={submitting}
+                variants={{
+                  hidden: { opacity: 0, y: 6 },
+                  visible: { opacity: 1, y: 0, transition: { ease: "easeOut" } },
+                }}
+                className="rounded-full border border-border bg-muted/50 px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:border-accent/40 hover:text-foreground disabled:opacity-50"
+              >
+                {prompt}
+              </motion.button>
+            ))}
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

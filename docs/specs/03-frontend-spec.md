@@ -43,11 +43,20 @@ drawer behavior is unchanged (slide-in overlay, unaffected by the desktop collap
 - **Login**: card with Google Sign-In button (Google Identity Services script,
   `renderButton`), on credential → POST /api/auth/google → route to /onboarding or /dashboard.
 - **Onboarding wizard** (4 steps, progress indicator, framer-motion step transitions):
-  1. Bio & background (textareas), 2. Target roles (chip input), experience level (select),
+  1. Bio & background (textareas, career-generic placeholders — not CS-specific — since
+  this wizard serves any field: "I'm preparing for my next career step and want to feel
+  confident walking into interviews…" / "BA in Economics, 3 years in consulting, recently
+  led a small project team…"), 2. Target roles (chip input), experience level (select),
   timeline, 3. Skills (chips), goals, learning style, resume upload (drag-drop, pdf/docx/txt,
   shows extracted preview), 4. Review → "Generate my profile" → calls PUT /api/onboarding
   then POST /synthesize; shows the synthesized profile with an editable/regenerate step;
-  finish → /dashboard. Revisitable from settings ("Edit background").
+  finish → /dashboard. Revisitable from settings ("Edit background") — reuses the exact
+  same wizard/PUT endpoint, so the async PromptBox-suggestion side effect below fires again
+  every time the user finishes this flow, refreshing their personalized examples. Clicking
+  "Finish" (`onboarding_completed: true`) also triggers the backend to asynchronously
+  generate personalized dashboard PromptBox suggestions/placeholder (see the Dashboard
+  bullet's "Personalized suggestions" note below and spec 01 §6/§7b) — the wizard itself
+  does not wait on this; it navigates to /dashboard immediately.
 - **Dashboard**: greeting with user name; prominent prompt box ("What interview are you
   preparing for?") with a column layout — textarea on top, then a bottom row with model
   (`Bot` icon) / search-provider (`Globe` icon) `ChipSelect` chips on the left, a flexible
@@ -88,6 +97,23 @@ drawer behavior is unchanged (slide-in overlay, unaffected by the desktop collap
     underlying state keeps server order, so the WS upsert logic never fights a
     client-side sort). Filtering to Favorites with none starred renders an `EmptyState`
     (icon `Star`, "No favorites yet").
+  - **Personalized suggestions**: the example-prompt chip row and textarea placeholder
+    are personalized per user (see spec 01 §5/§6/§7b) — there is no hardcoded-example
+    fallback. On mount, `PromptBox` fetches `onboardingApi.get()` alongside
+    `modelsApi.get()` and derives one of two modes from `suggestions_status`: **"ready"**
+    with data → personalized chips + placeholder (chip text rendered verbatim,
+    placeholder rendered as `` `e.g. ${prompt_placeholder}` ``); anything else (still
+    generating, never generated, generation failed, or the fetch itself failed) → the
+    chip row renders NOTHING (zero height) and the textarea shows a generic "Describe the
+    interview you're preparing for…" placeholder. `PromptBox` also opens its
+    own dedicated `DashboardSocket` (a second connection alongside `CurriculumGrid`'s —
+    the backend's per-uid connection registry is a set) and listens for
+    `suggestions_updated`, which switches the box into personalized mode live, without a
+    refresh, the moment async generation finishes. Chips animate in via Framer Motion:
+    the row is wrapped in `AnimatePresence`, with staggered children (`initial={{opacity:
+    0, y: 6}}` → `animate={{opacity: 1, y: 0}}`, ~0.05s stagger, easeOut) so a
+    pending→populated transition (or a fallback→personalized swap mid-session) animates
+    smoothly rather than popping in.
 - **Settings**: tabs — Profile (link/embed onboarding edit), Appearance (theme), Account
   (email, logout). No more Preferences tab — LLM model / search provider selection moved
   to the chat composer's chips (per-conversation, see §3 below), not a settings page.

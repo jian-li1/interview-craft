@@ -365,10 +365,11 @@ function StepBackground({
         {(id) => (
           <Textarea
             id={id}
-            rows={3}
+            rows={4}
             value={profile.bio}
             onChange={(e) => update("bio", e.target.value)}
-            placeholder="I'm a self-taught developer looking to break into backend engineering…"
+            // Career-generic so the wizard reads naturally for any field.
+            placeholder="I'm preparing for my next career step and want to feel confident walking into interviews…"
           />
         )}
       </Field>
@@ -376,10 +377,11 @@ function StepBackground({
         {(id) => (
           <Textarea
             id={id}
-            rows={4}
+            rows={6}
             value={profile.background}
             onChange={(e) => update("background", e.target.value)}
-            placeholder="BS in Computer Science, 2 years as a frontend engineer at a startup…"
+            // Career-generic so the wizard reads naturally for any field.
+            placeholder="BA in Economics, 3 years in consulting, recently led a small project team…"
           />
         )}
       </Field>
@@ -475,7 +477,7 @@ function StepSkills({
         {(id) => (
           <Textarea
             id={id}
-            rows={2}
+            rows={4}
             value={profile.goals}
             onChange={(e) => update("goals", e.target.value)}
             placeholder="What does success look like for you?"

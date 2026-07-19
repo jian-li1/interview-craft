@@ -51,12 +51,23 @@ class ProfileOut(ProfileIn):
         resume_text (str | None): Extracted plain text from the uploaded resume.
         synthesized_profile (str | None): AI-generated synthesis of the user's profile,
             used as a memory layer input for the agent.
+        prompt_suggestions (list[str] | None): Personalized dashboard PromptBox example
+            chips (up to 5), generated async after onboarding completes; None = never
+            generated or generation failed, so the frontend falls back to hardcoded examples.
+        prompt_placeholder (str | None): Personalized dashboard PromptBox textarea
+            placeholder sentence; None means the frontend falls back to its hardcoded default.
+        suggestions_status ("pending" | "ready" | None): Lifecycle of the async suggestion
+            generation kicked off by `PUT /api/onboarding`'s `onboarding_completed: true`
+            path; None covers both "never started" and "failed" (fallback case).
         updated_at (dt.datetime | None): Timestamp of the last profile update.
     """
 
     resume_filename: str | None = None
     resume_text: str | None = None
     synthesized_profile: str | None = None
+    prompt_suggestions: list[str] | None = None
+    prompt_placeholder: str | None = None
+    suggestions_status: Literal["pending", "ready"] | None = None
     updated_at: dt.datetime | None = None
 
 

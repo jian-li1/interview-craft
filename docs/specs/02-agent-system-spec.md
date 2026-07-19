@@ -345,6 +345,16 @@ detailed, high-quality instruction document (not a stub). Required files:
   model") Summarization contract: preserve decisions, user preferences/corrections,
   curriculum/plan state, open threads; drop pleasantries and superseded tool details;
   output structured markdown under fixed headings.
+- `dashboard_suggestions.md` — (Used by `app.services.prompt_suggestions`, fired
+  asynchronously when `PUT /api/onboarding` completes onboarding, on the server default
+  model) Generate personalized dashboard PromptBox content from the user's
+  `synthesized_profile` + raw target_roles/skills/experience_level/timeline: exactly 5
+  short (<~60 char) example-prompt chips varying in angle (role-specific, skill-focus,
+  format-focus — adapted to the user's actual field, not defaulted to software
+  engineering), plus one fuller (~15-25 word) textarea placeholder sentence not prefixed
+  with "e.g." (the frontend adds that). Output is STRICT JSON only:
+  `{"suggestions": [...5 strings...], "placeholder": "..."}` — no markdown fences, no
+  prose; the caller tolerantly strips a fence if the model adds one anyway.
 
 ## 7. LLM provider abstraction (`services/llm/`)
 

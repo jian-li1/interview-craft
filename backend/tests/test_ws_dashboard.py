@@ -143,6 +143,26 @@ def test_notify_curriculum_changed_noop_without_owner_hint_when_doc_gone(client,
     assert event == {"type": "pong"}
 
 
+def test_emit_suggestions_updated_delivers_event_shape(client, fake_fs):
+    """`emit_suggestions_updated` (called by the async prompt-suggestion generation
+    service, not the curriculum listener registry) pushes a `suggestions_updated` event
+    with the exact `prompt_suggestions`/`prompt_placeholder` payload to the owner's socket.
+    """
+    authed = _authed_client(client, uid="uid1")
+
+    from app.ws.dashboard import emit_suggestions_updated
+
+    with authed.websocket_connect("/ws/dashboard") as ws:
+        ws.portal.call(emit_suggestions_updated, "uid1", ["A", "B", "C"], "A placeholder sentence.")
+        event = ws.receive_json()
+
+    assert event == {
+        "type": "suggestions_updated",
+        "prompt_suggestions": ["A", "B", "C"],
+        "prompt_placeholder": "A placeholder sentence.",
+    }
+
+
 def test_register_curriculum_listener_fires_and_isolates_errors():
     """Unit-tests the listener registry in `app.services.firestore` directly (not via
     `fake_fs`, which replaces `update_curriculum` wholesale and never calls the real

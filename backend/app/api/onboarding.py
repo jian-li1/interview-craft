@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
 
 from app.core.deps import CurrentUser, enforce_rate_limit, get_current_user, require_csrf_header
@@ -9,9 +11,15 @@ from app.models.profile import ProfileIn, ProfileOut, ResumeUploadOut, Synthesiz
 from app.services import firestore as fs
 from app.services.llm.base import ChatMessage
 from app.services.llm.factory import get_llm_provider
+from app.services.prompt_suggestions import generate_prompt_suggestions
 from app.services.resume_parser import ResumeParsingError, parse_resume
 
 router = APIRouter(prefix="/api/onboarding", tags=["onboarding"])
+
+# Holds references to fire-and-forget suggestion-generation tasks so they aren't
+# garbage-collected mid-flight (asyncio only weakly holds tasks via the event loop) —
+# the done callback discards each task from the set once it finishes, successfully or not.
+_background_tasks: set[asyncio.Task] = set()
 
 
 def _load_profile_synthesis_prompt() -> str:
@@ -55,6 +63,9 @@ def _to_profile_out(data: dict | None) -> ProfileOut:
         resume_filename=data.get("resume_filename"),
         resume_text=data.get("resume_text"),
         synthesized_profile=data.get("synthesized_profile"),
+        prompt_suggestions=data.get("prompt_suggestions"),
+        prompt_placeholder=data.get("prompt_placeholder"),
+        suggestions_status=data.get("suggestions_status"),
         updated_at=data.get("updated_at"),
     )
 
@@ -81,7 +92,14 @@ async def put_onboarding(body: ProfileIn, user: CurrentUser = Depends(get_curren
 
     Requires the `X-Requested-With` CSRF header (enforced by the router-level
     dependency). If `body.onboarding_completed` is set, also flips the separate
-    `onboarding_completed` flag on the user doc so dashboard routing can key off it.
+    `onboarding_completed` flag on the user doc so dashboard routing can key off it, then
+    kicks off (without waiting on it) async generation of personalized dashboard PromptBox
+    suggestions/placeholder: the profile is stamped `suggestions_status: "pending"`
+    synchronously so this response already reflects the pending state, and
+    `generate_prompt_suggestions` runs as a background task that persists the result and
+    pushes a `suggestions_updated` WS event when it finishes (or falls back to
+    `suggestions_status: None` on any failure — see that function's docstring). This also
+    covers the settings "Edit background" flow, which reuses this same wizard/endpoint.
 
     Args:
         body (ProfileIn): The full set of onboarding fields submitted by the client.
@@ -89,11 +107,23 @@ async def put_onboarding(body: ProfileIn, user: CurrentUser = Depends(get_curren
             `Depends(get_current_user)`.
 
     Returns:
-        ProfileOut: The updated profile as persisted.
+        ProfileOut: The updated profile as persisted (reflects `suggestions_status:
+            "pending"` immediately when onboarding_completed is set; the caller does not
+            wait for suggestion generation to finish).
     """
     data = fs.upsert_profile(user.uid, body.model_dump())
     if body.onboarding_completed:
         fs.set_onboarding_completed(user.uid, True)
+        # Stamp pending synchronously (so this response + any immediate GET reflect it),
+        # then fire the actual generation off as a background task — never block on an LLM
+        # call here.
+        data = fs.upsert_profile(
+            user.uid,
+            {"prompt_suggestions": None, "prompt_placeholder": None, "suggestions_status": "pending"},
+        )
+        task = asyncio.create_task(generate_prompt_suggestions(user.uid))
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
     return _to_profile_out(data)
 
 

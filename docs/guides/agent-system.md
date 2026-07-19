@@ -645,7 +645,7 @@ model), which the frontend renders as an inline "context included" chip on that 
 
 ## 8. Prompt files — what each does and how they compose
 
-All eleven files live in `backend/app/agent/prompts/` and are treated as code (per the root
+All twelve files live in `backend/app/agent/prompts/` and are treated as code (per the root
 `CLAUDE.md`). Word/line counts below are approximate (from `wc -l`).
 
 | File | ~Lines | Used by | Purpose |
@@ -661,6 +661,7 @@ All eleven files live in `backend/app/agent/prompts/` and are treated as code (p
 | `visual_guidelines.md` | 90 | Every phase (always layer 4) | Mermaid syntax guardrails (always quote labels, avoid unquoted parens, cap ~25 nodes, short node IDs, one edge per line, always fence with `` ```mermaid ``); a note that there is no server-side syntax check — a broken diagram degrades to a plain code block in the UI, so the agent must self-check before writing; which diagram type for which content (flowchart default, sequenceDiagram for party interactions, mindmap for topic breakdowns); a worked correct example; `classDef`-based highlighting restrained to 2-3 accent classes; sparse, heading-only emoji usage. |
 | `profile_synthesis.md` | 63 | Onboarding `/api/onboarding/synthesize` endpoint only (server default model, no tools) | Transforms raw onboarding fields + resume text into a 200-350 word third-person profile covering background, strengths, gaps vs. target roles, learning style translated into content-design guidance, and 2-4 concrete personalization hooks. Explicitly: no fabrication, no meta-commentary, plain prose only. |
 | `compaction.md` | 76 | `MemoryManager`'s auto-compaction only (the conversation's selected model, no tools) | What to preserve (key decisions, user preferences/corrections, curriculum/plan state, open threads) vs. drop (pleasantries, superseded tool detail, dead-end reasoning, full tool payloads); fixed-heading structured markdown output contract (`## Key Decisions` / `## User Preferences & Corrections` / `## Curriculum & Plan State` / `## Open Threads`); how to merge with an existing rolling summary (later decision wins, trim oldest/least-actionable first). |
+| `dashboard_suggestions.md` | 63 | `app.services.prompt_suggestions.generate_prompt_suggestions` only (server default model, no tools), fired asynchronously when `PUT /api/onboarding` completes onboarding | Transforms `synthesized_profile` + raw target_roles/skills/experience_level/timeline into personalized dashboard PromptBox content: exactly 5 short (<~60 char) example-prompt chips varying in angle (role-specific, skill-focus, format-focus — adapted to the user's actual field, never defaulted to software-engineering formats), plus one fuller (~15-25 word) placeholder sentence not prefixed with "e.g.". Strict-JSON-only output contract, no markdown fences, no prose. |
 
 Composition per phase, concretely (from `_PHASE_PROMPT_FILES` in `memory/manager.py`):
 `intake`→`intake_phase.md`, `deep_research`→`research_phase.md`,
@@ -668,9 +669,10 @@ Composition per phase, concretely (from `_PHASE_PROMPT_FILES` in `memory/manager
 file — the plan file covers both drafting and the paused-approval state),
 `writing`→`writing_phase.md`, `review`→`review_phase.md` (a dedicated checklist-driven
 quality pass, not a second writing phase), `ready`→`refinement_phase.md`,
-`refinement`→`refinement_phase.md`. `profile_synthesis.md` and `compaction.md` are
-loaded directly by their respective call sites (`app/api/onboarding.py` and
-`app/agent/memory/compaction.py`) rather than through `MemoryManager`'s phase
+`refinement`→`refinement_phase.md`. `profile_synthesis.md`, `compaction.md`, and
+`dashboard_suggestions.md` are loaded directly by their respective call sites
+(`app/api/onboarding.py`, `app/agent/memory/compaction.py`, and
+`app/services/prompt_suggestions.py`) rather than through `MemoryManager`'s phase
 composition, since they're one-shot small-model tasks outside the ReAct loop entirely.
 
 ## 9. Worked example: prompt → research → plan → approve → writing → ready

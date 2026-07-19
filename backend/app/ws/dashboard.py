@@ -3,7 +3,10 @@
 Push-based replacement for the dashboard's old 8s `curriculaApi.list()` polling (see
 docs/specs/01-architecture-and-contracts.md §7b). A connected socket receives
 `curriculum_updated`/`curriculum_deleted` events whenever any of the user's curricula
-change, sourced from a listener registered on `app.services.firestore` at import time.
+change, sourced from a listener registered on `app.services.firestore` at import time. It
+also receives `suggestions_updated` events, emitted directly (not via the listener
+registry) by `app.services.prompt_suggestions.generate_prompt_suggestions` once async
+dashboard PromptBox suggestion generation finishes after onboarding completes.
 
 Known limitation: this broker is in-process only. On a multi-instance Cloud Run
 deployment, a dashboard socket only receives events for curriculum writes that happen to
@@ -157,6 +160,30 @@ async def _notify_curriculum_changed_async(curriculum_id: str, owner_uid: str | 
     elif owner_uid is not None:
         # Doc is gone (delete) and we know who owned it — notify that owner directly.
         await _emit_to_owner(owner_uid, {"type": "curriculum_deleted", "curriculum_id": curriculum_id})
+
+
+async def emit_suggestions_updated(uid: str, suggestions: list[str], placeholder: str) -> None:
+    """Push a `suggestions_updated` event to every live dashboard socket for one user.
+
+    Called directly (awaited, not fire-and-forget) by
+    `app.services.prompt_suggestions.generate_prompt_suggestions` right after it persists
+    the newly-generated PromptBox suggestions/placeholder — lets the PromptBox swap out of
+    "pending" mode without a page refresh. Import direction is
+    `services.prompt_suggestions -> ws.dashboard -> api.curricula`, which stays acyclic
+    since neither of those modules imports back into `services.prompt_suggestions`.
+
+    Args:
+        uid (str): The owner uid whose dashboard sockets should receive the event.
+        suggestions (list[str]): The generated PromptBox example-chip strings (up to 5).
+        placeholder (str): The generated PromptBox textarea placeholder sentence.
+
+    Returns:
+        None:
+    """
+    await _emit_to_owner(
+        uid,
+        {"type": "suggestions_updated", "prompt_suggestions": suggestions, "prompt_placeholder": placeholder},
+    )
 
 
 async def _emit_to_owner(owner_uid: str, event: dict[str, Any]) -> None:

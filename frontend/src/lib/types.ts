@@ -79,6 +79,13 @@ export interface ProfileOut extends ProfileIn {
   resume_filename: string | null;
   resume_text: string | null;
   synthesized_profile: string | null;
+  /** Personalized dashboard PromptBox example chips (up to 5); null = never generated/failed. */
+  prompt_suggestions: string[] | null;
+  /** Personalized dashboard PromptBox textarea placeholder sentence; null = use the hardcoded default. */
+  prompt_placeholder: string | null;
+  /** Lifecycle of the async generation kicked off when onboarding completes; null covers
+   * both "never started" and "failed" (both fall back to hardcoded examples). */
+  suggestions_status: "pending" | "ready" | null;
   onboarding_completed: boolean;
   updated_at: string;
 }
@@ -495,6 +502,17 @@ export interface DashboardCurriculumDeletedEvent {
 }
 
 /**
+ * Async dashboard PromptBox suggestion generation (kicked off when onboarding completes,
+ * see spec 01 §5/§7b) finished — carries the full personalized payload so PromptBox can
+ * switch out of "pending" mode without a refetch.
+ */
+export interface DashboardSuggestionsUpdatedEvent {
+  type: "suggestions_updated";
+  prompt_suggestions: string[];
+  prompt_placeholder: string;
+}
+
+/**
  * Discriminated union (on `type`) of every frame the server may send over the dashboard
  * WebSocket. Note `"curriculum_updated"` here is a DIFFERENT shape from the chat WS's
  * `CurriculumUpdatedEvent` above (that one carries a refetch-scope hint; this one
@@ -504,6 +522,7 @@ export interface DashboardCurriculumDeletedEvent {
 export type DashboardServerEvent =
   | DashboardCurriculumUpdatedEvent
   | DashboardCurriculumDeletedEvent
+  | DashboardSuggestionsUpdatedEvent
   | PongEvent;
 
 // ---------------------------------------------------------------------------

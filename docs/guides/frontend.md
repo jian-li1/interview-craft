@@ -44,7 +44,13 @@ Local state: `step`, `profile: ProfileIn`, `resumeFilename`, `resumeText`,
 `synthesizedProfile`, `direction` (drives the slide direction of the Framer Motion step
 transition). Steps: background/bio → target roles + experience + timeline → skills +
 goals + learning style + `ResumeDropzone` → review + "Generate my profile" (calls
-`onboardingApi.synthesize()`) → finish routes to `/dashboard`.
+`onboardingApi.synthesize()`) → finish routes to `/dashboard`. The Bio/Background
+textarea placeholders (step 1) are deliberately career-generic rather than CS-specific
+("I'm preparing for my next career step..." / "BA in Economics, 3 years in
+consulting..."), since this same wizard serves any field. Finishing (PUT /api/onboarding
+with `onboarding_completed: true`) also kicks off the backend's async dashboard
+PromptBox-suggestion generation (see the Dashboard bullet's "Personalized suggestions"
+note below and spec 01 §6/§7b) — the wizard itself never waits on this.
 
 **`app/(app)/studio/[conversationId]/page.tsx`** unwraps the Next 15 async `params`
 promise via `use(params)`. On mount / whenever `conversationId` changes: resets both the
@@ -200,7 +206,20 @@ light mode.
   above never has to fight a client-side sort. The page header row adds an "Updated"
   ghost button (flips `sortDesc`, icon swaps `ArrowDown`/`ArrowUp`) to the left of an All
   curricula/Favorites `Tabs` segmented control. Favorites-filtered-to-empty renders an
-  `EmptyState` (icon `Star`, "No favorites yet").
+  `EmptyState` (icon `Star`, "No favorites yet"). `PromptBox` itself derives a
+  `SuggestionMode` (`"pending" | "personalized"`) from an `onboardingApi.get()`
+  fetch alongside its `modelsApi.get()` call: `suggestions_status === "ready"` with data
+  renders the personalized `prompt_suggestions` chips and `` `e.g. ${prompt_placeholder}` ``
+  placeholder; anything else (still generating, never generated, failed, or the fetch
+  itself failed) stays in the default `"pending"` mode — NO chip row at all (zero height)
+  plus a generic "Describe the interview you're preparing for…" placeholder; there is no
+  hardcoded-example fallback. `PromptBox` opens its own second `DashboardSocket`
+  instance (independent of `CurriculumGrid`'s — the backend's per-uid connection registry
+  is a `set`, so both connections coexist) purely to listen for `suggestions_updated`,
+  which flips the mode to `"personalized"` live. The chip row is wrapped in
+  `AnimatePresence` with staggered `motion.button` children (`initial={{opacity: 0, y:
+  6}}` → `animate={{opacity: 1, y: 0}}`, `staggerChildren: 0.05`, `easeOut`) so any
+  transition into/between chip sets animates rather than pops.
 - **Settings (`app/(app)/settings/page.tsx`)** — a custom (non-Radix) `Tabs` component
   with three tabs: `ProfileTab` (read-only profile display, "Edit background" links to
   `/onboarding`), `AppearanceTab` (light/dark/system), `AccountTab` (email + logout). No
@@ -664,6 +683,10 @@ anywhere** (see discrepancies below).
    curricula update live there — a separate WS connection from the one used inside
    Studio, but no longer polling: it was replaced by push-based `curriculum_updated`/
    `curriculum_deleted` events (see spec 01 §7b and the Dashboard bullet in §4 above).
+   `PromptBox` independently opens a THIRD `DashboardSocket` instance (alongside
+   `CurriculumGrid`'s and any studio `ChatSocket`) purely to receive `suggestions_updated`
+   — the backend's dashboard connection registry is a `set` per uid precisely to support
+   this multi-connection-per-tab pattern.
 2. **Tool-call timing**: `tool_call_result`'s `elapsed_ms` is stored on the live
    `ToolCallRecord` (optional field — absent for hydrated history, which doesn't persist
    it) and shown in `ToolCallCard` via `formatElapsed()` once a call finishes.

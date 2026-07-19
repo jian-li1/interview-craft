@@ -15,7 +15,7 @@ specs silently.
 
 - `backend/` — FastAPI, Python 3.13, venv at `backend/.venv`. See `backend/CLAUDE.md`.
   - `app/agent/` — THE CORE: ReAct orchestrator, tools, layered memory + auto-compaction,
-    and `prompts/*.md` (11 instruction files — treat these as code; they define agent behavior).
+    and `prompts/*.md` (12 instruction files — treat these as code; they define agent behavior).
   - Run: `source .venv/bin/activate && uvicorn app.main:app --reload --port 8000`
   - Test: `python -m pytest` (mocked Firestore/LLM; no credentials needed)
 - `frontend/` — Next.js 15 App Router, TS strict, Tailwind v4. See `frontend/CLAUDE.md`.
