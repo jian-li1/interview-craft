@@ -16,6 +16,9 @@ interface GuardOptions {
 /**
  * Client-side auth guard used by protected route layouts. Waits for the
  * initial /api/auth/me fetch to resolve before making redirect decisions.
+ * `ready` also stays false while a redirect is in flight (see `redirecting`
+ * below), so callers never render the wrong page for a few frames between
+ * the effect firing and `router.replace` actually navigating away.
  */
 export function useAuthGuard({
   requireAuth = false,
@@ -44,6 +47,15 @@ export function useAuthGuard({
     }
   }, [initialized, loading, user, requireAuth, requireOnboarding, redirectIfAuthed, router]);
 
-  const ready = initialized && !loading;
+  // Mirrors the effect's own branch conditions so `ready` can go false the
+  // instant a redirect is decided, not just once initialized+!loading are true.
+  const redirecting =
+    initialized &&
+    !loading &&
+    ((redirectIfAuthed && !!user) ||
+      (requireAuth && !user) ||
+      (requireAuth && !!user && requireOnboarding && !user.onboarding_completed));
+
+  const ready = initialized && !loading && !redirecting;
   return { user, ready };
 }

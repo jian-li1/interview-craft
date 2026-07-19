@@ -19,6 +19,7 @@ app/(app)/layout.tsx                    Route group: auth guard + AppShell
 app/(app)/dashboard/page.tsx            "/dashboard"
 app/(app)/settings/page.tsx             "/settings"
 app/(app)/studio/[conversationId]/page.tsx   "/studio/[id]" — THE WORKSPACE
+src/middleware.ts                       Server-side auth fast-path redirect (see §2)
 ```
 
 **`app/layout.tsx`** loads `Inter` via `next/font/google` bound to CSS variable
@@ -109,14 +110,28 @@ sequenceDiagram
     end
 ```
 
+Ahead of all of that, **`src/middleware.ts`** runs on the edge for
+`/dashboard/:path*`, `/settings/:path*`, `/studio/:path*`, `/onboarding`, `/login`. It's a
+UX fast-path, not the security boundary: it compares `request.nextUrl.hostname` against
+the hostname parsed from `env.apiBaseUrl` and, if they differ (split-origin Cloud Run,
+where the host-only session cookie never reaches the Next server), passes through
+immediately and defers entirely to the flow below. Otherwise it reads the `ic_session`
+cookie, base64url-decodes the JWT payload (no signature check — the frontend never holds
+the signing secret) and treats an unexpired `exp` as "has session," redirecting
+unauthenticated visitors away from the protected paths and authenticated visitors away
+from `/login` before the page ever renders — eliminating the flash the client guard alone
+would produce. Malformed/absent cookies are treated as no session.
+
 - **`components/auth/AuthProvider.tsx`** — a React Context around `useAuthStore`,
   exposing `useAuth() -> { user, loading, initialized, refresh }`. Fetches `/api/auth/me`
   exactly once (a `hasFetched` ref survives React 19 StrictMode's double-invoke of
   effects in dev).
 - **`components/auth/useAuthGuard.ts`** — options `requireAuth`, `requireOnboarding`,
   `redirectIfAuthed` (all default `false`). Returns `{ user, ready }` where `ready =
-  initialized && !loading`. Every redirect decision is deferred until `ready` to avoid
-  redirect flicker before the `/api/auth/me` call resolves.
+  initialized && !loading && !redirecting` — `redirecting` mirrors the effect's own
+  branch conditions, so `ready` also stays false for the frames between a redirect being
+  decided and `router.replace` actually navigating away, not just before the
+  `/api/auth/me` call resolves.
 - **`stores/useAuthStore.ts`** (Zustand) — `{ user: UserOut | null, loading: boolean
   (starts true), initialized: boolean (starts false) }` plus actions `fetchMe()`,
   `setUser(user)`, `logout()` (calls `authApi.logout()`, clears `user` in a `finally` so

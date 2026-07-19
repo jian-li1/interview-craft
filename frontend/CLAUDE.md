@@ -11,6 +11,9 @@ See root `/CLAUDE.md` first. Scoped conventions for `frontend/` only. Full walkt
   renders `AppShell`). Public pages (`/`, `/login`) and `/onboarding` live outside it.
 - `src/components/auth/` — `AuthProvider` (context around `useAuthStore`, fetches
   `/api/auth/me` once), `GoogleSignInButton`, `useAuthGuard`.
+- `src/middleware.ts` — server-side auth fast-path redirect (cookie presence + unexpired
+  `exp`, no signature check); skipped cross-origin (split-origin Cloud Run); client guard
+  (`useAuthGuard`) remains the source of truth.
 - `src/components/layout/` — `AppShell`, `Sidebar`, `PublicNavbar` (auth-aware), `UserMenu`
   (app/landing `variant` prop), `ThemeProvider`/`ThemeToggle`.
 - `src/components/studio/chat/` — `ChatPanel`, `Composer`, `MessageBubble`,

@@ -25,8 +25,15 @@ Next.js 15 App Router + TypeScript + Tailwind v4. Conform to API/WS contracts in
 ```
 
 Route group `(app)` with shared authenticated layout (sidebar nav: Dashboard, New
-Curriculum, Settings; user avatar menu with logout). Auth guard: fetch `/api/auth/me` in a
-client provider; redirect to /login on 401; redirect to /onboarding when profile incomplete.
+Curriculum, Settings; user avatar menu with logout). Auth guard is two-layered: (1)
+`src/middleware.ts` does a server-side fast-path redirect purely from cookie presence and
+an unexpired `exp` claim (no signature check — the frontend never holds the signing
+secret), skipped entirely when the request's hostname differs from the API base URL's
+hostname (split-origin Cloud Run, where the cookie never reaches the Next server); (2) the
+client-side `useAuthGuard` remains the authoritative check — it fetches `/api/auth/me` in
+a client provider, redirects to /login on 401, redirects to /onboarding when profile
+incomplete, and its `ready` flag holds the page on a spinner for as long as any redirect
+is in flight, so the wrong page never paints.
 The sidebar's "New curriculum" button does **not** call any API — it never creates a
 conversation doc — it simply navigates to /dashboard, where the PromptBox is the sole entry
 point for starting a curriculum (avoids junk empty-conversation documents).
