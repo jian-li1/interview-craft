@@ -188,7 +188,19 @@ light mode.
   full list is refetched once to catch anything missed while offline. No more polling).
   `CurriculumCard` maps `CurriculumStatus` to a label/Badge-variant via a `STATUS_META`
   dict, shows a progress bar for `researching|planning|writing|reviewing`, and wraps
-  delete in a `ConfirmDialog`.
+  delete in a `ConfirmDialog`. It also renders a `lucide Star` favorite button before the
+  delete button (always-visible + filled amber when `favorite`, hover-reveal + muted
+  otherwise); clicking calls the grid's `onToggleFavorite(id, favorite)`, which flips the
+  card optimistically then calls `curriculaApi.update(id, { favorite })` (PATCH
+  `/api/curricula/{id}`), reverting + toasting on failure. `CurriculumGrid` takes
+  `filter: "all" | "favorites"` and `sortDesc: boolean` props (owned by
+  `dashboard/page.tsx`'s local state) and derives the rendered list at render time —
+  filter by `c.favorite`, then sort by `updated_at` — from a copy of its fetched
+  `curricula` state, which itself always stays in server order so the WS upsert logic
+  above never has to fight a client-side sort. The page header row adds an "Updated"
+  ghost button (flips `sortDesc`, icon swaps `ArrowDown`/`ArrowUp`) to the left of an All
+  curricula/Favorites `Tabs` segmented control. Favorites-filtered-to-empty renders an
+  `EmptyState` (icon `Star`, "No favorites yet").
 - **Settings (`app/(app)/settings/page.tsx`)** — a custom (non-Radix) `Tabs` component
   with three tabs: `ProfileTab` (read-only profile display, "Edit background" links to
   `/onboarding`), `AppearanceTab` (light/dark/system), `AccountTab` (email + logout). No
@@ -321,7 +333,10 @@ works even while `curriculum` is still null mid-load, which matters because a
 prop-drilling; `CurriculumPanel`'s own effect additionally resets both to
 `"workflow"`/`null` on every `curriculumId` change (including first mount), on top of the
 store's own switching-branch reset, so switching curricula never leaves the Reader showing
-a stale section.
+a stale section. `applyMeta(fields: { title?, description? })` shallow-merges a rename
+into the loaded `curriculum` (no-op if none is loaded) — used by
+`RenameCurriculumDialog`'s `onSaved` to apply a PATCH response without a full
+`fetchCurriculum`/`refetch` round-trip.
 
 ### 5.4 Chat panel components (`components/studio/chat/`)
 
@@ -440,7 +455,12 @@ selected view. `CurriculumPanel` owns the reader's selection state as
 `ReaderView`, so a workflow-node click and the reader's own TOC/prev-next controls stay in
 sync). `handleSelectModule(moduleId)` resolves that module's first section (lowest
 `order`; `sectionId: null` if the module has no sections yet), sets `activeSelection`, and
-switches to `"reader"`.
+switches to `"reader"`. The header title also has a hover-revealed `Pencil` button
+(local `renameOpen` state) opening `RenameCurriculumDialog.tsx` — statically imported
+(plain markup/Framer Motion, no mermaid/xyflow, so the `ssr:false` boundary above doesn't
+apply to it) — prefilled from the loaded curriculum's `id`/`title`/`description`. Its
+`onSaved` calls `useCurriculumStore.applyMeta({ title, description })`, which
+shallow-merges the PATCH response into the loaded curriculum without a full refetch.
 
 - **`ActivityFeed.tsx`** — a spinning `Sparkles` header showing `phaseLabel`, an
   `AnimatePresence`+`layout`-animated list of the most recent 12 activity items, plus
@@ -593,7 +613,9 @@ switches to `"reader"`.
 
 API namespaces (all in `lib/api.ts`): `authApi` (`loginWithGoogle`, `logout`, `me`),
 `onboardingApi` (`get`, `update`, `uploadResume`, `synthesize`), `curriculaApi` (`list`,
-`get`, `remove`, `plan`), `conversationsApi` (`list`, `create`, `messages`),
+`get`, `remove`, `plan`, `update` — PATCH `/api/curricula/{id}` with any of
+`{title, description, favorite}`, backing both the dashboard favorite star and the
+studio rename dialog), `conversationsApi` (`list`, `create`, `messages`),
 `settingsApi` (`get`, `update`), `healthApi` (`check`, with `skipAuthRedirect: true`).
 
 `lib/types.ts` is a hand-maintained TypeScript mirror of every shape in spec 01 —

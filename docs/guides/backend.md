@@ -169,7 +169,7 @@ All routers live in `backend/app/api/` and are mounted with their own `prefix` i
 | `health.py` | (none) | `GET /api/healthz` — no auth, liveness probe |
 | `auth.py` | `/api/auth` | `POST /google`, `POST /logout`, `GET /me` |
 | `onboarding.py` | `/api/onboarding` | `GET ""`, `PUT ""`, `POST /resume`, `POST /synthesize` |
-| `curricula.py` | `/api/curricula` | `GET ""`, `GET /{id}`, `DELETE /{id}`, `GET /{id}/plan` |
+| `curricula.py` | `/api/curricula` | `GET ""`, `GET /{id}`, `DELETE /{id}`, `PATCH /{id}`, `GET /{id}/plan` |
 | `conversations.py` | `/api/conversations` | `GET ""`, `POST ""`, `GET /{id}/messages` |
 | `models.py` | `/api/models` | `GET ""` — read-only, no CSRF dependency |
 | `settings.py` | `/api/settings` | `GET ""`, `PUT ""` |
@@ -192,7 +192,12 @@ Notable implementation details per router:
   `CurriculumFull` response — this is a full N+1 read pattern (`list_modules` then
   `list_sections` per module) but is the only way the current Firestore repo layer
   supports it, and curriculum sizes are bounded (4–8 modules × 3–6 sections) so it's
-  cheap in practice.
+  cheap in practice. `update_curriculum` (the PATCH route handler, distinct from
+  `firestore.update_curriculum`) backs the dashboard favorite star and the studio rename
+  dialog: it validates `title` (stripped, non-empty, ≤100 chars) and `description`
+  (≤500 chars) — the same hard caps as `create_module`/`update_module` — and only bumps
+  `updated_at` when title/description actually changed, so a favorite-only toggle doesn't
+  reshuffle `list_curricula`'s recency-sorted dashboard grid.
 - **`conversations.py`**: `create_conversation` is the one place a curriculum gets born.
   If `curriculum_prompt` is provided, it creates both a `conversations/{id}` doc and a
   linked `curricula/{id}` doc (`status="researching"`), and seeds

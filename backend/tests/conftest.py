@@ -182,6 +182,8 @@ def fake_fs(monkeypatch) -> FakeFirestore:
             "module_count": 0,
             "section_count": 0,
             "tags": [],
+            # User-set dashboard favorite flag; always starts unfavorited.
+            "favorite": False,
             "created_at": now,
             "updated_at": now,
         }
@@ -201,10 +203,11 @@ def fake_fs(monkeypatch) -> FakeFirestore:
             if data.get("owner_uid") == owner_uid
         ]
 
-    def update_curriculum(curriculum_id, fields):
-        """Fake for `firestore.update_curriculum` — merge fields, stamp `updated_at`."""
+    def update_curriculum(curriculum_id, fields, bump_updated_at=True):
+        """Fake for `firestore.update_curriculum` — merge fields, optionally stamp `updated_at`."""
         store.curricula.setdefault(curriculum_id, {}).update(fields)
-        store.curricula[curriculum_id]["updated_at"] = store.utcnow()
+        if bump_updated_at:
+            store.curricula[curriculum_id]["updated_at"] = store.utcnow()
 
     def delete_curriculum(curriculum_id):
         """Fake for `firestore.delete_curriculum` — cascade-delete curriculum subtree."""

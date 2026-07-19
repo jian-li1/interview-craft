@@ -1,12 +1,15 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { memo, useCallback, useEffect } from "react";
+import { memo, useCallback, useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import { BookOpen, Loader2, Maximize2, Minimize2, Workflow as WorkflowIcon } from "lucide-react";
+import { BookOpen, Loader2, Maximize2, Minimize2, Pencil, Workflow as WorkflowIcon } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/Tabs";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ActivityFeed } from "@/components/studio/curriculum/ActivityFeed";
+// Plain (non-dynamic) import: this dialog is plain markup/Framer Motion, no
+// mermaid/@xyflow/react — the ssr:false rule below applies only to WorkflowView/ReaderView.
+import { RenameCurriculumDialog } from "@/components/studio/curriculum/RenameCurriculumDialog";
 import { useChatStore } from "@/stores/useChatStore";
 import { useCurriculumStore, type CurriculumView } from "@/stores/useCurriculumStore";
 // Re-exported for backward-compat: ActiveSelection now lives in the store (lifted out of
@@ -44,6 +47,13 @@ interface CurriculumPanelProps {
   onExplain: (prompt: string) => void;
 }
 
+/**
+ * Studio's right-hand curriculum panel: a header (title + hover-reveal rename
+ * pencil opening `RenameCurriculumDialog`, the Workflow/Reader `Tabs` toggle,
+ * and the full-screen focus button) over either `WorkflowView` (React Flow
+ * canvas), `ReaderView` (single-section paging view), or `ActivityFeed` while
+ * no content exists yet.
+ */
 function CurriculumPanelImpl({ curriculumId, onExplain }: CurriculumPanelProps) {
   const curriculum = useCurriculumStore((s) => s.curriculum);
   const loading = useCurriculumStore((s) => s.loading);
@@ -58,10 +68,15 @@ function CurriculumPanelImpl({ curriculumId, onExplain }: CurriculumPanelProps) 
   const setView = useCurriculumStore((s) => s.setView);
   const activeSelection = useCurriculumStore((s) => s.activeSelection);
   const setActiveSelection = useCurriculumStore((s) => s.setActiveSelection);
+  // Applies a rename from the dialog's PATCH response without a full refetch.
+  const applyMeta = useCurriculumStore((s) => s.applyMeta);
 
   const activity = useChatStore((s) => s.activity);
   const phaseLabel = useChatStore((s) => s.phaseLabel);
   const plan = useChatStore((s) => s.plan);
+
+  // Local state for the rename dialog's open/closed toggle.
+  const [renameOpen, setRenameOpen] = useState(false);
 
   useEffect(() => {
     // Reset view state whenever the curriculum identity changes so the reader never
@@ -123,10 +138,21 @@ function CurriculumPanelImpl({ curriculumId, onExplain }: CurriculumPanelProps) 
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex shrink-0 items-center justify-between border-b border-border px-4 py-2.5">
-        <div className="min-w-0">
+        <div className="group flex min-w-0 items-center gap-1.5">
           <p className="truncate text-sm font-semibold">
             {curriculum ? `${curriculum.emoji ?? "📘"} ${curriculum.title}` : "Curriculum"}
           </p>
+          {/* Rename pencil: only shown once a curriculum is loaded; hover-reveal like the trash/star buttons elsewhere. */}
+          {curriculum && (
+            <button
+              type="button"
+              onClick={() => setRenameOpen(true)}
+              aria-label="Rename curriculum"
+              className="shrink-0 rounded-md p-1.5 text-muted-foreground opacity-0 transition-opacity hover:bg-muted hover:text-foreground focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background group-hover:opacity-100"
+            >
+              <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
+            </button>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <Tabs value={view} onValueChange={(v) => setView(v as CurriculumView)}>
@@ -198,6 +224,16 @@ function CurriculumPanelImpl({ curriculumId, onExplain }: CurriculumPanelProps) 
           />
         )}
       </div>
+
+      {/* Rename dialog: only rendered with real curriculum data, so id/title/description are always defined when open. */}
+      {curriculum && (
+        <RenameCurriculumDialog
+          open={renameOpen}
+          curriculum={{ id: curriculum.id, title: curriculum.title, description: curriculum.description }}
+          onClose={() => setRenameOpen(false)}
+          onSaved={(updated) => applyMeta({ title: updated.title, description: updated.description })}
+        />
+      )}
     </div>
   );
 }

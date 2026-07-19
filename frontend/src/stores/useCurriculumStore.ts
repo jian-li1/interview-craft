@@ -71,6 +71,9 @@ interface CurriculumState {
   setView: (view: CurriculumView) => void;
   /** Updates the Reader's active (module, section) selection. */
   setActiveSelection: (selection: ActiveSelection | null) => void;
+  /** Applies a rename (title/description) from the RenameCurriculumDialog's PATCH
+   * response without a full refetch; no-ops if no curriculum is currently loaded. */
+  applyMeta: (fields: { title?: string; description?: string }) => void;
   reset: () => void;
 }
 
@@ -136,6 +139,13 @@ export const useCurriculumStore = create<CurriculumState>((set, get) => ({
 
   // Simple setter: updates the Reader's active (module, section) pair.
   setActiveSelection: (selection) => set({ activeSelection: selection }),
+
+  // Shallow-merges a rename into the loaded curriculum; no-op if none is loaded.
+  applyMeta: (fields) => {
+    const current = get().curriculum;
+    if (!current) return;
+    set({ curriculum: { ...current, ...fields } });
+  },
 
   reset: () =>
     set({

@@ -152,6 +152,9 @@ curricula/{curriculumId}
                                  # so REST readers (dashboard) see live progress too
   conversation_id: str
   module_count: int, section_count: int, tags: [str]
+  favorite: bool                # user-set dashboard favorite flag; defaults False,
+                                 # toggled via PATCH /api/curricula/{id} (see §6). Legacy
+                                 # docs predating this field read as False via .get default.
   created_at, updated_at
 
 curricula/{id}/modules/{moduleId}
@@ -288,6 +291,7 @@ FRONTEND_ORIGIN with credentials. All mutating routes require header
 | GET  | /api/curricula | → `[CurriculumSummary]` |
 | GET  | /api/curricula/{id} | → `CurriculumFull` (with modules + sections nested) |
 | DELETE | /api/curricula/{id} | → `{ok: true}` — cascades: also deletes the curriculum's linked conversation doc and its `messages` subcollection (a curriculum:conversation is 1:1, so no orphaned conversation is left behind) |
+| PATCH | /api/curricula/{id} | `{title?: str, description?: str, favorite?: bool}` → `CurriculumSummary` — rename and/or toggle favorite; at least one field required (400 if body is empty). `title`, once stripped, must be non-empty and ≤100 chars (400 otherwise); `description` must be ≤500 chars (400 otherwise) — same hard caps as the agent's `create_module`/`update_module` tools. A `favorite`-only patch does NOT bump `updated_at` (so starring a curriculum doesn't reshuffle the dashboard's recency sort); a title/description change does. Requires the CSRF header. |
 | GET  | /api/curricula/{id}/plan | → plan doc |
 | GET  | /api/conversations | → `[ConversationSummary]` |
 | POST | /api/conversations | `{curriculum_prompt: str\|null, selected_model?: str\|null, search_provider?: str\|null}` → `{conversation_id}` (new chat; `selected_model`/`search_provider` are resolved via `resolve_model`/`resolve_search_provider` and persisted on the new conversation doc — the dashboard prompt box's chip selections, since it has no WS connection yet; omitted/null leaves the doc fields null) |

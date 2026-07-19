@@ -97,6 +97,7 @@ class Curriculum(ApiModel):
         module_count (int): Denormalized count of modules, for list views.
         section_count (int): Denormalized count of sections, for list views.
         tags (list[str]): Free-form tags for categorization/search.
+        favorite (bool): User-set dashboard favorite flag.
         created_at (dt.datetime): Timestamp the curriculum was created.
         updated_at (dt.datetime): Timestamp of the most recent update.
     """
@@ -114,6 +115,7 @@ class Curriculum(ApiModel):
     module_count: int = 0
     section_count: int = 0
     tags: list[str] = Field(default_factory=list)
+    favorite: bool = False
     created_at: dt.datetime
     updated_at: dt.datetime
 
@@ -141,6 +143,7 @@ class CurriculumSummary(ApiModel):
         tags (list[str]): Free-form tags for categorization/search.
         module_count (int): Denormalized count of modules.
         section_count (int): Denormalized count of sections.
+        favorite (bool): User-set dashboard favorite flag.
         created_at (dt.datetime): Timestamp the curriculum was created.
         updated_at (dt.datetime): Timestamp of the most recent update.
     """
@@ -158,8 +161,26 @@ class CurriculumSummary(ApiModel):
     tags: list[str] = Field(default_factory=list)
     module_count: int = 0
     section_count: int = 0
+    favorite: bool = False
     created_at: dt.datetime
     updated_at: dt.datetime
+
+
+class CurriculumUpdateRequest(ApiModel):
+    """Request body for `PATCH /api/curricula/{id}` — rename and/or toggle favorite.
+
+    All fields are optional; the route builds a partial update from whichever are
+    non-None. Mirrors the PATCH /api/curricula/{id} body described in spec 01.
+
+    Attributes:
+        title (str | None): New display title, if being changed.
+        description (str | None): New description, if being changed.
+        favorite (bool | None): New favorite flag, if being changed.
+    """
+
+    title: str | None = None
+    description: str | None = None
+    favorite: bool | None = None
 
 
 class Section(ApiModel):

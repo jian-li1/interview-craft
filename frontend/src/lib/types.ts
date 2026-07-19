@@ -119,6 +119,8 @@ export interface CurriculumSummary {
   module_count: number;
   section_count: number;
   tags: string[];
+  /** User-set dashboard favorite flag. */
+  favorite: boolean;
   created_at: string;
   updated_at: string;
 }

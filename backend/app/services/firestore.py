@@ -332,6 +332,8 @@ def create_curriculum(owner_uid: str, title: str, user_prompt: str, conversation
         "module_count": 0,
         "section_count": 0,
         "tags": [],
+        # User-set dashboard favorite flag; always starts unfavorited.
+        "favorite": False,
         "created_at": now,
         "updated_at": now,
     }
@@ -378,8 +380,8 @@ def list_curricula(owner_uid: str) -> list[dict[str, Any]]:
     return [{"id": doc.id, **(doc.to_dict() or {})} for doc in query.stream()]
 
 
-def update_curriculum(curriculum_id: str, fields: dict[str, Any]) -> None:
-    """Merge fields into a curriculum document, stamping `updated_at`.
+def update_curriculum(curriculum_id: str, fields: dict[str, Any], bump_updated_at: bool = True) -> None:
+    """Merge fields into a curriculum document, optionally stamping `updated_at`.
 
     No ownership check is performed here; callers must verify the requesting user owns
     the curriculum before calling this.
@@ -387,12 +389,17 @@ def update_curriculum(curriculum_id: str, fields: dict[str, Any]) -> None:
     Args:
         curriculum_id (str): The curriculum document id to update.
         fields (dict[str, Any]): Fields to merge into the existing document.
+        bump_updated_at (bool): Whether to stamp `updated_at` with the current time.
+            Defaults to True; pass False for favorite-only toggles so starring a
+            curriculum doesn't reshuffle the dashboard's recency sort.
     """
     db = get_firestore_client()
-    fields = {**fields, "updated_at": utcnow()}
+    if bump_updated_at:
+        fields = {**fields, "updated_at": utcnow()}
     db.collection("curricula").document(curriculum_id).set(fields, merge=True)
     # Owner is unknown here (fields may not include it); the dashboard WS subscriber
-    # re-fetches the doc itself to learn it.
+    # re-fetches the doc itself to learn it. Listener still fires regardless of the
+    # updated_at bump, since the client still needs the fresh field values.
     _notify_curriculum_listeners(curriculum_id, None)
 
 

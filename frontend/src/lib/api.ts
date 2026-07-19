@@ -192,6 +192,15 @@ export const curriculaApi = {
   remove: (id: string) =>
     apiFetch<OkResponse>(`/api/curricula/${id}`, { method: "DELETE" }),
   plan: (id: string) => apiFetch<PlanOut>(`/api/curricula/${id}/plan`),
+  // Partial rename/favorite update; PATCH so only the sent fields change server-side.
+  update: (
+    id: string,
+    fields: { title?: string; description?: string; favorite?: boolean }
+  ) =>
+    apiFetch<CurriculumSummary>(`/api/curricula/${id}`, {
+      method: "PATCH",
+      body: fields,
+    }),
 };
 
 // ---------------------------------------------------------------------------

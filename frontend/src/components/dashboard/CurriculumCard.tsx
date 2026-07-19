@@ -3,13 +3,13 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
-import { BookOpen, Layers, Trash2 } from "lucide-react";
+import { BookOpen, Layers, Star, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { curriculaApi, ApiError } from "@/lib/api";
-import { timeAgo } from "@/lib/utils";
+import { timeAgo, cn } from "@/lib/utils";
 import type { CurriculumSummary } from "@/lib/types";
 
 const STATUS_META: Record<
@@ -28,6 +28,8 @@ const STATUS_META: Record<
 interface CurriculumCardProps {
   curriculum: CurriculumSummary;
   onDeleted: (id: string) => void;
+  /** Called when the star button is clicked; parent owns the optimistic update + PATCH. */
+  onToggleFavorite: (id: string, favorite: boolean) => void;
 }
 
 /**
@@ -37,12 +39,14 @@ interface CurriculumCardProps {
  * `CurriculumSummary["status"]` via `STATUS_META`), and — while the agent is
  * still generating (researching/planning/writing/reviewing) — an animated
  * progress bar driven by `curriculum.progress`. Clicking the card navigates
- * to the studio for its conversation; the trash icon opens a `ConfirmDialog`
- * and, on confirm, calls `curriculaApi.remove` then notifies the parent via
- * `onDeleted` so it can drop the item from its list (this component holds no
- * list state itself).
+ * to the studio for its conversation; the star button toggles
+ * `curriculum.favorite` via `onToggleFavorite` (always visible + filled
+ * yellow once favorited, hover-reveal otherwise); the trash icon opens a
+ * `ConfirmDialog` and, on confirm, calls `curriculaApi.remove` then notifies
+ * the parent via `onDeleted` so it can drop the item from its list (this
+ * component holds no list state itself).
  */
-export function CurriculumCard({ curriculum, onDeleted }: CurriculumCardProps) {
+export function CurriculumCard({ curriculum, onDeleted, onToggleFavorite }: CurriculumCardProps) {
   const router = useRouter();
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -88,17 +92,40 @@ export function CurriculumCard({ curriculum, onDeleted }: CurriculumCardProps) {
         >
           <div className="flex items-start justify-between gap-2">
             <span className="text-2xl leading-none">{curriculum.emoji ?? "📘"}</span>
-            <button
-              type="button"
-              aria-label={`Delete ${curriculum.title}`}
-              onClick={(e) => {
-                e.stopPropagation();
-                setConfirmOpen(true);
-              }}
-              className="rounded-md p-1.5 text-muted-foreground opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive focus-visible:opacity-100 group-hover:opacity-100"
-            >
-              <Trash2 className="h-4 w-4" aria-hidden="true" />
-            </button>
+            <div className="flex items-center gap-0.5">
+              <button
+                type="button"
+                aria-label={`Delete ${curriculum.title}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setConfirmOpen(true);
+                }}
+                className="rounded-md p-1.5 text-muted-foreground opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive focus-visible:opacity-100 group-hover:opacity-100"
+              >
+                <Trash2 className="h-4 w-4" aria-hidden="true" />
+              </button>
+              <button
+                type="button"
+                aria-label={curriculum.favorite ? `Unfavorite ${curriculum.title}` : `Favorite ${curriculum.title}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggleFavorite(curriculum.id, !curriculum.favorite);
+                }}
+                className={cn(
+                  "rounded-md p-1.5 transition-opacity hover:bg-amber-400/10 hover:text-amber-400",
+                  // Favorited: always visible + filled yellow (explicit user request, fine in both themes).
+                  // Not favorited: same hover-reveal pattern as the trash button.
+                  curriculum.favorite
+                    ? "text-amber-400"
+                    : "text-muted-foreground opacity-0 focus-visible:opacity-100 group-hover:opacity-100"
+                )}
+              >
+                <Star
+                  className={cn("h-4 w-4", curriculum.favorite && "fill-amber-400 text-amber-400")}
+                  aria-hidden="true"
+                />
+              </button>
+            </div>
           </div>
 
           <div className="flex-1">

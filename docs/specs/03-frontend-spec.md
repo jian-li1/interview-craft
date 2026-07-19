@@ -62,16 +62,32 @@ drawer behavior is unchanged (slide-in overlay, unaffected by the desktop collap
   chip selection) and routes to /studio/[id]; grid of curriculum cards (emoji, title,
   subtitle showing the agent-written `description` — falling back to `user_prompt` for
   legacy curricula or before a plan is first proposed, `line-clamp-3` — status badge,
-  progress bar when generating, module count, updated time, delete w/ confirm). Empty
-  state illustration. The dashboard's prompt box is the *only* way to create a
-  curriculum — the sidebar's "New curriculum" button never calls the API; it just
-  navigates to /dashboard (see §2 sidebar note below). The grid loads via
+  progress bar when generating, module count, updated time, favorite star, delete w/
+  confirm). Empty state illustration. The dashboard's prompt box is the *only* way to
+  create a curriculum — the sidebar's "New curriculum" button never calls the API; it
+  just navigates to /dashboard (see §2 sidebar note below). The grid loads via
   `curriculaApi.list()` on mount, then stays live via a `DashboardSocket`
   (`/ws/dashboard`, see spec 01 §7b) opened in the same effect: `curriculum_updated`
   upserts the changed card (by id, preserving grid position; a not-yet-seen id is
   prepended) and `curriculum_deleted` removes it — no more polling. On reconnect after a
   dropped connection the full list is refetched once, to catch any changes missed while
   offline.
+  - **Favorites + filter/sort**: each card shows a `lucide Star` button in its top row
+    (before the delete button). Favorited: always visible, filled yellow
+    (`fill-amber-400 text-amber-400`, same in both themes). Not favorited: hover-reveal
+    like the trash button, muted color, hover turns amber. Clicking calls
+    `curriculaApi.update(id, {favorite})` (PATCH `/api/curricula/{id}`) optimistically —
+    the grid flips the card's `favorite` locally first, reverting + toasting on error;
+    the dashboard WS's own `curriculum_updated` echo is a harmless no-op replace after.
+    The "Your curricula" header row (owned by `dashboard/page.tsx`, not the grid) adds two
+    controls to the right: an "Updated" ghost button with an `ArrowDown`/`ArrowUp` icon
+    that flips sort direction on `updated_at`, and an All curricula/Favorites `Tabs`
+    segmented control (same primitive as the studio's Workflow/Reader toggle). Both are
+    plain local page state (`filter`, `sortDesc`) passed down as props;
+    `CurriculumGrid` applies them to a render-time copy of its fetched list (the
+    underlying state keeps server order, so the WS upsert logic never fights a
+    client-side sort). Filtering to Favorites with none starred renders an `EmptyState`
+    (icon `Star`, "No favorites yet").
 - **Settings**: tabs — Profile (link/embed onboarding edit), Appearance (theme), Account
   (email, logout). No more Preferences tab — LLM model / search provider selection moved
   to the chat composer's chips (per-conversation, see §3 below), not a settings page.
@@ -86,7 +102,14 @@ switcher (unaffected by the divider). The curriculum panel header also has a ful
 "focus mode" toggle (also exits on Escape) that hides the app header, nav sidebar, and
 chat column — the chat column stays mounted, just CSS-hidden, so its scroll/draft state
 survives; state lives on `useCurriculumStore.focusMode` and is force-cleared when the
-studio page unmounts.
+studio page unmounts. The header's title also gets a hover-revealed `lucide Pencil`
+button (same reveal pattern as the dashboard card's delete/star buttons) that opens
+`RenameCurriculumDialog` — a `ConfirmDialog`-style modal (same backdrop/Escape/animation
+conventions) with a Name input and a Description textarea (both pre-filled, capped at
+100/500 chars client-side to match the backend). Save sends only the changed field(s) via
+`curriculaApi.update` (PATCH `/api/curricula/{id}`) and applies the response into
+`useCurriculumStore` via the `applyMeta` action (shallow-merges title/description into
+the loaded curriculum without a full refetch).
 
 ### Chat panel (Claude/ChatGPT-grade)
 - Message list with user/assistant bubbles, markdown rendering in assistant messages.
