@@ -39,7 +39,9 @@ drawer behavior is unchanged (slide-in overlay, unaffected by the desktop collap
 - **Landing**: hero (headline, subheadline, CTA → /login), animated product mock (stylized
   chat+workflow illustration built with divs, no images), features grid (Deep Research,
   Human-in-the-loop Planning, Visual Curricula, Cited Sources), "how it works" 4-step
-  section, footer. Fully responsive, dark-mode aware, tasteful gradient accents.
+  section, footer. Fully responsive, dark-mode aware, tasteful gradient accents. The navbar
+  is auth-aware: signed-in visitors see the shared `UserMenu` (landing variant — "Go to
+  dashboard" + "Log out", no Settings) in place of the Log in/Get started buttons.
 - **Login**: card with Google Sign-In button (Google Identity Services script,
   `renderButton`), on credential → POST /api/auth/google → route to /onboarding or /dashboard.
 - **Onboarding wizard** (4 steps, progress indicator, framer-motion step transitions):

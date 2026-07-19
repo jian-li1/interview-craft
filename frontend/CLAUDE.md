@@ -11,8 +11,8 @@ See root `/CLAUDE.md` first. Scoped conventions for `frontend/` only. Full walkt
   renders `AppShell`). Public pages (`/`, `/login`) and `/onboarding` live outside it.
 - `src/components/auth/` — `AuthProvider` (context around `useAuthStore`, fetches
   `/api/auth/me` once), `GoogleSignInButton`, `useAuthGuard`.
-- `src/components/layout/` — `AppShell`, `Sidebar`, `PublicNavbar`, `UserMenu`,
-  `ThemeProvider`/`ThemeToggle`.
+- `src/components/layout/` — `AppShell`, `Sidebar`, `PublicNavbar` (auth-aware), `UserMenu`
+  (app/landing `variant` prop), `ThemeProvider`/`ThemeToggle`.
 - `src/components/studio/chat/` — `ChatPanel`, `Composer`, `MessageBubble`,
   `PhaseBanner`, `PlanApprovalCard`, `ReasoningBlock`, `ToolCallCard`.
 - `src/components/studio/curriculum/` — `CurriculumPanel`, `WorkflowView` (React Flow),

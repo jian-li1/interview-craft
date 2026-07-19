@@ -3,20 +3,26 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { LogOut, Settings, ChevronDown } from "lucide-react";
+import { LogOut, Settings, ChevronDown, LayoutDashboard } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
 import { useAuthStore } from "@/stores/useAuthStore";
 import { initials } from "@/lib/utils";
 import { toast } from "sonner";
 
 /**
- * Account dropdown menu shown in `AppShell`'s header: avatar (Google
- * profile picture, falling back to initials) plus name, expanding into a
- * popover with a settings link (`/settings`) and a log out action. Renders
- * nothing if `useAuthStore` has no `user` yet (e.g. before `AuthProvider`'s
- * initial fetch resolves).
+ * Account dropdown menu: avatar (Google profile picture, falling back to
+ * initials) plus name, expanding into a popover with a log out action.
+ * Renders nothing if `useAuthStore` has no `user` yet (e.g. before
+ * `AuthProvider`'s initial fetch resolves).
+ *
+ * Two usages via the `variant` prop:
+ * - `"app"` (default) — shown in `AppShell`'s header; dropdown has a
+ *   Settings link (`/settings`) above Log out.
+ * - `"landing"` — shown in `PublicNavbar` for signed-in visitors; dropdown
+ *   swaps Settings for a "Go to dashboard" link (`/dashboard`) as the first
+ *   item, since Settings isn't a relevant action from the public landing page.
  */
-export function UserMenu() {
+export function UserMenu({ variant = "app" }: { variant?: "app" | "landing" }) {
   const user = useAuthStore((s) => s.user);
   const logout = useAuthStore((s) => s.logout);
   const [open, setOpen] = useState(false);
@@ -84,15 +90,28 @@ export function UserMenu() {
               <p className="truncate text-sm font-medium">{user.name}</p>
               <p className="truncate text-xs text-muted-foreground">{user.email}</p>
             </div>
-            <Link
-              href="/settings"
-              role="menuitem"
-              onClick={() => setOpen(false)}
-              className="flex items-center gap-2 px-3 py-2 text-sm hover:bg-muted"
-            >
-              <Settings className="h-4 w-4" aria-hidden="true" />
-              Settings
-            </Link>
+            {variant === "landing" ? (
+              // Landing variant: dashboard shortcut replaces Settings (not relevant off the public page).
+              <Link
+                href="/dashboard"
+                role="menuitem"
+                onClick={() => setOpen(false)}
+                className="flex items-center gap-2 px-3 py-2 text-sm hover:bg-muted"
+              >
+                <LayoutDashboard className="h-4 w-4" aria-hidden="true" />
+                Go to dashboard
+              </Link>
+            ) : (
+              <Link
+                href="/settings"
+                role="menuitem"
+                onClick={() => setOpen(false)}
+                className="flex items-center gap-2 px-3 py-2 text-sm hover:bg-muted"
+              >
+                <Settings className="h-4 w-4" aria-hidden="true" />
+                Settings
+              </Link>
+            )}
             <button
               type="button"
               role="menuitem"

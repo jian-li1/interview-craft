@@ -6,9 +6,15 @@ import { Button } from "@/components/ui/Button";
 import { ProductMock } from "@/components/landing/ProductMock";
 import { useRouter } from "next/navigation";
 
-/** Landing page section: above-the-fold hero with headline, CTA buttons (both route to /login), and the `ProductMock` illustration. */
+/** Landing page section: above-the-fold hero with headline, primary CTA (routes to /login), a secondary CTA that smooth-scrolls to the Features section, and the `ProductMock` illustration. */
 export function Hero() {
   const router = useRouter();
+
+  // Smooth-scrolls to Features.tsx's `id="features"` section instead of navigating away.
+  function scrollToFeatures() {
+    document.getElementById("features")?.scrollIntoView({ behavior: "smooth" });
+  }
+
   return (
     <section className="relative overflow-hidden px-4 pb-20 pt-16 sm:px-6 sm:pt-24 lg:pt-28">
       <div
@@ -43,7 +49,7 @@ export function Hero() {
                 Start preparing free
                 <ArrowRight className="h-4 w-4" aria-hidden="true" />
               </Button>
-              <Button size="lg" variant="outline" onClick={() => router.push("/login")}>
+              <Button size="lg" variant="outline" onClick={scrollToFeatures}>
                 See how it works
               </Button>
             </div>

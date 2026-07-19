@@ -5,10 +5,20 @@ import { useRouter } from "next/navigation";
 import { Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { ThemeToggle } from "@/components/layout/ThemeToggle";
+import { UserMenu } from "@/components/layout/UserMenu";
+import { useAuth } from "@/components/auth/AuthProvider";
 
-/** Sticky top nav for public (unauthenticated) pages: logo, `ThemeToggle`, and log in/get started buttons routing to `/login`. */
+/**
+ * Sticky top nav for public pages: logo, `ThemeToggle`, then an auth-aware
+ * right-hand control — signed-in visitors get the shared `UserMenu`
+ * ("landing" variant: dashboard shortcut + log out, no Settings) in place
+ * of the Log in/Get started buttons. `useAuth()` works here because
+ * `AuthProvider` is mounted in the root layout and its `/api/auth/me` fetch
+ * doesn't redirect unauthenticated visitors away from public pages.
+ */
 export function PublicNavbar() {
   const router = useRouter();
+  const { user, loading, initialized } = useAuth();
   return (
     <header className="sticky top-0 z-40 border-b border-border/60 bg-background/80 backdrop-blur-md">
       <nav className="mx-auto flex h-16 max-w-6xl items-center justify-between px-4 sm:px-6">
@@ -20,12 +30,21 @@ export function PublicNavbar() {
         </Link>
         <div className="flex items-center gap-2">
           <ThemeToggle />
-          <Button variant="ghost" size="sm" onClick={() => router.push("/login")}>
-            Log in
-          </Button>
-          <Button size="sm" onClick={() => router.push("/login")}>
-            Get started
-          </Button>
+          {loading || !initialized ? (
+            // Auth status not resolved yet — reserve the UserMenu trigger's footprint to avoid layout shift.
+            <div className="h-8 w-8" aria-hidden="true" />
+          ) : user ? (
+            <UserMenu variant="landing" />
+          ) : (
+            <>
+              <Button variant="ghost" size="sm" onClick={() => router.push("/login")}>
+                Log in
+              </Button>
+              <Button size="sm" onClick={() => router.push("/login")}>
+                Get started
+              </Button>
+            </>
+          )}
         </div>
       </nav>
     </header>

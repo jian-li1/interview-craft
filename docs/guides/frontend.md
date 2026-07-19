@@ -174,9 +174,12 @@ light mode.
 ## 4. Pages
 
 - **Landing (`app/page.tsx`)** — `PublicNavbar` + `Hero` + `Features` + `HowItWorks` +
-  `Footer` (all in `components/landing/`). `PublicNavbar`'s Login/Get Started buttons
-  use a hard `window.location.href` navigation rather than `next/navigation`'s router —
-  inconsistent with the rest of the app's client-side routing, but harmless.
+  `Footer` (all in `components/landing/`). `PublicNavbar` is auth-aware via `useAuth()`
+  (works on this public page because `AuthProvider` is mounted in the root layout and its
+  `/api/auth/me` fetch doesn't redirect on 401): while the fetch is in flight it renders an
+  invisible placeholder to avoid layout shift, then either the shared `UserMenu` (`variant=
+  "landing"` — "Go to dashboard" + "Log out", no Settings) for signed-in visitors, or the
+  Login/Get Started buttons (`router.push("/login")`) otherwise.
 - **Login (`app/login/page.tsx`)** — see §2.
 - **Onboarding (`app/onboarding/page.tsx`)** — see §1.
 - **Dashboard (`app/(app)/dashboard/page.tsx`)** — a time-of-day `greeting()` helper,
