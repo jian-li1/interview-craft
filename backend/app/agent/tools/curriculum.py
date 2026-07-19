@@ -812,9 +812,14 @@ def _validate_module_title(title: str) -> str | None:
         title (str): The candidate module title.
 
     Returns:
-        str | None: An error message if blank or over 80 chars, else None.
+        str | None: An error message if blank or over 100 chars, else None. The actual
+            cap is looser than the 80-char figure quoted in the error text — see the
+            inline comment below.
     """
-    if not title.strip() or len(title) > 80:
+    # Real hard cap is 100 chars, but the error text (which the LLM reads as a tool
+    # observation) still cites the 80-char prompt target — deliberately not disclosing
+    # the extra slack so the model doesn't drift toward writing longer titles.
+    if not title.strip() or len(title) > 100:
         return (
             f"title {title!r} is invalid — provide the module's real display title, non-empty "
             f"and at most 80 characters."
@@ -832,9 +837,14 @@ def _validate_module_description(description: str) -> str | None:
         description (str): The candidate module description.
 
     Returns:
-        str | None: An error message if blank or over 300 chars, else None.
+        str | None: An error message if blank or over 500 chars, else None. The actual
+            cap is looser than the 300-char figure quoted in the error text — see the
+            inline comment below.
     """
-    if not description.strip() or len(description) > 300:
+    # Real hard cap is 500 chars, but the error text (which the LLM reads as a tool
+    # observation) still cites the 300-char prompt target — deliberately not disclosing
+    # the extra slack so the model doesn't drift toward writing longer descriptions.
+    if not description.strip() or len(description) > 500:
         return (
             "description is invalid — it must be non-empty and at most 300 characters, "
             "summarizing the module's content (not a copy of its title)."

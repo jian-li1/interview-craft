@@ -180,8 +180,9 @@ curricula/{id}/plan/main
                                  # labeled "Section X.Y: <title>" (X=module #, Y=section #)
                                  # so propose_task_plan can cross-check it against tasks
   description: str              # curriculum-level 1-2 sentence description, plain prose,
-                                 # <=300 chars; propose_task_plan validates non-empty/<=300
-                                 # and mirrors it onto curricula/{id}.description on save
+                                 # targets ~300 chars; propose_task_plan validates non-empty/
+                                 # <=500 (looser hard cap than the prompt target) and mirrors
+                                 # it onto curricula/{id}.description on save
   tasks: [{ id: str, title: str, description: str, module_ref: str,
             status: "pending"|"in_progress"|"done" }]
             # id is BINDING: "m{X}-s{Y}" (X,Y >= 1), one task per planned section (no
@@ -193,10 +194,12 @@ curricula/{id}/plan/main
             # outline_markdown <-> tasks cross-check) and rejects the whole plan with an
             # error observation (no partial save) on any violation.
   modules: [{id: str, title: str, description: str}]
-            # module display titles + 1-2 sentence descriptions, one per distinct module_ref
-            # used by tasks (ids must exactly cover that set, same order); propose_task_plan
-            # validates coverage, title (non-empty, <=80 chars), and description (non-empty,
-            # <=300 chars) server-side. Source of truth for module doc title/description at
+            # module display titles + 1-2 sentence descriptions (target ~300 chars), one per
+            # distinct module_ref used by tasks (ids must exactly cover that set, same
+            # order); propose_task_plan validates coverage, title (non-empty, real hard
+            # cap 100 chars), and description (non-empty, real hard cap 500 chars) —
+            # both looser than the 80/300-char figures the error text quotes — server-
+            # side. Source of truth for module doc title/description at
             # materialization (legacy plans lacking this field, or a module_ref missing an
             # entry, fall back to deriving the title from that module's first task title,
             # with description defaulting to ""). NOT mirrored into the plan_proposed WS

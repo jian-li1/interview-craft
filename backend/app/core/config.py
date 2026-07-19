@@ -70,7 +70,7 @@ class Settings(BaseSettings):
     # Timeout (seconds) applied to the `read` leg of LLM HTTP requests — for streaming
     # this is the max gap allowed *between* chunks, not the whole request. A healthy
     # stream sends chunks continuously, so a gap this long means the server is stuck.
-    llm_request_timeout_seconds: float = 120.0
+    llm_request_timeout_seconds: float = 300.0
 
     @property
     def is_production(self) -> bool:

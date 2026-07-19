@@ -661,14 +661,14 @@ async def test_create_module_rejects_blank_title(fake_fs):
 
 @pytest.mark.asyncio
 async def test_create_module_rejects_oversized_description(fake_fs):
-    """create_module rejects a description over 300 chars with a runtime validation error."""
+    """create_module rejects a description over 500 chars with a runtime validation error."""
     curriculum, conv = await _setup_curriculum_for_write_section(fake_fs)
 
     tool = CreateModuleTool()
     ctx = _make_ctx(curriculum["id"], conv["id"])
     ctx.phase = "refinement"
 
-    result = await tool.execute(CreateModuleInput(module_id="m1", title="Module 1", description="x" * 301), ctx)
+    result = await tool.execute(CreateModuleInput(module_id="m1", title="Module 1", description="x" * 501), ctx)
     assert "error" in result
     assert fake_fs.fs.get_module(curriculum["id"], "m1") is None
 

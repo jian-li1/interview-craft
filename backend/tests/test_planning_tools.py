@@ -259,9 +259,9 @@ async def test_propose_task_plan_rejects_blank_module_title(fake_fs):
 
 @pytest.mark.asyncio
 async def test_propose_task_plan_rejects_module_title_too_long(fake_fs):
-    """A `modules` entry with a title over 80 chars is rejected."""
+    """A `modules` entry with a title over 100 chars is rejected."""
     tasks = [{"id": "m1-s1", "title": "Intro", "module_ref": "m1"}]
-    modules = [{"id": "m1", "title": "x" * 81, "description": "Covers the basics."}]
+    modules = [{"id": "m1", "title": "x" * 101, "description": "Covers the basics."}]
     result, curriculum_id = await _run(fake_fs, "Section 1.1: Intro", tasks, modules)
     assert "error" in result
     assert fake_fs.fs.get_plan(curriculum_id) is None
@@ -279,9 +279,9 @@ async def test_propose_task_plan_rejects_blank_module_description(fake_fs):
 
 @pytest.mark.asyncio
 async def test_propose_task_plan_rejects_module_description_too_long(fake_fs):
-    """A `modules` entry with a description over 300 chars is rejected."""
+    """A `modules` entry with a description over 500 chars is rejected."""
     tasks = [{"id": "m1-s1", "title": "Intro", "module_ref": "m1"}]
-    modules = [{"id": "m1", "title": "Foundations", "description": "x" * 301}]
+    modules = [{"id": "m1", "title": "Foundations", "description": "x" * 501}]
     result, curriculum_id = await _run(fake_fs, "Section 1.1: Intro", tasks, modules)
     assert "error" in result
     assert fake_fs.fs.get_plan(curriculum_id) is None
@@ -297,8 +297,8 @@ async def test_propose_task_plan_rejects_blank_curriculum_description(fake_fs):
 
 @pytest.mark.asyncio
 async def test_propose_task_plan_rejects_curriculum_description_too_long(fake_fs):
-    """A curriculum-level `description` over 300 chars is rejected."""
-    result, curriculum_id = await _run(fake_fs, _valid_outline(), _valid_tasks(), description="x" * 301)
+    """A curriculum-level `description` over 500 chars is rejected."""
+    result, curriculum_id = await _run(fake_fs, _valid_outline(), _valid_tasks(), description="x" * 501)
     assert "error" in result
     assert fake_fs.fs.get_plan(curriculum_id) is None
 

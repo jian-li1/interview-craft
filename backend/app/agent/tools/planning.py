@@ -120,10 +120,13 @@ def _validate_plan(input: ProposeTaskPlanInput) -> str | None:
     `module_ref` match the `m{X}-s{Y}`/`m{X}` format with a consistent prefix; task ids
     are unique; module numbering is contiguous from m1 in first-appearance order; the
     `modules` list's ids exactly match that module set (same ids, same order) and every
-    module has a non-empty, <=80-char title and a non-empty, <=300-char description;
-    section numbering is contiguous from s1 per module in task-list order; the
-    `outline_markdown`'s `Section X.Y` labels exactly match the task id set; and the
-    curriculum-level `description` is non-empty and <=300 chars. Designed to catch the
+    module has a non-empty, <=100-char title and a non-empty, <=500-char description
+    (error text quotes the tighter 80/300-char prompt targets, not these real caps, so
+    the model isn't told about the extra slack); section numbering is contiguous from s1
+    per module in task-list order; the `outline_markdown`'s `Section X.Y` labels exactly
+    match the task id set; and the curriculum-level `description` is non-empty and
+    <=500 chars (same 300-char prompt target / undisclosed slack as above). Designed to
+    catch the
     failure modes seen in practice: invented ids, missing module_ref, a module list that
     doesn't cover the tasks' modules (or reuses a section title as the module title), an
     outline that describes more sections than the task list actually covers, and a
@@ -191,14 +194,18 @@ def _validate_plan(input: ProposeTaskPlanInput) -> str | None:
     # becomes the module doc's title at materialization, so a blank/oversized value is
     # rejected here rather than silently persisted.
     for m in input.modules:
-        if not m.title.strip() or len(m.title) > 80:
+        # Real hard cap is 100 chars; error text still cites 80 (the prompt target) so
+        # the model isn't told about the extra slack.
+        if not m.title.strip() or len(m.title) > 100:
             return (
                 f"module {m.id!r} has an invalid title {m.title!r} — provide the module's real "
                 f"display title as it appears in the outline (not a section title, not a bare "
                 f"id), non-empty and at most 80 characters."
             )
-        # Module description must be a real summary, bounded so it fits the workflow node card.
-        if not m.description.strip() or len(m.description) > 300:
+        # Module description must be a real summary, bounded so it fits the workflow node
+        # card. Real hard cap is 500 chars; error text still cites 300 (the prompt target)
+        # so the model isn't told about the extra slack.
+        if not m.description.strip() or len(m.description) > 500:
             return (
                 f"module {m.id!r} has an invalid description — it must be non-empty and at most "
                 f"300 characters, summarizing the module's content (not a copy of its title)."
@@ -248,8 +255,9 @@ def _validate_plan(input: ProposeTaskPlanInput) -> str | None:
         )
 
     # Curriculum-level description must be a real summary, bounded so it fits the
-    # dashboard card subtitle.
-    if not input.description.strip() or len(input.description) > 300:
+    # dashboard card subtitle. Real hard cap is 500 chars; error text still cites 300
+    # (the prompt target) so the model isn't told about the extra slack.
+    if not input.description.strip() or len(input.description) > 500:
         return (
             "description is invalid — it must be non-empty and at most 300 characters, "
             "summarizing what this curriculum covers and for whom."

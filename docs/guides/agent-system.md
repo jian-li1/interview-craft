@@ -247,20 +247,23 @@ precisely or if the profile changed mid-run.
 ### Planning tools (`tools/planning.py`)
 
 - **`propose_task_plan`** (HITL gate) — `outline_markdown`, `description` (curriculum-level,
-  1-2 sentences, <=300 chars), `tasks: [{id, title, description, module_ref, status}]`,
+  1-2 sentences, prompt targets ~300 chars, real hard cap 500 chars — undisclosed to the
+  model), `tasks: [{id, title, description, module_ref, status}]`,
   `modules: [{id, title, description}]`. **Validates first**
   (`_validate_plan` in `tools/planning.py`, called before any write): every task's `id`
   must match `m{X}-s{Y}` and `module_ref` must match `m{X}` with the same prefix
   (module_ref is required — never null; there is no overview task); task ids must be
   unique; module numbering contiguous from `m1` in first-appearance order; `modules`'
   ids must exactly equal that module set (same ids, same order), and every module's
-  `title` must be non-empty and <=80 chars (this is the ONLY place a module's real
-  display title is captured — not derived from any task/section title) and its
-  `description` non-empty and <=300 chars; section
-  numbering contiguous from `s1` per module in task-list order; `outline_markdown`'s
-  `Section X.Y: <title>` labels (extracted via regex) must exactly match the derived
-  `m{X}-s{Y}` task id set, reporting any ids missing from either side; and the top-level
-  `description` must be non-empty and <=300 chars. Any violation
+  `title` must be non-empty (real hard cap 100 chars — this is the ONLY place a module's
+  real display title is captured — not derived from any task/section title) and its
+  `description` non-empty (real hard cap 500 chars); both error texts quote the tighter
+  80/300-char prompt targets instead of the real caps, so the model isn't told about the
+  extra slack. Section numbering contiguous from `s1` per module in task-list order;
+  `outline_markdown`'s `Section X.Y: <title>` labels (extracted via regex) must exactly
+  match the derived `m{X}-s{Y}` task id set, reporting any ids missing from either side;
+  and the top-level `description` must be non-empty (real hard cap 500 chars, same
+  undisclosed-slack pattern). Any violation
   returns `{"error": "..."}` with **no plan saved at all**. On success: reads the
   existing plan (if any) to compute `next_version = existing.version + 1` and preserve
   accumulated `user_feedback`, writes `curricula/{id}/plan/main` (including `modules` and
@@ -336,8 +339,9 @@ precisely or if the profile changed mid-run.
 - **`create_module`** — `module_id, title, description`; `ready`/`refinement` only.
   `module_id` must be exactly the next sequential id `m{N+1}` (else error naming the
   expected id); an already-existing `module_id` errors too, pointing to `update_module`.
-  `title`/`description` are bounds-checked at runtime (non-empty, <=80/<=300 chars —
-  same limits as `propose_task_plan`'s per-module validation), not via pydantic field
+  `title`/`description` are bounds-checked at runtime (non-empty; real hard caps 100/500
+  chars — same limits as `propose_task_plan`'s per-module validation — though the error
+  text quotes the tighter 80/300-char prompt targets), not via pydantic field
   constraints, so the error text matches the planning-tool style. On success, creates
   the module doc (`order` = current module count, `objectives: []`,
   `status="planned"`, `estimated_minutes=0`), refreshes `module_count`
