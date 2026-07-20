@@ -3,13 +3,14 @@
 import dynamic from "next/dynamic";
 import { memo, useCallback, useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import { BookOpen, Loader2, Maximize2, Minimize2, Pencil, Workflow as WorkflowIcon } from "lucide-react";
+import { BookOpen, Loader2, Maximize2, Minimize2, Pencil, Search, Workflow as WorkflowIcon } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/Tabs";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ActivityFeed } from "@/components/studio/curriculum/ActivityFeed";
-// Plain (non-dynamic) import: this dialog is plain markup/Framer Motion, no
+// Plain (non-dynamic) imports: both dialogs are plain markup/Framer Motion, no
 // mermaid/@xyflow/react — the ssr:false rule below applies only to WorkflowView/ReaderView.
 import { RenameCurriculumDialog } from "@/components/studio/curriculum/RenameCurriculumDialog";
+import { CurriculumSearchDialog } from "@/components/studio/curriculum/CurriculumSearchDialog";
 import { useChatStore } from "@/stores/useChatStore";
 import { useCurriculumStore, type CurriculumView } from "@/stores/useCurriculumStore";
 // Re-exported for backward-compat: ActiveSelection now lives in the store (lifted out of
@@ -49,10 +50,11 @@ interface CurriculumPanelProps {
 
 /**
  * Studio's right-hand curriculum panel: a header (title + hover-reveal rename
- * pencil opening `RenameCurriculumDialog`, the Workflow/Reader `Tabs` toggle,
- * and the full-screen focus button) over either `WorkflowView` (React Flow
- * canvas), `ReaderView` (single-section paging view), or `ActivityFeed` while
- * no content exists yet.
+ * pencil opening `RenameCurriculumDialog`, a Search trigger opening
+ * `CurriculumSearchDialog` once there's content to search, the Workflow/Reader
+ * `Tabs` toggle, and the full-screen focus button) over either `WorkflowView`
+ * (React Flow canvas), `ReaderView` (single-section paging view), or
+ * `ActivityFeed` while no content exists yet.
  */
 function CurriculumPanelImpl({ curriculumId, onExplain }: CurriculumPanelProps) {
   const curriculum = useCurriculumStore((s) => s.curriculum);
@@ -77,6 +79,8 @@ function CurriculumPanelImpl({ curriculumId, onExplain }: CurriculumPanelProps) 
 
   // Local state for the rename dialog's open/closed toggle.
   const [renameOpen, setRenameOpen] = useState(false);
+  // Local state for the curriculum search dialog's open/closed toggle.
+  const [searchOpen, setSearchOpen] = useState(false);
 
   useEffect(() => {
     // Reset view state whenever the curriculum identity changes so the reader never
@@ -155,6 +159,20 @@ function CurriculumPanelImpl({ curriculumId, onExplain }: CurriculumPanelProps) 
           )}
         </div>
         <div className="flex items-center gap-2">
+          {/* Search trigger: only shown once there's actual content to search over. */}
+          {hasContent && (
+            <button
+              type="button"
+              onClick={() => setSearchOpen(true)}
+              aria-label="Search curriculum"
+              // Same focus-visible ring treatment as the header's other icon buttons (rename pencil, focus toggle).
+              // Width matches the dashboard's search Input (w-36 sm:w-48) so both search bars feel consistent.
+              className="flex w-8 items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background sm:w-24 lg:w-36"
+            >
+              <Search className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+              <span className="hidden truncate sm:inline">Search</span>
+            </button>
+          )}
           <Tabs value={view} onValueChange={(v) => setView(v as CurriculumView)}>
             <TabsList aria-label="Curriculum view">
               <TabsTrigger value="workflow">
@@ -232,6 +250,21 @@ function CurriculumPanelImpl({ curriculumId, onExplain }: CurriculumPanelProps) 
           curriculum={{ id: curriculum.id, title: curriculum.title, description: curriculum.description }}
           onClose={() => setRenameOpen(false)}
           onSaved={(updated) => applyMeta({ title: updated.title, description: updated.description })}
+        />
+      )}
+
+      {/* Search dialog: only rendered with real curriculum data, so flattenCurriculum always has a document to work with. */}
+      {curriculum && (
+        <CurriculumSearchDialog
+          open={searchOpen}
+          curriculum={curriculum}
+          onClose={() => setSearchOpen(false)}
+          onSelect={(moduleId, sectionId) => {
+            // Jump the reader to the selected section and close the dialog.
+            setActiveSelection({ moduleId, sectionId });
+            setView("reader");
+            setSearchOpen(false);
+          }}
         />
       )}
     </div>

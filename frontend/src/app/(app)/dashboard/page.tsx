@@ -2,10 +2,11 @@
 
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { ArrowDown, ArrowUp } from "lucide-react";
+import { ArrowDown, ArrowUp, Search } from "lucide-react";
 import { PromptBox } from "@/components/dashboard/PromptBox";
 import { CurriculumGrid } from "@/components/dashboard/CurriculumGrid";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/Tabs";
+import { Input } from "@/components/ui/Input";
 import { useAuth } from "@/components/auth/AuthProvider";
 
 // Time-of-day greeting shown in the page header; purely presentational and
@@ -33,10 +34,11 @@ function greeting(): string {
  * Framer Motion is used purely for a staggered fade/slide-in entrance on
  * each section (`delay` increasing per block), no data implications.
  *
- * Owns two pieces of view-only local state passed down to `CurriculumGrid`:
- * `filter` (All curricula / Favorites, a `Tabs` segmented control) and
- * `sortDesc` (Updated-time sort direction, a small ghost toggle button).
- * Neither is persisted — both reset to their defaults on navigation/reload.
+ * Owns three pieces of view-only local state passed down to `CurriculumGrid`:
+ * `filter` (All curricula / Favorites, a `Tabs` segmented control),
+ * `sortDesc` (Updated-time sort direction, a small ghost toggle button), and
+ * `search` (keyword filter over title/description). None are persisted —
+ * all reset to their defaults on navigation/reload.
  */
 export default function DashboardPage() {
   const { user } = useAuth();
@@ -45,6 +47,8 @@ export default function DashboardPage() {
   const [filter, setFilter] = useState<"all" | "favorites">("all");
   // true = most recently updated first (default); false = least recent first.
   const [sortDesc, setSortDesc] = useState(true);
+  // Keyword search over title/displayed-description, applied client-side in CurriculumGrid.
+  const [search, setSearch] = useState("");
 
   return (
     <div className="mx-auto max-w-5xl px-4 py-10 sm:px-6 lg:py-14">
@@ -79,6 +83,20 @@ export default function DashboardPage() {
         <div className="mb-4 flex items-center justify-between">
           <h2 className="text-lg font-semibold">Your curricula</h2>
           <div className="flex items-center gap-2">
+            {/* Compact keyword search: leftmost control, filters the grid by title/description. */}
+            <div className="relative">
+              <Search
+                className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground"
+                aria-hidden="true"
+              />
+              <Input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search"
+                aria-label="Search curricula"
+                className="h-8 w-36 pl-8 text-xs sm:w-48 sm:text-sm"
+              />
+            </div>
             {/* Sort toggle: flips updated_at direction; icon mirrors current order. */}
             <button
               type="button"
@@ -102,7 +120,7 @@ export default function DashboardPage() {
             </Tabs>
           </div>
         </div>
-        <CurriculumGrid filter={filter} sortDesc={sortDesc} />
+        <CurriculumGrid filter={filter} sortDesc={sortDesc} search={search} />
       </motion.div>
     </div>
   );

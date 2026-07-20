@@ -211,20 +211,33 @@ light mode.
   flips true on `"reconnecting"` and the next `"open"` triggers exactly one refetch — the
   full list is refetched once to catch anything missed while offline. No more polling).
   `CurriculumCard` maps `CurriculumStatus` to a label/Badge-variant via a `STATUS_META`
-  dict, shows a progress bar for `researching|planning|writing|reviewing`, and wraps
-  delete in a `ConfirmDialog`. It also renders a `lucide Star` favorite button before the
-  delete button (always-visible + filled amber when `favorite`, hover-reveal + muted
-  otherwise); clicking calls the grid's `onToggleFavorite(id, favorite)`, which flips the
-  card optimistically then calls `curriculaApi.update(id, { favorite })` (PATCH
-  `/api/curricula/{id}`), reverting + toasting on failure. `CurriculumGrid` takes
-  `filter: "all" | "favorites"` and `sortDesc: boolean` props (owned by
-  `dashboard/page.tsx`'s local state) and derives the rendered list at render time —
-  filter by `c.favorite`, then sort by `updated_at` — from a copy of its fetched
-  `curricula` state, which itself always stays in server order so the WS upsert logic
-  above never has to fight a client-side sort. The page header row adds an "Updated"
-  ghost button (flips `sortDesc`, icon swaps `ArrowDown`/`ArrowUp`) to the left of an All
-  curricula/Favorites `Tabs` segmented control. Favorites-filtered-to-empty renders an
-  `EmptyState` (icon `Star`, "No favorites yet"). `PromptBox` itself derives a
+  dict and shows a progress bar for `researching|planning|writing|reviewing`. It also
+  renders a `lucide Star` favorite button (always-visible + filled amber when
+  `favorite`, hover-reveal + muted otherwise) before a `MoreHorizontal` "…" overflow
+  button; clicking the star calls the grid's `onToggleFavorite(id, favorite)`, which
+  flips the card optimistically then calls `curriculaApi.update(id, { favorite })`
+  (PATCH `/api/curricula/{id}`), reverting + toasting on failure. The "…" button (or a
+  right-click anywhere on the card) opens a shared `fixed`-positioned popover menu
+  (local `menuPos: {x,y} | null` state, clamped to the viewport, closed on outside
+  mousedown/Escape/scroll/resize) with, in order: **Open in new tab** (`window.open` on
+  `/studio/{conversation_id}`), **Add/Remove favorites** (mirrors the star button),
+  **Rename** (opens `RenameCurriculumDialog` — the same component the studio panel uses,
+  statically imported since it's plain markup/Framer Motion — with a new `onRenamed`
+  prop wired to replace the card's data in the grid's list in place), and, after a
+  separator, destructive **Delete Curriculum** which still opens the existing
+  `ConfirmDialog` flow. `CurriculumGrid` takes `filter: "all" | "favorites"`,
+  `sortDesc: boolean`, and `search: string` props (owned by `dashboard/page.tsx`'s local
+  state) and derives the rendered list at render time — filter by `c.favorite`, then a
+  case-insensitive substring match of `search` against `title`/`description ||
+  user_prompt`, then sort by `updated_at` — from a copy of its fetched `curricula` state,
+  which itself always stays in server order so the WS upsert logic above never has to
+  fight a client-side sort. The page header row adds, left to right: a compact `Search`
+  `Input` (`h-8`, `Search` icon inset), an "Updated" ghost button (flips `sortDesc`, icon
+  swaps `ArrowDown`/`ArrowUp`), and an All curricula/Favorites `Tabs` segmented control.
+  A non-empty search that matches nothing renders a `SearchX` `EmptyState` ("No matching
+  curricula") — checked before the favorites-empty case, so a search miss inside
+  Favorites shows the search message. Favorites-filtered-to-empty (no active search)
+  renders an `EmptyState` (icon `Star`, "No favorites yet"). `PromptBox` itself derives a
   `SuggestionMode` (`"pending" | "personalized"`) from an `onboardingApi.get()`
   fetch alongside its `modelsApi.get()` call: `suggestions_status === "ready"` with data
   renders the personalized `prompt_suggestions` chips and `` `e.g. ${prompt_placeholder}` ``
@@ -497,7 +510,16 @@ switches to `"reader"`. The header title also has a hover-revealed `Pencil` butt
 (plain markup/Framer Motion, no mermaid/xyflow, so the `ssr:false` boundary above doesn't
 apply to it) — prefilled from the loaded curriculum's `id`/`title`/`description`. Its
 `onSaved` calls `useCurriculumStore.applyMeta({ title, description })`, which
-shallow-merges the PATCH response into the loaded curriculum without a full refetch.
+shallow-merges the PATCH response into the loaded curriculum without a full refetch. The
+header also gets a **Search** trigger button (shown only when `hasContent`, i.e. the
+curriculum has modules) that opens `CurriculumSearchDialog.tsx` (local `searchOpen`
+state) — also statically imported for the same reason as `RenameCurriculumDialog`. It's
+a top-aligned command-palette-style modal: `flattenCurriculum` (`lib/reader.ts`) supplies
+the searchable rows, a small `stripMarkdown` helper reduces each section's
+`content_markdown` to plain text for matching, and matches (title or content substring,
+case-insensitive) render with the query highlighted in both the title and a ~160-char
+snippet centered on the first hit. Selecting a result calls back into `CurriculumPanel`,
+which sets `activeSelection`, switches to the Reader view, and closes the dialog.
 
 - **`ActivityFeed.tsx`** — a spinning `Sparkles` header showing `phaseLabel`, an
   `AnimatePresence`+`layout`-animated list of the most recent 12 activity items, plus

@@ -20,7 +20,7 @@ See root `/CLAUDE.md` first. Scoped conventions for `frontend/` only. Full walkt
   `PhaseBanner`, `PlanApprovalCard`, `ReasoningBlock`, `ToolCallCard`.
 - `src/components/studio/curriculum/` — `CurriculumPanel`, `WorkflowView` (React Flow),
   `ReaderView`, `SectionContent`, `MermaidDiagram`, `SourcesCard`, `ActivityFeed`,
-  `nodes/`, `edges/`.
+  `RenameCurriculumDialog`, `CurriculumSearchDialog`, `nodes/`, `edges/`.
 - `src/components/ui/` — hand-rolled primitives (no Radix/shadcn): `Button`, `Card`,
   `Input`, `Select`, `Tabs`, `ChipInput`, `ChipSelect` (model/search-provider chip
   popover, moved here from `studio/chat/ComposerSelect.tsx` once the dashboard

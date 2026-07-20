@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence } from "framer-motion";
-import { BookX, Star } from "lucide-react";
+import { BookX, SearchX, Star } from "lucide-react";
 import { toast } from "sonner";
 import { CurriculumCard } from "@/components/dashboard/CurriculumCard";
 import { Skeleton } from "@/components/ui/Skeleton";
@@ -16,6 +16,8 @@ interface CurriculumGridProps {
   filter: "all" | "favorites";
   /** Sort direction on `updated_at`: true = most recent first, false = least recent first. */
   sortDesc: boolean;
+  /** Keyword filter (case-insensitive substring) over title/displayed-description; "" = no filtering. */
+  search: string;
 }
 
 /**
@@ -31,15 +33,18 @@ interface CurriculumGridProps {
  * catch anything missed while offline; deletions are also applied
  * optimistically via the `onDeleted` callback passed to each card.
  *
- * `filter`/`sortDesc` (owned by the parent dashboard page) are applied at
+ * `filter`/`sortDesc`/`search` (owned by the parent dashboard page) are applied at
  * render time to a copy of the fetched list — the underlying `curricula`
  * state always keeps the server's original order, so filtering/sorting never
- * fights the WS upsert logic above. Favoriting is optimistic: `curriculaApi.update`
- * is fired immediately with the flipped flag and reverted on error; the
- * dashboard WS will also echo a `curriculum_updated` event back, which is a
- * harmless no-op replace at that point.
+ * fights the WS upsert logic above. `search` matches title and the same
+ * description text the card displays (falls back to `user_prompt`), rendering a
+ * `SearchX` empty state when nothing matches (checked before the favorites-empty
+ * state, so a search miss inside Favorites shows the search message). Favoriting
+ * is optimistic: `curriculaApi.update` is fired immediately with the flipped flag
+ * and reverted on error; the dashboard WS will also echo a `curriculum_updated`
+ * event back, which is a harmless no-op replace at that point.
  */
-export function CurriculumGrid({ filter, sortDesc }: CurriculumGridProps) {
+export function CurriculumGrid({ filter, sortDesc, search }: CurriculumGridProps) {
   const [curricula, setCurricula] = useState<CurriculumSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Tracks whether the socket has ever dropped, so the first "open" after a
@@ -118,16 +123,25 @@ export function CurriculumGrid({ filter, sortDesc }: CurriculumGridProps) {
     }
   }
 
-  // Apply filter/sort to a COPY at render time — `curricula` state itself always keeps
-  // server order so the WS upsert logic above never has to fight a client-side sort.
+  // Apply filter/search/sort to a COPY at render time — `curricula` state itself always
+  // keeps server order so the WS upsert logic above never has to fight a client-side sort.
   const visible = useMemo(() => {
     if (!curricula) return null;
-    const filtered = filter === "favorites" ? curricula.filter((c) => c.favorite) : curricula;
+    let filtered = filter === "favorites" ? curricula.filter((c) => c.favorite) : curricula;
+    // Keyword search: case-insensitive substring match against title and the same
+    // description text the card displays (falls back to user_prompt for legacy curricula).
+    const q = search.trim().toLowerCase();
+    if (q) {
+      filtered = filtered.filter((c) => {
+        const displayedDescription = c.description || c.user_prompt;
+        return c.title.toLowerCase().includes(q) || displayedDescription.toLowerCase().includes(q);
+      });
+    }
     return [...filtered].sort((a, b) => {
       const diff = new Date(a.updated_at).getTime() - new Date(b.updated_at).getTime();
       return sortDesc ? -diff : diff;
     });
-  }, [curricula, filter, sortDesc]);
+  }, [curricula, filter, sortDesc, search]);
 
   if (error && !curricula) {
     return (
@@ -159,6 +173,18 @@ export function CurriculumGrid({ filter, sortDesc }: CurriculumGridProps) {
     );
   }
 
+  // A search query is active and matched nothing — checked BEFORE the favorites-empty
+  // case so a search miss inside the Favorites tab shows this state, not "No favorites yet".
+  if (visible && visible.length === 0 && search.trim()) {
+    return (
+      <EmptyState
+        icon={SearchX}
+        title="No matching curricula"
+        description={`No curricula match "${search.trim()}". Try a different keyword.`}
+      />
+    );
+  }
+
   // Curricula exist, but the favorites filter matched none of them.
   if (visible && visible.length === 0 && filter === "favorites") {
     return (
@@ -179,6 +205,11 @@ export function CurriculumGrid({ filter, sortDesc }: CurriculumGridProps) {
             curriculum={c}
             onDeleted={(id) => setCurricula((prev) => prev?.filter((c) => c.id !== id) ?? null)}
             onToggleFavorite={handleToggleFavorite}
+            // Replace the renamed item in place; the dashboard WS also echoes a
+            // curriculum_updated for it, which is then a harmless no-op replace.
+            onRenamed={(updated) =>
+              setCurricula((prev) => prev?.map((c) => (c.id === updated.id ? updated : c)) ?? null)
+            }
           />
         ))}
       </AnimatePresence>

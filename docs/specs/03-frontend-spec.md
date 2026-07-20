@@ -80,8 +80,8 @@ drawer behavior is unchanged (slide-in overlay, unaffected by the desktop collap
   chip selection) and routes to /studio/[id]; grid of curriculum cards (emoji, title,
   subtitle showing the agent-written `description` — falling back to `user_prompt` for
   legacy curricula or before a plan is first proposed, `line-clamp-3` — status badge,
-  progress bar when generating, module count, updated time, favorite star, delete w/
-  confirm). Empty state illustration. The dashboard's prompt box is the *only* way to
+  progress bar when generating, module count, updated time, favorite star, and a
+  `MoreHorizontal` "…" overflow menu). Empty state illustration. The dashboard's prompt box is the *only* way to
   create a curriculum — the sidebar's "New curriculum" button never calls the API; it
   just navigates to /dashboard (see §2 sidebar note below). The grid loads via
   `curriculaApi.list()` on mount, then stays live via a `DashboardSocket`
@@ -90,22 +90,39 @@ drawer behavior is unchanged (slide-in overlay, unaffected by the desktop collap
   prepended) and `curriculum_deleted` removes it — no more polling. On reconnect after a
   dropped connection the full list is refetched once, to catch any changes missed while
   offline.
-  - **Favorites + filter/sort**: each card shows a `lucide Star` button in its top row
-    (before the delete button). Favorited: always visible, filled yellow
-    (`fill-amber-400 text-amber-400`, same in both themes). Not favorited: hover-reveal
-    like the trash button, muted color, hover turns amber. Clicking calls
-    `curriculaApi.update(id, {favorite})` (PATCH `/api/curricula/{id}`) optimistically —
-    the grid flips the card's `favorite` locally first, reverting + toasting on error;
-    the dashboard WS's own `curriculum_updated` echo is a harmless no-op replace after.
-    The "Your curricula" header row (owned by `dashboard/page.tsx`, not the grid) adds two
-    controls to the right: an "Updated" ghost button with an `ArrowDown`/`ArrowUp` icon
-    that flips sort direction on `updated_at`, and an All curricula/Favorites `Tabs`
-    segmented control (same primitive as the studio's Workflow/Reader toggle). Both are
-    plain local page state (`filter`, `sortDesc`) passed down as props;
-    `CurriculumGrid` applies them to a render-time copy of its fetched list (the
-    underlying state keeps server order, so the WS upsert logic never fights a
-    client-side sort). Filtering to Favorites with none starred renders an `EmptyState`
-    (icon `Star`, "No favorites yet").
+  - **Favorites + filter/sort/search**: each card shows a `lucide Star` button in its top
+    row (before the "…" menu button). Favorited: always visible, filled yellow
+    (`fill-amber-400 text-amber-400`, same in both themes). Not favorited: hover-reveal,
+    muted color, hover turns amber. Clicking calls `curriculaApi.update(id, {favorite})`
+    (PATCH `/api/curricula/{id}`) optimistically — the grid flips the card's `favorite`
+    locally first, reverting + toasting on error; the dashboard WS's own
+    `curriculum_updated` echo is a harmless no-op replace after. The "Your curricula"
+    header row (owned by `dashboard/page.tsx`, not the grid) adds three controls to the
+    right, left to right: a compact keyword search `Input` (`Search` icon inset, filters
+    by title/displayed-description — see below), an "Updated" ghost button with an
+    `ArrowDown`/`ArrowUp` icon that flips sort direction on `updated_at`, and an All
+    curricula/Favorites `Tabs` segmented control (same primitive as the studio's
+    Workflow/Reader toggle). All three are plain local page state (`search`, `filter`,
+    `sortDesc`) passed down as props; `CurriculumGrid` applies them to a render-time copy
+    of its fetched list (the underlying state keeps server order, so the WS upsert logic
+    never fights a client-side sort). Search is a case-insensitive substring match
+    against `title` and the same description text the card displays (`description ||
+    user_prompt`), rendering a `SearchX` `EmptyState` ("No matching curricula") when the
+    query matches nothing — checked *before* the favorites-empty check, so a search miss
+    inside the Favorites tab shows the search message, not "No favorites yet". Filtering
+    to Favorites with none starred (and no active search) renders an `EmptyState` (icon
+    `Star`, "No favorites yet").
+  - **Card overflow menu**: the trash button is replaced by a `MoreHorizontal` "…"
+    icon button (hover-reveal, neutral hover styling), also openable by right-clicking
+    anywhere on the card — both triggers open the same `fixed`-positioned popover
+    (`role="menu"`, clamped to the viewport), closed by outside click, Escape, or
+    scroll/resize. Items in order: **Open in new tab** (`ArrowUpRight`, opens
+    `/studio/{conversation_id}` in a new tab), **Add/Remove favorites** (`Star`, mirrors
+    the card's own star button), **Rename** (`Pencil`, opens `RenameCurriculumDialog`
+    reused from the studio panel — see §3 below — with an `onRenamed` callback that
+    replaces the item in the grid's list in place), and, after a separator, **Delete
+    Curriculum** (`Trash2`, destructive styling) which opens the same `ConfirmDialog`
+    delete flow as before.
   - **Personalized suggestions**: the example-prompt chip row and textarea placeholder
     are personalized per user (see spec 01 §5/§6/§7b) — there is no hardcoded-example
     fallback. On mount, `PromptBox` fetches `onboardingApi.get()` alongside
@@ -144,7 +161,16 @@ conventions) with a Name input and a Description textarea (both pre-filled, capp
 100/500 chars client-side to match the backend). Save sends only the changed field(s) via
 `curriculaApi.update` (PATCH `/api/curricula/{id}`) and applies the response into
 `useCurriculumStore` via the `applyMeta` action (shallow-merges title/description into
-the loaded curriculum without a full refetch).
+the loaded curriculum without a full refetch). The header's right-hand controls also
+gain a **Search** trigger (a mini search-bar-styled button, `Search` icon + label hidden
+below `sm`), shown once the curriculum has any modules, that opens
+`CurriculumSearchDialog.tsx` — a command-palette-style modal (top-aligned, not centered)
+offering client-side full-text search over every written section: `flattenCurriculum`
+(from `lib/reader.ts`) supplies the rows, each section's `content_markdown` is stripped
+to plain text for matching/display, and results highlight the matched substring in both
+the section title and a ~160-char snippet centered on the first match. Clicking a result
+calls `onSelect(moduleId, sectionId)`, which sets `activeSelection`, switches the panel
+to the Reader view, and closes the dialog.
 
 ### Chat panel (Claude/ChatGPT-grade)
 - Message list with user/assistant bubbles, markdown rendering in assistant messages.
